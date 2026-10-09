@@ -1,0 +1,2 @@
+# Let shellcheck follow "# shellcheck source=..." directives.
+external-sources=true
