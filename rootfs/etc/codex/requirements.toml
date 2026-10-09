@@ -1,0 +1,3 @@
+# Admin-enforced Codex settings (https://learn.chatgpt.com/docs/enterprise/managed-configuration).
+# The image pins Codex; updates arrive with new images.
+check_for_update_on_startup = false

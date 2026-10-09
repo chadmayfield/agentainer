@@ -58,4 +58,8 @@ set -x
 # shellcheck disable=SC2086 # $format is empty or two words on purpose
 "$RUNTIME" build $format -f Containerfile ${platform:+--platform "$platform"} \
 	--build-arg BASE_IMAGE="$base" --build-arg APT_SNAPSHOT="$snapshot" \
-	--build-arg UID="$uid" --build-arg GID="$gid" -t "$tag" .
+	--build-arg UID="$uid" --build-arg GID="$gid" \
+	--build-arg IMAGE_VERSION="${IMAGE_VERSION:-dev}" \
+	--build-arg VCS_REF="$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
+	--build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+	-t "$tag" .

@@ -83,6 +83,31 @@ RUN TARGETARCH="${TARGETARCH}" bash /tmp/agentbox-build/install-upstream.sh
 ENV RUSTUP_HOME=/opt/rustup \
 	PATH=/usr/local/go/bin:/opt/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+COPY build/install-agents.sh build/write-versions-json.py /tmp/agentbox-build/
+RUN TARGETARCH="${TARGETARCH}" bash /tmp/agentbox-build/install-agents.sh
+
+COPY rootfs/ /
+# Files created in an editor are 0644; make every shipped command executable.
+RUN find /usr/local/bin -maxdepth 1 -type f \( -name 'agentbox-*' -o -name 'openrouter-*' \) -exec chmod 0755 {} + \
+	&& python3 /tmp/agentbox-build/write-versions-json.py
+
+ARG IMAGE_VERSION=dev
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.version="${IMAGE_VERSION}" \
+	org.opencontainers.image.revision="${VCS_REF}" \
+	org.opencontainers.image.created="${BUILD_DATE}" \
+	org.opencontainers.image.title="AgentBox" \
+	org.opencontainers.image.description="Claude Code, Codex, Antigravity CLI and OpenCode in one container" \
+	org.opencontainers.image.source="https://github.com/chadmayfield/agentbox" \
+	org.opencontainers.image.licenses="MIT" \
+	io.github.chadmayfield.agentbox.versions="/etc/agentbox/versions.json"
+
+ENV DISABLE_UPDATES=1 \
+	AGY_CLI_DISABLE_AUTO_UPDATE=true \
+	OPENCODE_DISABLE_AUTOUPDATE=1 \
+	CLAUDE_CODE_NONBLOCKING_STDOUT=1
+
 RUN rm -rf /tmp/agentbox-build
 
 USER agent
