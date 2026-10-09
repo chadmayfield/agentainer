@@ -31,11 +31,14 @@ COPY build/apt-packages.txt build/check-apt-snapshot.py /tmp/agentbox-build/
 #   archive.ubuntu.com serves resolute arm64 and has snapshots.
 # - A "Snapshot: <ID>" field in each source (apt sources.list(5)) pins apt.
 # - upgrade brings the base image's own packages to their snapshot versions.
+#   Always-Include-Phased-Updates makes upgrades take the same (newest) versions
+#   that fresh installs already get, instead of deferring phased ones
+#   (apt_preferences(5), "Phased Updates").
 # - check-apt-snapshot.py fails the build if any installed version is not in the snapshot.
 RUN test -n "${APT_SNAPSHOT}" \
 	&& export DEBIAN_FRONTEND=noninteractive \
 	&& printf 'Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute resolute-updates resolute-backports\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\nSnapshot: %s\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\nSnapshot: %s\n' "${APT_SNAPSHOT}" "${APT_SNAPSHOT}" > /etc/apt/sources.list.d/ubuntu.sources \
-	&& APT="apt-get -o Acquire::https::CAInfo=/tmp/agentbox-build/ca.crt" \
+	&& APT="apt-get -o Acquire::https::CAInfo=/tmp/agentbox-build/ca.crt -o APT::Get::Always-Include-Phased-Updates=true" \
 	&& $APT update \
 	&& $APT upgrade -y \
 	&& xargs -a /tmp/agentbox-build/apt-packages.txt $APT install -y --no-install-recommends \
@@ -45,12 +48,21 @@ RUN test -n "${APT_SNAPSHOT}" \
 	&& sed -i '/^Snapshot: /d' /etc/apt/sources.list.d/ubuntu.sources \
 	&& rm -rf /var/lib/apt/lists/*
 
+# Debian names these binaries fdfind and batcat (package file lists, spec 4.1).
+# ping ships with the cap_net_raw file capability, which fails under runtimes that
+# drop NET_RAW (Podman's default, the Kubernetes example). Without it, ping uses an
+# unprivileged ICMP socket, allowed by the net.ipv4.ping_group_range sysctl that the
+# launcher and the pod spec set.
+RUN ln -s /usr/bin/fdfind /usr/local/bin/fd \
+	&& ln -s /usr/bin/batcat /usr/local/bin/bat \
+	&& python3 -c 'import os; os.removexattr("/usr/bin/ping", "security.capability")'
+
 # Rename the base image's ubuntu user (UID 1000) to agent (spec 16.2). With other
 # build args, reuse a group that already has GID (for example 20, which is
 # "dialout" in Ubuntu and "staff" on macOS).
 RUN if [ "${UID}" = 1000 ] && [ "${GID}" = 1000 ]; then \
 		groupmod -n agent ubuntu \
-		&& usermod -l agent -d /home/agent -m -c AgentBox ubuntu; \
+		&& usermod -l agent -d /home/agent -m -c AgentBox -G "" ubuntu; \
 	else \
 		userdel -r ubuntu 2>/dev/null || true; \
 		getent group "${GID}" >/dev/null || groupadd -g "${GID}" agent; \
