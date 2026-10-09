@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""Resolve the latest upstream pins and rewrite versions.env.
+
+Every value comes from the upstream source named in its resolver. Any failure
+stops the run and leaves the file unchanged. Standard library only.
+"""
+import argparse
+import datetime
+import json
+import os
+import re
+import sys
+import urllib.request
+
+ARCHES = {"AMD64": "amd64", "ARM64": "arm64"}
+AGY_MANIFEST = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_{arch}.json"
+AGY_KEYS = ("version", "url", "sha512")
+AGY_URL_PREFIX = "https://storage.googleapis.com/antigravity-public/"
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+HEX128 = re.compile(r"^[0-9a-f]{128}$")
+
+
+class LookupFailed(Exception):
+    pass
+
+
+# ---- versions.env handling -------------------------------------------------
+
+def parse_env(text):
+    """Return a list of (key or None, raw line)."""
+    out = []
+    for line in text.splitlines():
+        m = re.match(r"^([A-Z0-9_]+)=(.*)$", line)
+        out.append((m.group(1) if m else None, line))
+    return out
+
+
+def values(lines):
+    return {k: raw.split("=", 1)[1] for k, raw in lines if k}
+
+
+def render_env(lines, updates):
+    seen = set()
+    out = []
+    for key, raw in lines:
+        if key and key in updates:
+            out.append("%s=%s" % (key, updates[key]))
+            seen.add(key)
+        else:
+            out.append(raw)
+    for key in updates:
+        if key not in seen and key not in values(lines):
+            out.append("%s=%s" % (key, updates[key]))
+    return "\n".join(out) + "\n"
+
+
+# ---- HTTP -----------------------------------------------------------------
+
+def fetch(url, accept=None):
+    headers = {"User-Agent": "agentbox-bump"}
+    if accept:
+        headers["Accept"] = accept
+    token = os.environ.get("GITHUB_TOKEN")
+    if token and url.startswith("https://api.github.com/"):
+        headers["Authorization"] = "Bearer " + token
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r:
+            return r.read().decode()
+    except Exception as e:  # noqa: BLE001 - report any network error the same way
+        raise LookupFailed("%s: %s" % (url, e))
+
+
+def fetch_json(url):
+    try:
+        return json.loads(fetch(url, "application/json"))
+    except ValueError as e:
+        raise LookupFailed("%s: bad JSON: %s" % (url, e))
+
+
+# ---- parsers (pure, unit tested) -------------------------------------------
+
+def strip_v(tag):
+    return re.sub(r"^(rust-)?v", "", tag)
+
+
+def parse_go(data):
+    for rel in data:
+        if not rel.get("stable"):
+            continue
+        out = {"GO_VERSION": rel["version"][2:]}
+        for up, arch in ARCHES.items():
+            match = [f for f in rel["files"] if f["os"] == "linux" and f["arch"] == arch and f["kind"] == "archive"]
+            if not match:
+                raise LookupFailed("go: no linux/%s archive" % arch)
+            out["GO_SHA256_" + up] = match[0]["sha256"]
+        return out
+    raise LookupFailed("go: no stable release")
+
+
+def parse_rust_channel(text):
+    m = re.search(r'\[pkg\.rustc\]\s*\nversion = "([0-9.]+) ', text)
+    if not m:
+        raise LookupFailed("rust: no pkg.rustc version")
+    return m.group(1)
+
+
+def parse_rustup_release(text):
+    m = re.search(r"^version = '([0-9.]+)'", text, re.M)
+    if not m:
+        raise LookupFailed("rustup: no version")
+    return m.group(1)
+
+
+def asset_sha256(release, name, fetch_text=None):
+    """SHA-256 of a release asset: GitHub's per-asset digest, or else the line for
+    this asset in the release's own *checksums.txt file (older releases have no digest)."""
+    tag = release.get("tag_name")
+    assets = release.get("assets", [])
+    match = [a for a in assets if a["name"] == name]
+    if not match:
+        raise LookupFailed("%s: asset %s not found" % (tag, name))
+    digest = match[0].get("digest") or ""
+    if digest.startswith("sha256:"):
+        value = digest.split(":", 1)[1]
+        if not HEX64.match(value):
+            raise LookupFailed("%s: asset %s has a malformed digest %r" % (tag, name, digest))
+        return value
+    sums = [a for a in assets if a["name"].endswith("checksums.txt")]
+    if sums:
+        text = (fetch_text or fetch)(sums[0]["browser_download_url"])
+        for line in text.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1].lstrip("*") == name and re.match(r"^[0-9a-f]{64}$", parts[0]):
+                return parts[0]
+    raise LookupFailed("%s: no sha256 for asset %s (no digest, not in a checksums file)" % (tag, name))
+
+
+def parse_checksum_file(text):
+    parts = text.split()
+    if not parts or not HEX64.match(parts[0]):
+        raise LookupFailed("checksum file does not start with a sha256: %r" % text[:60])
+    return parts[0]
+
+
+def parse_agy(manifest):
+    try:
+        version, url, sha = (manifest[k] for k in AGY_KEYS)
+    except KeyError as e:
+        raise LookupFailed("agy manifest: missing %s" % e)
+    if not url.startswith(AGY_URL_PREFIX):
+        raise LookupFailed("agy manifest: unexpected download host in %s" % url)
+    if not HEX128.match(sha):
+        raise LookupFailed("agy manifest: malformed sha512")
+    return version, url, sha
+
+
+# ---- resolvers (network) ---------------------------------------------------
+
+def gh_latest(repo):
+    return fetch_json("https://api.github.com/repos/%s/releases/latest" % repo)
+
+
+def r_base():
+    tag = fetch_json("https://hub.docker.com/v2/repositories/library/ubuntu/tags/26.04")
+    snap = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).strftime("%Y%m%dT000000Z")
+    return {"BASE_IMAGE": "docker.io/library/ubuntu:26.04@" + tag["digest"], "APT_SNAPSHOT": snap}
+
+
+def r_go():
+    return parse_go(fetch_json("https://go.dev/dl/?mode=json"))
+
+
+def r_rust():
+    rustup = parse_rustup_release(fetch("https://static.rust-lang.org/rustup/release-stable.toml"))
+    out = {"RUSTUP_VERSION": rustup,
+           "RUST_VERSION": parse_rust_channel(fetch("https://static.rust-lang.org/dist/channel-rust-stable.toml"))}
+    for up, triple in (("AMD64", "x86_64-unknown-linux-gnu"), ("ARM64", "aarch64-unknown-linux-gnu")):
+        url = "https://static.rust-lang.org/rustup/archive/%s/%s/rustup-init.sha256" % (rustup, triple)
+        out["RUSTUP_SHA256_" + up] = parse_checksum_file(fetch(url))
+    return out
+
+
+def github_tool(prefix, repo, names):
+    """names maps AMD64/ARM64 to a function of the bare version returning the asset name."""
+    rel = gh_latest(repo)
+    ver = strip_v(rel["tag_name"])
+    out = {prefix + "_VERSION": ver}
+    for up, fn in names.items():
+        out["%s_SHA256_%s" % (prefix, up)] = asset_sha256(rel, fn(ver))
+    return out
+
+
+def r_yq():
+    return github_tool("YQ", "mikefarah/yq", {"AMD64": lambda v: "yq_linux_amd64", "ARM64": lambda v: "yq_linux_arm64"})
+
+
+def r_gh():
+    return github_tool("GH", "cli/cli", {
+        "AMD64": lambda v: "gh_%s_linux_amd64.tar.gz" % v, "ARM64": lambda v: "gh_%s_linux_arm64.tar.gz" % v})
+
+
+def r_uv():
+    return github_tool("UV", "astral-sh/uv", {
+        "AMD64": lambda v: "uv-x86_64-unknown-linux-gnu.tar.gz", "ARM64": lambda v: "uv-aarch64-unknown-linux-gnu.tar.gz"})
+
+
+def r_trivy():
+    return github_tool("TRIVY", "aquasecurity/trivy", {
+        "AMD64": lambda v: "trivy_%s_Linux-64bit.tar.gz" % v, "ARM64": lambda v: "trivy_%s_Linux-ARM64.tar.gz" % v})
+
+
+def r_curlie():
+    return github_tool("CURLIE", "rs/curlie", {
+        "AMD64": lambda v: "curlie_%s_linux_amd64.tar.gz" % v, "ARM64": lambda v: "curlie_%s_linux_arm64.tar.gz" % v})
+
+
+def r_golangci():
+    return github_tool("GOLANGCI_LINT", "golangci/golangci-lint", {
+        "AMD64": lambda v: "golangci-lint-%s-linux-amd64.tar.gz" % v,
+        "ARM64": lambda v: "golangci-lint-%s-linux-arm64.tar.gz" % v})
+
+
+def r_codex():
+    return github_tool("CODEX", "openai/codex", {
+        "AMD64": lambda v: "codex-x86_64-unknown-linux-musl.tar.gz",
+        "ARM64": lambda v: "codex-aarch64-unknown-linux-musl.tar.gz"})
+
+
+def r_tea():
+    rel = fetch_json("https://gitea.com/api/v1/repos/gitea/tea/releases/latest")
+    ver = strip_v(rel["tag_name"])
+    out = {"TEA_VERSION": ver}
+    for up, arch in ARCHES.items():
+        name = "tea-%s-linux-%s.xz.sha256" % (ver, arch)
+        assets = [a for a in rel.get("assets", []) if a["name"] == name]
+        if not assets:
+            raise LookupFailed("tea: %s not found" % name)
+        out["TEA_SHA256_" + up] = parse_checksum_file(fetch(assets[0]["browser_download_url"]))
+    return out
+
+
+def parse_npm_channel(doc, tag):
+    """Version and tarball integrity for an npm dist-tag."""
+    ver = (doc.get("dist-tags") or {}).get(tag)
+    if not ver:
+        raise LookupFailed("npm: no %r dist-tag" % tag)
+    try:
+        return ver, doc["versions"][ver]["dist"]["integrity"]
+    except KeyError:
+        raise LookupFailed("npm: no integrity for %s" % ver)
+
+
+def r_claude():
+    # The "stable" channel Anthropic documents for Claude Code (code.claude.com/docs/en/setup).
+    ver, integrity = parse_npm_channel(fetch_json("https://registry.npmjs.org/@anthropic-ai/claude-code"), "stable")
+    return {"CLAUDE_CODE_VERSION": ver, "CLAUDE_CODE_INTEGRITY": integrity}
+
+
+def r_agy():
+    out = {}
+    versions = set()
+    for up, arch in ARCHES.items():
+        ver, url, sha = parse_agy(fetch_json(AGY_MANIFEST.format(arch=arch)))
+        versions.add(ver)
+        out["AGY_URL_" + up] = url
+        out["AGY_SHA512_" + up] = sha
+    if len(versions) != 1:
+        raise LookupFailed("agy: architectures disagree on version %s" % sorted(versions))
+    out["AGY_VERSION"] = versions.pop()
+    return out
+
+
+def r_opencode():
+    ver = fetch_json("https://registry.npmjs.org/@opencode/cli/latest")["version"]
+    out = {"OPENCODE_VERSION": ver}
+    for up, target in (("AMD64", "linux-x64-baseline"), ("ARM64", "linux-arm64")):
+        meta = fetch_json("https://registry.npmjs.org/@opencode/cli-%s/%s" % (target, ver))
+        out["OPENCODE_INTEGRITY_" + up] = meta["dist"]["integrity"]
+    return out
+
+
+RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_trivy, r_curlie, r_golangci,
+             r_tea, r_claude, r_codex, r_agy, r_opencode]
+
+
+def main(argv=None, resolvers=None):
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--file", default="versions.env")
+    ap.add_argument("--only", nargs="*", help="resolver names such as r_go r_agy")
+    args = ap.parse_args(argv)
+    known = {r.__name__ for r in RESOLVERS}
+    unknown = sorted(set(args.only or []) - known)
+    if unknown:
+        print("bump_versions: unknown resolver(s) %s; known: %s" % (", ".join(unknown), ", ".join(sorted(known))),
+              file=sys.stderr)
+        return 2
+    chosen = resolvers or [r for r in RESOLVERS if not args.only or r.__name__ in args.only]
+    with open(args.file) as f:
+        lines = parse_env(f.read())
+    updates = {}
+    try:
+        for r in chosen:
+            updates.update(r())
+    except LookupFailed as e:
+        print("bump_versions: %s" % e, file=sys.stderr)
+        return 1
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        # Upstream returned something with an unexpected shape.
+        print("bump_versions: unexpected upstream data in %s: %r" % (getattr(r, "__name__", r), e), file=sys.stderr)
+        return 1
+    old = values(lines)
+    for k in sorted(updates):
+        if old.get(k) != updates[k]:
+            print("%s: %s -> %s" % (k, old.get(k, "(new)"), updates[k]))
+    tmp = args.file + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(render_env(lines, updates))
+    os.replace(tmp, args.file)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
