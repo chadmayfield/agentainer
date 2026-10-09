@@ -1,0 +1,18 @@
+# Step 2: seed files that are missing. Never overwrite. A path the user already uses
+# for something else is reported and skipped.
+try_seed() {
+	seed_file "$1" "$2" 2>/dev/null || warn "could not seed $2 (something else is in the way); skipping"
+}
+src=/etc/agentbox/home
+find "$src" -type f | while IFS= read -r f; do
+	try_seed "$f" "$HOME/${f#"$src"/}"
+done
+# A fresh volume or PVC hides the image's dotfiles, so seed the shell defaults too.
+# .profile comes from /etc/agentbox/home (PATH order fixed); the rest from /etc/skel.
+for f in .bashrc .bash_logout; do
+	if [ -f "/etc/skel/$f" ]; then try_seed "/etc/skel/$f" "$HOME/$f"; fi
+done
+for name in AGENTS.md mcp.json; do
+	if [ -f "/etc/agentbox/seed/$name" ]; then try_seed "/etc/agentbox/seed/$name" "$HOME/.agentbox/$name"; fi
+done
+try_seed /etc/agentbox/AGENTS.md "$HOME/.agentbox/AGENTS.md"

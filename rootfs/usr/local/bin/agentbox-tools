@@ -1,0 +1,26 @@
+#!/bin/sh
+# agentbox-tools status|reset (spec section 10)
+set -eu
+active=/var/lib/agentbox/active
+case "${1:-status}" in
+status)
+	printf 'mode: %s\nroot: %s\n' "${AGENTBOX_TOOLS:-ephemeral}" "$(readlink "$active" 2>/dev/null || echo none)"
+	ls "$active/bin" "$active/npm/bin" 2>/dev/null || true
+	;;
+reset)
+	dir="$HOME/.agentbox/tools"
+	if [ -d "$dir" ]; then
+		dest="$dir.$(date -u +%Y%m%dT%H%M%SZ).$$.bak"
+		mv "$dir" "$dest"
+		mkdir -p "$dir/bin" "$dir/npm/bin"
+		rm -f "$HOME/.agentbox/tools-image-version"
+		echo "moved $dir to $dest"
+	else
+		echo "no persisted tools"
+	fi
+	;;
+*)
+	echo "usage: agentbox-tools status|reset" >&2
+	exit 2
+	;;
+esac

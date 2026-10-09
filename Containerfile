@@ -108,9 +108,29 @@ ENV DISABLE_UPDATES=1 \
 	OPENCODE_DISABLE_AUTOUPDATE=1 \
 	CLAUDE_CODE_NONBLOCKING_STDOUT=1
 
-RUN rm -rf /tmp/agentbox-build
+# Named volumes copy the image's /home/agent on first use, so it carries the same
+# .profile the entrypoint seeds into an empty PVC.
+RUN install -m 0644 -o agent -g "${GID}" /etc/agentbox/home/.profile /home/agent/.profile \
+	&& rm -rf /tmp/agentbox-build \
+	&& install -d -o agent -g "${GID}" /var/lib/agentbox /var/lib/agentbox/tools \
+	&& install -d /etc/agentbox/home /etc/agentbox/seed
+
+# Agent-installed tools go under /var/lib/agentbox/active, a per-container symlink the entrypoint points at the
+# ephemeral or persistent root (spec 10). Static ENV, so exec sessions see it (spec 6.1).
+ENV AGENTBOX_TOOLS=ephemeral \
+	NPM_CONFIG_PREFIX=/var/lib/agentbox/active/npm \
+	CARGO_HOME=/var/lib/agentbox/active/cargo \
+	CARGO_INSTALL_ROOT=/var/lib/agentbox/active \
+	GOPATH=/var/lib/agentbox/active/go \
+	GOBIN=/var/lib/agentbox/active/bin \
+	UV_TOOL_DIR=/var/lib/agentbox/active/uv \
+	UV_TOOL_BIN_DIR=/var/lib/agentbox/active/bin \
+	PIPX_HOME=/var/lib/agentbox/active/pipx \
+	PIPX_BIN_DIR=/var/lib/agentbox/active/bin \
+	PYTHONUSERBASE=/var/lib/agentbox/active/python \
+	PATH=/usr/local/go/bin:/opt/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/var/lib/agentbox/active/bin:/var/lib/agentbox/active/npm/bin:/var/lib/agentbox/active/python/bin
 
 USER agent
 WORKDIR /workspace
-ENTRYPOINT ["/usr/bin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/agentbox-entrypoint"]
 CMD ["sleep", "infinity"]
