@@ -35,6 +35,10 @@ class ParserTests(unittest.TestCase):
         text = '[pkg.rustc]\nversion = "1.99.0 (b940084d7 2026-09-28)"\n'
         self.assertEqual(bv.parse_rust_channel(text), "1.99.0")
 
+    def test_rust_manifest_url(self):
+        self.assertEqual(bv.rust_manifest_url("1.99.0"),
+                         "https://static.rust-lang.org/dist/channel-rust-1.99.0.toml")
+
     def test_rustup_version(self):
         self.assertEqual(bv.parse_rustup_release("schema-version = '1'\nversion = '1.28.2'\n"), "1.28.2")
 

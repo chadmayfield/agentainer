@@ -170,10 +170,16 @@ def r_go():
     return parse_go(fetch_json("https://go.dev/dl/?mode=json"))
 
 
+def rust_manifest_url(version):
+    return "https://static.rust-lang.org/dist/channel-rust-%s.toml" % version
+
+
 def r_rust():
     rustup = parse_rustup_release(fetch("https://static.rust-lang.org/rustup/release-stable.toml"))
-    out = {"RUSTUP_VERSION": rustup,
-           "RUST_VERSION": parse_rust_channel(fetch("https://static.rust-lang.org/dist/channel-rust-stable.toml"))}
+    rust = parse_rust_channel(fetch("https://static.rust-lang.org/dist/channel-rust-stable.toml"))
+    out = {"RUSTUP_VERSION": rustup, "RUST_VERSION": rust,
+           # rustup checks every component against this versioned manifest; the build checks the manifest.
+           "RUST_MANIFEST_SHA256": parse_checksum_file(fetch(rust_manifest_url(rust) + ".sha256"))}
     for up, triple in (("AMD64", "x86_64-unknown-linux-gnu"), ("ARM64", "aarch64-unknown-linux-gnu")):
         url = "https://static.rust-lang.org/rustup/archive/%s/%s/rustup-init.sha256" % (rustup, triple)
         out["RUSTUP_SHA256_" + up] = parse_checksum_file(fetch(url))

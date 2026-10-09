@@ -77,6 +77,12 @@ ENV LANG=C.UTF-8
 # Copied after the apt layer so a pin bump for other tools does not rerun apt.
 COPY versions.env /usr/local/share/agentbox/versions.env
 
+COPY build/fetch.sh build/install-upstream.sh /tmp/agentbox-build/
+RUN TARGETARCH="${TARGETARCH}" bash /tmp/agentbox-build/install-upstream.sh
+
+ENV RUSTUP_HOME=/opt/rustup \
+	PATH=/usr/local/go/bin:/opt/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 RUN rm -rf /tmp/agentbox-build
 
 USER agent
