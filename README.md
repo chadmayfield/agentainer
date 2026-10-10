@@ -184,6 +184,8 @@ Gemini CLI is not included. Google wrote: "On June 18, 2026, Gemini CLI and Gemi
 
 Other controls: the image runs as the non-root user `agent` (UID 1000), agent binaries are root-owned, and CI fails the build if trivy finds a secret in the image.
 
+To report a vulnerability in Agentainer itself, follow `SECURITY.md`.
+
 ### Vulnerability reports
 
 CI scans every build with trivy. The vulnerability scan reports and never fails the build. The secret scan fails it.
@@ -202,6 +204,27 @@ Some findings sit in upstream binaries that this repo cannot rebuild. A new upst
 - Releases are calendar versions (`YYYY.MM.DD`). Images are tagged `latest`, the version and `sha-<commit>`, signed with cosign keyless, and published with an SBOM and provenance to `ghcr.io/chadmayfield/agentainer`. A published image is a fresh build from the release commit with the same pinned inputs, not the exact image the pull request tests ran on.
 - `/etc/agentainer/versions.json` in the image lists every agent, tool and installed apt package version.
 
+## Upgrading
+
+Locally, pull the new image and recreate the container. The home volume stays.
+
+```sh
+podman pull ghcr.io/chadmayfield/agentainer:latest   # or docker pull
+bin/agentainer down
+bin/agentainer up ~/code
+```
+
+`run` does not pull a newer `latest` on its own if an older one is already on your machine. In Kubernetes, change `newTag` in `deploy/kubernetes/agentainer/kustomization.yaml` and run `kubectl apply -k deploy/kubernetes`. The `home` and `workspace` volumes stay.
+
+What happens to your home volume on the first start of the new image:
+
+- Logins, agent settings and history stay. The entrypoint only adds missing files and never overwrites one (`tests/50-entrypoint.sh`).
+- Because of that, new defaults in the image's seed files do not reach an existing home. The image's copies are in `/etc/agentainer/home/` (for example `.claude/settings.json` and `.codex/config.toml`) if you want to compare them with yours.
+- `~/.agentainer/AGENTS.md` stays yours. If the image's default changed, the entrypoint prints a notice, and `agentainer-agents diff` shows the difference.
+- With `AGENTAINER_TOOLS=persist`, tools you installed earlier stay on `PATH` after the image's own tools, and the entrypoint warns on each start until you run `agentainer-tools reset`, which moves them to a dated backup.
+- MCP servers sync again only when `~/.agentainer/mcp.json` changes.
+- Anything installed with `sudo apt install` is gone, as after every new container.
+
 ## Building and testing
 
 ```sh
@@ -210,6 +233,8 @@ sh tests/run.sh                  # container tests against localhost/agentainer:
 sh tests/lint.sh                 # shellcheck and shfmt, run from the image
 python3 -m unittest discover -s tests/unit
 ```
+
+Contributions: see `CONTRIBUTING.md`.
 
 ## License
 
