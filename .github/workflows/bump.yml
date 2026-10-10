@@ -1,0 +1,39 @@
+name: bump
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: {ref: develop}
+      - name: Resolve pins
+        shell: bash  # adds -o pipefail, so a failed resolver fails the job
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/bump_versions.py | tee changes.txt
+      - name: Open the PR and start CI on it
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.run_number }}
+        run: |
+          if git diff --quiet; then echo "No version changes this week."; exit 0; fi
+          b="bump/$(date -u +%Y-%m-%d)-$RUN"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$b"
+          git commit -am "chore: weekly version bump"
+          git push origin "$b"
+          { echo "Automated weekly pin update. Review and merge by hand."; echo; echo '```'; cat changes.txt; echo '```'; } > body.md
+          gh pr create --base develop --head "$b" --title "Weekly version bump $(date -u +%Y-%m-%d)" --body-file body.md
+          # A PR opened with GITHUB_TOKEN starts no pull_request workflow; a dispatch does run.
+          gh workflow run build.yml --ref "$b"
