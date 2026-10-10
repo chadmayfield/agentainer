@@ -41,6 +41,15 @@ assert_contains "user Codex settings survive" 'model = "keepme"' "$(run_in $H --
 assert_eq "Codex still loads its config" "ok" \
 	"$(run_in $H --network none -- sh -c 'codex --strict-config doctor --json 2>/dev/null' | python3 -c 'import sys,json; print(json.load(sys.stdin)["checks"]["config.load"]["status"])' 2>&1)"
 
+# Deleting mcp.json removes every managed server on the next start.
+run_in $H --entrypoint sh -- -c 'rm ~/.agentainer/mcp.json' >/dev/null
+out=$(run_in $H --network none -- sh -c 'claude mcp list; codex mcp list; opencode debug config; agy mcp list' 2>/dev/null)
+case "$out" in
+*web2*) fail "deleting mcp.json removes managed servers" "$out" ;;
+*) pass "deleting mcp.json removes managed servers" ;;
+esac
+assert_eq "user Codex settings survive the removal" "1" "$(run_in $H -- grep -c keepme /home/agent/.codex/config.toml 2>/dev/null)"
+
 # Review focus 4: a malformed file keeps the container up.
 assert_contains "malformed file keeps the container up" "ok" \
 	"$(run_in $H --entrypoint sh -- -c 'echo "{bad" > ~/.agentainer/mcp.json; agentainer-entrypoint echo ok 2>/dev/null')"

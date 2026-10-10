@@ -33,10 +33,10 @@ assert_contains "claude update refused by DISABLE_UPDATES" "Updates are disabled
 assert_contains "versions.json lists pins" "\"CODEX_VERSION\": \"$CODEX_VERSION\"" "$(run_in -- cat /etc/agentainer/versions.json)"
 assert_contains "versions.json lists apt packages" "\"tmux\":" "$(run_in -- cat /etc/agentainer/versions.json)"
 assert_eq "source label" "https://github.com/chadmayfield/agentainer" \
-	"$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Labels "org.opencontainers.image.source"}}')"
+	"$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')"
 assert_eq "version label is ours, not the base image's" "rc=0" \
 	"$(
-		v=$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Labels "org.opencontainers.image.version"}}')
+		v=$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
 		[ "$v" != 26.04 ] && [ -n "$v" ]
 		echo rc=$?
 	)"

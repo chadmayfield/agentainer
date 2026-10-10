@@ -5,7 +5,7 @@ Agentainer is one container image with four AI coding agents and a shared set of
 - Agents: [Claude Code](https://code.claude.com/docs/en/setup), [Codex CLI](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/docs/cli/overview.md) (`agy`) and [OpenCode v2](https://opencode.ai/v2/docs).
 - Base: Ubuntu 26.04 LTS, pinned by digest, with apt packages from the [Ubuntu snapshot service](https://documentation.ubuntu.com/server/how-to/software/snapshot-service/) at a pinned date.
 - Tools: git, gh, Go, Rust, Python with uv and pipx, Node.js, ripgrep, jq, yq, shellcheck, trivy and more. `/etc/agentainer/versions.json` in the image lists every version.
-- Platforms: `linux/amd64` and `linux/arm64`.
+- Platforms: `linux/amd64` and `linux/arm64`. OpenCode ships its build for amd64 CPUs without AVX2. Whether the other agents run on such CPUs is not verified, because CI runners have AVX2.
 
 It has two goals. Agents see only what you mount and the credentials you pass in. The same image and tools run everywhere.
 
