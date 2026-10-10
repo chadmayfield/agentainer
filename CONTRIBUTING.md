@@ -33,6 +33,12 @@ With Docker, prefix the commands with `RUNTIME=docker`. CI runs all of these on 
 - Add or change a test with each behavior change. A bug fix starts with a test that fails.
 - Shell scripts must pass `shellcheck` and `shfmt`.
 
+## Vulnerabilities in bundled tools
+
+- Install upstream release binaries and check them against the checksum the project publishes. Do not build a tool from source to pick up a newer Go, Rust or library version.
+- Findings that sit inside an upstream binary are reported, not chased. CI lists them, with the number that have a fix, and a new upstream release reaches the image through the weekly version bump.
+- When a tool stops shipping releases and carries a critical finding that only a rebuild would fix, the maintainer decides whether to keep it, drop it or replace it. Record the decision in the pull request that makes it.
+
 ## Writing
 
 Docs, comments, commit messages and pull request text use plain, direct sentences in active voice, sentence-case headings, and no em dashes. Say what something does, with the command, path or number.
