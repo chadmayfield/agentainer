@@ -22,5 +22,6 @@ assert_eq "every installed apt package is from the snapshot" "END" \
 assert_eq "no snapshot pin left in sources" "rc=1" "$(run_in -- sh -c 'grep -rl "^Snapshot:" /etc/apt; echo rc=$?')"
 assert_contains "sources use archive.ubuntu.com" "archive.ubuntu.com" "$(run_in -- cat /etc/apt/sources.list.d/ubuntu.sources)"
 assert_eq "sources do not use ports.ubuntu.com" "rc=1" "$(run_in -- sh -c 'grep -rl ports.ubuntu.com /etc/apt; echo rc=$?')"
+assert_eq "no macOS .DS_Store files in the image" "" "$(run_in -- sh -c 'find / -xdev -name .DS_Store 2>/dev/null')"
 
 finish

@@ -90,4 +90,8 @@ assert_contains "blocked seed path warns" "could not seed" "$out"
 assert_eq "bash -l keeps /usr/local/bin before ~/.local/bin" "rc=0" \
 	"$(run_in $H -- bash -l -c 'mkdir -p ~/.local/bin; p=$(bash -l -c "echo \$PATH"); case "$p" in */usr/local/bin*/home/agent/.local/bin* | */usr/local/bin*) ;; *) exit 1 ;; esac; case "$p" in /home/agent/.local/bin:*) exit 1 ;; esac; echo rc=0' 2>/dev/null || echo rc=1)"
 
+# Optional steps report a failure and the container still starts.
+assert_contains "a failing opencode setup step warns" "70-opencode.sh failed" \
+	"$(run_in --entrypoint sh -- -c 'mkdir -p /tmp/f && printf "#!/bin/sh\nexit 1\n" >/tmp/f/opencode && chmod +x /tmp/f/opencode && PATH=/tmp/f:$PATH agentainer-entrypoint echo started 2>&1')"
+
 finish

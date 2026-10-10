@@ -259,5 +259,26 @@ class RobustnessTests(SyncTests):
         self.assertIn("only exact ${NAME}", err.getvalue())
 
 
+
+class WriteAtomicTests(unittest.TestCase):
+    def test_another_writers_temp_file_does_not_block(self):
+        # Two containers can share one home volume, so a fixed temp name can collide.
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "mcp-managed.json")
+        os.mkdir(path + ".agentainer-tmp")
+        mcp.write_atomic(path, "{}")
+        with open(path) as f:
+            self.assertEqual(f.read(), "{}")
+        self.assertEqual(sorted(os.listdir(d)), ["mcp-managed.json", "mcp-managed.json.agentainer-tmp"])
+
+    def test_keeps_the_mode_of_a_replaced_file(self):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "config.toml")
+        with open(path, "w") as f:
+            f.write("old")
+        os.chmod(path, 0o640)
+        mcp.write_atomic(path, "new")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o640)
+
 if __name__ == "__main__":
     unittest.main()
