@@ -64,9 +64,11 @@ Put API keys and tokens in the env file. Subscription logins happen inside the c
 |---|---|---|---|
 | Claude Code | Run `claude setup-token` on a machine with a browser and set `CLAUDE_CODE_OAUTH_TOKEN`. Or run `/login` in the container and paste the code. | `ANTHROPIC_API_KEY` | `~/.claude/.credentials.json` |
 | Codex | `codex login --device-auth`. Turn on device code login in your ChatGPT security settings first. | `printenv OPENAI_API_KEY \| codex login --with-api-key` | `~/.codex/auth.json` |
-| Antigravity | Run `agy` and sign in with the paste-code flow. Not verified in a container yet. | `GEMINI_API_KEY` plus `"modelProvider": "gemini"` in its settings | not verified |
+| Antigravity | Run `agy` and sign in. In a container it offers the paste-code flow without extra setup. | `GEMINI_API_KEY` plus `"modelProvider": "gemini"` in its settings | `~/.gemini/antigravity-cli/antigravity-oauth-token` |
 | OpenCode | `opencode auth login` | Provider variables such as `OPENROUTER_API_KEY` | `~/.local/share/opencode/opencode.db` |
 | GitHub | n/a | `GH_TOKEN` (a fine-grained token) | `~/.config/gh/` |
+
+Each login was checked by hand in a container, including that it survives a new container on the same home volume (2026-10-10, rootless Podman on macOS).
 
 Sources: [Claude authentication](https://code.claude.com/docs/en/authentication), [Codex auth](https://learn.chatgpt.com/docs/auth), [Antigravity install](https://antigravity.google/docs/cli/install.md), OpenCode v2 docs (`cli/providers.mdx`).
 
@@ -87,7 +89,7 @@ You keep one instruction file, `~/.agentainer/AGENTS.md`. The first start copies
 | Antigravity | `~/.gemini/AGENTS.md` | Symlink |
 | OpenCode | `~/.config/opencode/AGENTS.md` | Symlink |
 
-`tests/60-agents-md.sh` checks the wiring and that Codex reads the symlinked file. Whether Antigravity and OpenCode follow the symlink is not verified yet. Claude Code is set to load both `CLAUDE.md` and `AGENTS.md` in a repo that has both ([instruction files setting](https://code.claude.com/docs/en/memory)). Each repo's own `AGENTS.md` still loads on top.
+`tests/60-agents-md.sh` checks the wiring and that Codex reads the symlinked file. A hand check in a container (a line added to `~/.agentainer/AGENTS.md`) showed all four agents follow it. Claude Code is set to load both `CLAUDE.md` and `AGENTS.md` in a repo that has both ([instruction files setting](https://code.claude.com/docs/en/memory)). Each repo's own `AGENTS.md` still loads on top.
 
 ### MCP servers
 
@@ -100,7 +102,7 @@ Define servers once in `~/.agentainer/mcp.json`, in the `mcpServers` format most
 }}
 ```
 
-`agentainer-mcp sync` writes them into each agent's config, through `claude mcp` and `agy mcp` for those two, a marked block in `~/.codex/config.toml` for Codex, and `mcp.servers` in `~/.config/opencode/opencode.json` for OpenCode. The entrypoint runs it when `mcp.json` changes. It adds, updates and removes only the servers it added, and never touches servers you added yourself (`tests/80-mcp.sh`, `tests/unit/test_mcp_sync.py`). `agentainer-mcp list` shows what it manages.
+`agentainer-mcp sync` writes them into each agent's config, through `claude mcp` and `agy mcp` for those two, a marked block in `~/.codex/config.toml` for Codex, and `mcp.servers` in `~/.config/opencode/opencode.json` for OpenCode. The entrypoint runs it when `mcp.json` changes. It adds, updates and removes only the servers it added, and never touches servers you added yourself (`tests/80-mcp.sh`, `tests/unit/test_mcp_sync.py`). `agentainer-mcp list` shows what it manages. In a hand check, Codex and Antigravity each listed the tools of a server synced this way, and `claude mcp list` reports the same server as connected. OpenCode is not verified yet: `opencode mcp list` prints "No MCP servers configured" even for a server that `opencode mcp add` wrote itself, so it cannot answer the question.
 
 Keep secrets as `${NAME}` references to variables in your env file. No agent config receives the value. Literal values reach `claude` and `agy` on their command line, where `ps` can show them for a moment. Re-syncing replaces managed servers, so settings you change inside an agent for a managed server may not survive.
 
@@ -224,6 +226,28 @@ What happens to your home volume on the first start of the new image:
 - With `AGENTAINER_TOOLS=persist`, tools you installed earlier stay on `PATH` after the image's own tools, and the entrypoint warns on each start until you run `agentainer-tools reset`, which moves them to a dated backup.
 - MCP servers sync again only when `~/.agentainer/mcp.json` changes.
 - Anything installed with `sudo apt install` is gone, as after every new container.
+
+## Troubleshooting
+
+**`sudo: The "no new privileges" flag is set, which prevents sudo from running as root.`** sudo is off by default. Recreate the container with `bin/agentainer up --sudo`, or leave out `--security-opt no-new-privileges=true` with raw `docker run` or `podman run`.
+
+**`ping: socket: Operation not permitted`** The container was started without `--sysctl "net.ipv4.ping_group_range=1000 1000"`. The launcher and the Kubernetes example set it; add it to raw `run` commands.
+
+**`the container name "agentainer" is already in use`** A container with that name exists. If it is running, `bin/agentainer attach` connects to it. If it is stopped, start it with `podman start agentainer` (or `docker start`), or remove it with `bin/agentainer down`. The home volume stays either way.
+
+**Files in `/workspace` belong to UID 1000 on a Linux host.** That is rootful Docker with a host UID other than 1000. See "Running without the launcher" for the custom-UID build, or use Podman or rootless Docker.
+
+**Codex fails every command with `bwrap: Can't mount devpts on /newroot/dev/pts: Permission denied`.** Codex's own sandbox cannot start in a container. The image's seed turns it off, but a home volume created before that change keeps its old `~/.codex/config.toml`. Add the setting near the top of the file, before any `[table]`:
+
+```sh
+sed -i '1a sandbox_mode = "danger-full-access"' ~/.codex/config.toml
+```
+
+**An MCP server started with `npx` fails: Claude shows "Connection closed", or npm prints `ENOENT: no such file or directory, lstat '/var/lib/agentainer/tools/npm/lib'`.** Images built before the fix did not create that folder. Upgrade, or run `mkdir -p /var/lib/agentainer/active/npm/lib` in the container and restart the agent.
+
+**`agentainer-mcp list` shows `agy: (none)` with "agy already has a server named ... that agentainer did not add".** Antigravity's sign-in leaves an empty `~/.gemini/config/mcp_config.json`, which images before the fix read as taken. Upgrade and run `agentainer-mcp sync`. If the warning stays, the file really lists a server with that name; rename one of them.
+
+**An agent shows an old login or setting after an upgrade.** That is expected: the entrypoint never overwrites files in your home volume. See "Upgrading".
 
 ## Building and testing
 
