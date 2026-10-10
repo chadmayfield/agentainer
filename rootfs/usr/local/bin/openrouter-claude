@@ -1,0 +1,12 @@
+#!/bin/sh
+# Runs Claude Code through OpenRouter for this process only (spec 11).
+# Source: https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration
+set -eu
+if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+	echo "openrouter-claude: set OPENROUTER_API_KEY first" >&2
+	exit 2
+fi
+ANTHROPIC_BASE_URL=https://openrouter.ai/api \
+	ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY" \
+	ANTHROPIC_API_KEY="" \
+	exec claude "$@"
