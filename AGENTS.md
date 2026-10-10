@@ -23,6 +23,7 @@ Agentainer is one public container image that bundles several AI coding agents (
 
 - `main` holds releases. `develop` is the integration branch and the GitHub default branch.
 - Do all work on a `feature/<name>` branch created from `develop` (`git flow feature start <name>`). Open pull requests against `develop`.
+- Hotfixes also go through `release/<version>` (a new calendar version), because the publish job reads the version from a `release/` merge. Do not merge `hotfix/*` branches into `main`.
 - Never push to `main` directly, and do not use `git flow release finish`, because it merges into `main` locally. A release is `git flow release start <version>`, then a pull request from `release/<version>` to `main`, then a pull request from `main` back to `develop`.
 - Before each commit, show a file-by-file summary of what changed and wait for the maintainer's approval.
 - End every commit message with this trailer:

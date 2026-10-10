@@ -1,0 +1,4 @@
+# Files the README steps create next to the repo; never commit them.
+host.key
+env
+.DS_Store

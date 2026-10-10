@@ -9,6 +9,7 @@ The repo uses git-flow:
 - `develop` is the default branch. Open pull requests against it.
 - Work on a `feature/<name>` branch made from `develop` (`git flow feature start <name>`, or `git switch -c feature/<name> develop`).
 - `main` holds releases and changes only through release pull requests. Do not open pull requests against `main`.
+- A hotfix is a new release: `release/<version>` from `develop`, then a pull request to `main`. The publish job reads the version from the `release/` branch name, so `hotfix/*` branches do not publish.
 
 ## Build and test
 

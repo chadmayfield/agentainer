@@ -13,6 +13,8 @@ It has two goals. Agents see only what you mount and the credentials you pass in
 
 You need Podman or Docker. The launcher in `bin/agentainer` is a POSIX shell script.
 
+No image is published to `ghcr.io/chadmayfield/agentainer` until the first release. Until then, build it with `scripts/build.sh` and set `AGENTAINER_IMAGE=localhost/agentainer:dev`.
+
 ```sh
 mkdir -p ~/.config/agentainer
 cp env.example ~/.config/agentainer/env
@@ -104,7 +106,7 @@ Define servers once in `~/.agentainer/mcp.json`, in the `mcpServers` format most
 
 `agentainer-mcp sync` writes them into each agent's config, through `claude mcp` and `agy mcp` for those two, a marked block in `~/.codex/config.toml` for Codex, and `mcp.servers` in `~/.config/opencode/opencode.json` for OpenCode. The entrypoint runs it when `mcp.json` changes. It adds, updates and removes only the servers it added, and never touches servers you added yourself (`tests/80-mcp.sh`, `tests/unit/test_mcp_sync.py`). `agentainer-mcp list` shows what it manages. In a hand check, Codex and Antigravity each listed the tools of a server synced this way, and `claude mcp list` reports the same server as connected. OpenCode is not verified yet: `opencode mcp list` prints "No MCP servers configured" even for a server that `opencode mcp add` wrote itself, so it cannot answer the question.
 
-Keep secrets as `${NAME}` references to variables in your env file. No agent config receives the value. Literal values reach `claude` and `agy` on their command line, where `ps` can show them for a moment. Re-syncing replaces managed servers, so settings you change inside an agent for a managed server may not survive.
+Keep secrets as `${NAME}` references to variables in your env file. No agent config receives the value. Literal values reach `claude` and `agy` on their command line, where `ps` can show them for a moment. Antigravity has no documented syntax for variable references, so for `agy` sync leaves out `env` entries that are `${NAME}` references (the server inherits the container's environment instead) and does not write headers that contain `${NAME}`, such as `Authorization: Bearer ${TOKEN}`. It prints a warning for each; add those headers in Antigravity by hand. Re-syncing replaces managed servers, so settings you change inside an agent for a managed server may not survive.
 
 ### Tools that agents install
 
@@ -132,8 +134,10 @@ kubectl create namespace agentainer
 kubectl create namespace containerssh
 kubectl -n agentainer create secret generic agentainer-credentials \
   --from-env-file="$HOME/.config/agentainer/env"
-openssl genrsa -out host.key 4096
-kubectl -n containerssh create secret generic containerssh-hostkey --from-file=host.key
+keydir=$(mktemp -d)   # keep the private host key out of the repo
+openssl genrsa -out "$keydir/host.key" 4096
+kubectl -n containerssh create secret generic containerssh-hostkey --from-file="$keydir/host.key"
+rm -r "$keydir"
 kubectl -n containerssh create secret generic agentainer-authorized-keys \
   --from-file=authorized_keys="$HOME/.ssh/id_ed25519.pub"
 kubectl apply -k deploy/kubernetes
@@ -145,7 +149,7 @@ ssh dev@<containerssh service address>
 - The webhook accepts plain `authorized_keys` lines only. It refuses a line with options such as `from=` or `command=`, because it cannot enforce them (`tests/unit/test_webhook.py`). Password logins always fail.
 - Edit `loadBalancerSourceRanges` in `deploy/kubernetes/containerssh/service.yaml` to your client range before you apply.
 - Pin the image in `deploy/kubernetes/agentainer/kustomization.yaml` (`images`, `newTag`). The example follows `latest`.
-- `deploy/kubernetes/agentainer/networkpolicy.yaml` allows only DNS and outbound HTTPS. It is off by default; add it to that folder's `kustomization.yaml` to use it.
+- `deploy/kubernetes/agentainer/networkpolicy.yaml` allows only DNS and outbound HTTPS. Without it, the agent pod can also reach your cloud provider's instance metadata address (`169.254.169.254`) if the cluster allows it. It is off by default; add it to that folder's `kustomization.yaml` to use it.
 - A cluster has no host folder. Clone repos into `/workspace`. **Work you have not pushed exists only on the workspace volume.**
 - sftp and scp are not supported: the image has no `sftp-server`.
 - To turn sudo on, follow the comment in `deploy/kubernetes/agentainer/statefulset.yaml`. The capability list there is not verified yet, and the pod then needs the Baseline profile.
@@ -200,7 +204,7 @@ Some findings sit in upstream binaries that this repo cannot rebuild. A new upst
 
 ## Versions and updates
 
-- `versions.env` pins every input: the base image digest, the apt snapshot date, each agent and tool version, and the checksum of every download. The build checks each download against it.
+- `versions.env` pins every input: the base image digest, the apt snapshot date, each agent and tool version, and the checksum of every download. The build checks each download against it. The one exception is the Rust toolchain: `rustup-init` downloads the components and checks each against the hashes in Rust's own channel manifest.
 - Agents do not update themselves: `DISABLE_UPDATES=1` for Claude Code ([env vars](https://code.claude.com/docs/en/env-vars)), `/etc/codex/requirements.toml` for Codex ([managed configuration](https://learn.chatgpt.com/docs/enterprise/managed-configuration)), `AGY_CLI_DISABLE_AUTO_UPDATE=true` for Antigravity ([troubleshooting](https://antigravity.google/docs/cli/troubleshooting.md)), and `"update": "disable"` for OpenCode (`tests/40-agents.sh`, `tests/60-agents-md.sh`).
 - A weekly workflow (`.github/workflows/bump.yml`) resolves new versions with `scripts/bump_versions.py` and opens a pull request against `develop`. A maintainer reviews and merges it by hand.
 - Releases are calendar versions (`YYYY.MM.DD`). Images are tagged `latest`, the version and `sha-<commit>`, signed with cosign keyless, and published with an SBOM and provenance to `ghcr.io/chadmayfield/agentainer`. A published image is a fresh build from the release commit with the same pinned inputs, not the exact image the pull request tests ran on.
