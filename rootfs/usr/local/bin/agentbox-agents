@@ -1,0 +1,12 @@
+#!/bin/sh
+# agentbox-agents diff: compare your ~/.agentbox/AGENTS.md with the image default.
+# Exits 0 when the files are equal or differ, 2 on an error.
+set -u
+if [ "$#" -gt 1 ] || [ "${1:-diff}" != diff ]; then
+	echo "usage: agentbox-agents diff" >&2
+	exit 2
+fi
+diff -u /etc/agentbox/AGENTS.md "$HOME/.agentbox/AGENTS.md"
+rc=$?
+if [ "$rc" -le 1 ]; then exit 0; fi
+exit 2
