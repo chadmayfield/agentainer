@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata: {name: containerssh, namespace: containerssh}
+spec:
+  type: LoadBalancer
+  # type: NodePort  # alternative without a load balancer
+  loadBalancerSourceRanges: [203.0.113.0/24]  # documentation range; replace with your client range
+  selector: {app: containerssh}
+  ports: [{name: ssh, port: 22, targetPort: 2222}]

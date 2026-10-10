@@ -1,0 +1,13 @@
+# Optional. Add it to kustomization.yaml to allow only DNS and outbound HTTPS.
+# NetworkPolicy matches IPs, ports and labels, not domain names.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agentainer-egress
+  namespace: agentainer
+spec:
+  podSelector: {matchLabels: {app: agentainer}}
+  policyTypes: [Egress]
+  egress:
+    - ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - ports: [{protocol: TCP, port: 443}]
