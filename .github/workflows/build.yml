@@ -36,12 +36,37 @@ jobs:
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - name: Build
         run: RUNTIME=docker sh scripts/build.sh --tag "$IMAGE"
-      - name: Image size
-        run: docker image inspect "$IMAGE" --format '{{.Size}}' | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Build report (versions, changed pins, size)
+        shell: bash  # -o pipefail: a failing command before | tee must fail the step
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -eu
+          docker run --rm --entrypoint cat "$IMAGE" /etc/agentainer/versions.json >versions.json
+          python3 scripts/build_report.py versions versions.json >>"$GITHUB_STEP_SUMMARY"
+          # Compare with the commit before a push, or with the target branch of a PR or dispatch.
+          if [ -n "${BEFORE:-}" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
+            ref=$BEFORE
+          else
+            ref=${GITHUB_BASE_REF:-develop}
+          fi
+          if git fetch -q --depth=1 origin "$ref"; then
+            git show FETCH_HEAD:versions.env >base-versions.env 2>/dev/null || : >base-versions.env
+          else
+            : >base-versions.env
+          fi
+          python3 scripts/build_report.py pins base-versions.env versions.env >>"$GITHUB_STEP_SUMMARY"
+          docker history --human=false --no-trunc --format '{{.Size}}	{{.CreatedBy}}' "$IMAGE" |
+            python3 scripts/build_report.py layers "$(docker image inspect "$IMAGE" --format '{{.Size}}')" >>"$GITHUB_STEP_SUMMARY"
       - name: Lint shell
         run: RUNTIME=docker sh tests/lint.sh
       - name: Container tests with Docker
-        run: RUNTIME=docker sh tests/run.sh
+        shell: bash  # -o pipefail: a failing command before | tee must fail the step
+        run: |
+          rc=0
+          RUNTIME=docker sh tests/run.sh 2>&1 | tee tests-docker.log || rc=$?
+          python3 scripts/build_report.py tests Docker tests-docker.log >>"$GITHUB_STEP_SUMMARY"
+          exit "$rc"
       - name: Manifest tests
         run: RUNTIME=docker sh tests/host/test-manifests.sh
       - name: Linux host checks with Docker (spec tests 10a and 11)
@@ -131,7 +156,12 @@ jobs:
           mkdir -p wsp && podman run --rm --userns=keep-id:uid=1000,gid=1000 -v "$PWD/wsp:/workspace" "$IMAGE" touch /workspace/p
           test "$(stat -c %u wsp/p)" = "$(id -u)"
       - name: Container tests with Podman
-        run: RUNTIME=podman sh tests/run.sh
+        shell: bash  # -o pipefail: a failing command before | tee must fail the step
+        run: |
+          rc=0
+          RUNTIME=podman sh tests/run.sh 2>&1 | tee tests-podman.log || rc=$?
+          python3 scripts/build_report.py tests Podman tests-podman.log >>"$GITHUB_STEP_SUMMARY"
+          exit "$rc"
 
   version:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
