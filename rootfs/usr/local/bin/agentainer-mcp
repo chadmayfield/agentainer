@@ -149,7 +149,10 @@ def agy_exists(home, name):
     path = os.path.join(home, ".gemini", "config", "mcp_config.json")
     try:
         with open(path) as f:
-            return name in (json.load(f).get("mcpServers") or {})
+            text = f.read()
+        if not text.strip():
+            return False  # agy's sign-in leaves an empty file; agy mcp add accepts it
+        return name in (json.loads(text).get("mcpServers") or {})
     except FileNotFoundError:
         return False
     except (ValueError, AttributeError):

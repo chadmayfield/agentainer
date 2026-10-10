@@ -73,6 +73,27 @@ class SyncTests(unittest.TestCase):
         manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
         self.assertEqual(manifest, {"agy": ["fs"], "claude": ["fs"], "codex": ["fs"], "opencode": ["fs"]})
 
+    def agy_config(self, text):
+        os.makedirs(os.path.join(self.home, ".gemini", "config"), exist_ok=True)
+        with open(os.path.join(self.home, ".gemini", "config", "mcp_config.json"), "w") as f:
+            f.write(text)
+
+    def test_agy_empty_config_has_no_servers(self):
+        # agy's sign-in leaves an empty mcp_config.json (seen in the maintainer's session).
+        for text in ("", "  \n"):
+            open(self.log, "w").close()
+            self.agy_config(text)
+            self.write_mcp({"fs": {"command": "npx"}})
+            self.sync()
+            self.assertIn("agy mcp add fs -- npx", self.calls())
+            os.unlink(os.path.join(self.home, ".agentainer", "mcp-managed.json"))
+
+    def test_agy_broken_config_is_left_alone(self):
+        self.agy_config("{not json")
+        self.write_mcp({"fs": {"command": "npx"}})
+        self.sync()
+        self.assertNotIn("agy mcp add", self.calls())
+
     def test_removes_only_managed(self):
         self.write_mcp({"a": {"command": "x"}, "b": {"command": "y"}})
         self.sync()
