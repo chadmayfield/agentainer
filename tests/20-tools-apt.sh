@@ -15,7 +15,7 @@ assert_eq "all apt tools on PATH" "DONE" "$out"
 # ping needs no capability: its file capability is removed and the runtime allows
 # unprivileged ICMP sockets through net.ipv4.ping_group_range.
 assert_contains "ping works without NET_RAW" "1 received" \
-	"$(run_in --sysctl 'net.ipv4.ping_group_range=0 65535' -- ping -c1 -W2 127.0.0.1 2>&1)"
+	"$(run_in --sysctl 'net.ipv4.ping_group_range=1000 1000' -- ping -c1 -W2 127.0.0.1 2>&1)"
 assert_contains "fd runs" "fd" "$(run_in -- fd --version)"
 assert_contains "bat runs" "bat" "$(run_in -- bat --version)"
 assert_contains "python is 3.14" "Python 3.14" "$(run_in -- python3 --version)"
