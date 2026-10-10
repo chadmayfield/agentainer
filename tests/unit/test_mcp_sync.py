@@ -1,5 +1,7 @@
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import stat
@@ -72,6 +74,21 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(self.opencode_servers()["fs"], {"type": "local", "command": ["npx", "-y", "@example/fs"]})
         manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
         self.assertEqual(manifest, {"agy": ["fs"], "claude": ["fs"], "codex": ["fs"], "opencode": ["fs"]})
+
+    def test_agent_error_output_is_not_logged(self):
+        # An agent CLI may echo its arguments on failure; literal values in mcp.json would
+        # then reach container or pod logs through the warning.
+        p = os.path.join(self.bin, "claude")
+        with open(p, "w") as f:
+            f.write('#!/bin/sh\necho "$(basename "$0") $*" >> "$LOG"\n'
+                    '[ "$1 $2" = "mcp get" ] && exit 1\necho "bad config: $*" >&2\nexit 3\n')
+        os.chmod(p, 0o755)
+        self.write_mcp({"web": {"url": "https://mcp.example.com", "headers": {"X-Key": "literal-secret-123"}}})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.sync()
+        self.assertIn("claude mcp add-json web failed (exit 3)", err.getvalue())
+        self.assertNotIn("literal-secret-123", err.getvalue())
 
     def agy_config(self, text):
         os.makedirs(os.path.join(self.home, ".gemini", "config"), exist_ok=True)

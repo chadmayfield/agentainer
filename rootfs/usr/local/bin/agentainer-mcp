@@ -343,10 +343,13 @@ class Runner:
         return shutil.which(binary, path=self.env.get("PATH")) is not None
 
     def run(self, argv, quiet=False):
-        r = subprocess.run(argv, env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # The agent's own error text is not logged: a CLI may echo its arguments, and
+        # literal values from mcp.json would then reach container or pod logs.
+        r = subprocess.run(argv, env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if r.returncode != 0 and not quiet:
             self.failed = True
-            self.warn("%s failed: %s" % (" ".join(argv[:4]), r.stderr.decode(errors="replace").strip()))
+            self.warn("%s failed (exit %d); run 'agentainer-mcp sync' in a shell to retry" % (
+                " ".join(argv[:4]), r.returncode))
         return r.returncode == 0
 
     def claude_exists(self, name):

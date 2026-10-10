@@ -19,6 +19,19 @@ class EnvFileTests(unittest.TestCase):
 
 
 class ParserTests(unittest.TestCase):
+    def test_buildkit_skips_frontend_tags_and_prereleases(self):
+        releases = [
+            {"tag_name": "dockerfile/1.28.0", "prerelease": False},
+            {"tag_name": "v0.35.0-rc1", "prerelease": True},
+            {"tag_name": "v0.34.0", "prerelease": False},
+            {"tag_name": "v0.33.1", "prerelease": False},
+        ]
+        self.assertEqual(bv.buildkit_tag(releases), "v0.34.0")
+
+    def test_buildkit_without_a_release_fails(self):
+        with self.assertRaises(bv.LookupFailed):
+            bv.buildkit_tag([{"tag_name": "dockerfile/1.28.0", "prerelease": False}])
+
     def test_go_picks_first_stable_linux_archives(self):
         data = [
             {"version": "go1.28rc1", "stable": False, "files": []},
@@ -166,8 +179,33 @@ class WriteTests(unittest.TestCase):
         self.assertEqual(self.read(), "A=1\n")
 
     def test_success_updates_file(self):
-        self.assertEqual(bv.main(["--file", self.path], resolvers=[lambda: {"A": "2", "B": "3"}]), 0)
-        self.assertEqual(self.read(), "A=2\nB=3\n")
+        self.assertEqual(bv.main(["--file", self.path], resolvers=[lambda: {"GO_VERSION": "1.27.3"}]), 0)
+        self.assertEqual(self.read(), "A=1\nGO_VERSION=1.27.3\n")
+
+    def test_value_that_could_run_code_is_refused(self):
+        # versions.env is sourced by the build as root, so upstream text must not reach it raw.
+        bad = [
+            {"AGY_URL_AMD64": "https://storage.googleapis.com/antigravity-public/$(touch /tmp/x)/a.tgz"},
+            {"GO_VERSION": "1.27.3;id"},
+            {"CURLIE_VERSION": "1.8.3`id`"},
+            {"BASE_IMAGE": "docker.io/library/ubuntu:26.04@sha256:" + "a" * 63},
+            {"APT_SNAPSHOT": "20261008"},
+            {"GO_SHA256_AMD64": "A" * 64},
+            {"AGY_SHA512_AMD64": "a" * 127},
+            {"CLAUDE_CODE_INTEGRITY": "sha512-abc def"},
+            {"NEW_THING": "1"},
+        ]
+        for update in bad:
+            with self.subTest(update=update):
+                self.assertEqual(bv.main(["--file", self.path], resolvers=[lambda u=update: u]), 1)
+                self.assertEqual(self.read(), "A=1\n")
+
+    def test_current_pins_pass_validation(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "..", "..", "versions.env")) as f:
+            for key, value in bv.values(bv.parse_env(f.read())).items():
+                with self.subTest(key=key):
+                    self.assertIsNone(bv.invalid(key, value))
 
 
 if __name__ == "__main__":

@@ -29,6 +29,12 @@ esac
 assert_eq "webhook URLs do not assume cluster.local" "" "$(printf '%s\n' "$out" | grep 'cluster\.local' || true)"
 assert_eq "agentainer image is set through kustomize images" "ghcr.io/chadmayfield/agentainer" \
 	"$("$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" '.images[0].name' <deploy/kubernetes/agentainer/kustomization.yaml)"
+assert_eq "RBAC is limited to the agentainer-0 pod" "agentainer-0 agentainer-0" \
+	"$(q 'select(.kind=="Role") | .rules[].resourceNames[]' | grep -v '^---' | paste -sd ' ' -)"
+wh='select(.kind=="NetworkPolicy" and .metadata.name=="agentainer-auth-ingress")'
+assert_eq "webhook ingress policy selects the webhook" "agentainer-auth" "$(q "$wh.spec.podSelector.matchLabels.app")"
+assert_eq "webhook ingress admits only ContainerSSH" "containerssh" "$(q "$wh.spec.ingress[0].from[0].podSelector.matchLabels.app")"
+assert_eq "webhook ingress port" "8080" "$(q "$wh.spec.ingress[0].ports[0].port")"
 . ./versions.env
 assert_contains "containerssh digest matches versions.env" "$CONTAINERSSH_IMAGE" "$out"
 assert_contains "webhook python digest matches versions.env" "$WEBHOOK_PYTHON_IMAGE" "$out"

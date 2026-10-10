@@ -26,6 +26,29 @@ class LookupFailed(Exception):
 
 # ---- versions.env handling -------------------------------------------------
 
+# The build sources versions.env as root, so every value written must match a strict
+# pattern for its key. Anything else, including an unknown key, is refused.
+IMAGE_REF = r"[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}"
+VALUE_PATTERNS = [
+    (r"(BASE_IMAGE|[A-Z0-9_]+_IMAGE)", IMAGE_REF),
+    (r"APT_SNAPSHOT", r"[0-9]{8}T[0-9]{6}Z"),
+    (r"[A-Z0-9_]+_VERSION", r"v?[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.-]+)?"),
+    (r"[A-Z0-9_]+_SHA256(_[A-Z0-9]+)?", r"[0-9a-f]{64}"),
+    (r"[A-Z0-9_]+_SHA512(_[A-Z0-9]+)?", r"[0-9a-f]{128}"),
+    (r"[A-Z0-9_]+_INTEGRITY(_[A-Z0-9]+)?", r"sha512-[A-Za-z0-9+/]+={0,2}"),
+    (r"AGY_URL_[A-Z0-9]+", r"https://storage\.googleapis\.com/antigravity-public/[A-Za-z0-9._/-]+"),
+]
+
+
+def invalid(key, value):
+    """None when value is safe to write for key, otherwise the reason."""
+    for key_re, value_re in VALUE_PATTERNS:
+        if re.fullmatch(key_re, key):
+            if re.fullmatch(value_re, value):
+                return None
+            return "%s=%r does not match %s" % (key, value, value_re)
+    return "%s is not a known pin" % key
+
 def parse_env(text):
     """Return a list of (key or None, raw line)."""
     out = []
@@ -316,8 +339,23 @@ def r_k8s_images():
             for key, repo, tag, _ in K8S_IMAGES}
 
 
+def buildkit_tag(releases):
+    """Newest stable BuildKit release. The repo also tags Dockerfile frontend releases."""
+    for r in releases:
+        if not r.get("prerelease") and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", r.get("tag_name", "")):
+            return r["tag_name"]
+    raise LookupFailed("moby/buildkit: no stable release found")
+
+
+def r_buildkit():
+    # The BuildKit image buildx uses to build the published image (build.yml, publish job).
+    tag = buildkit_tag(fetch_json("https://api.github.com/repos/moby/buildkit/releases?per_page=20"))
+    return {"BUILDKIT_IMAGE": hub_ref("moby/buildkit", tag,
+                                      fetch_json("https://hub.docker.com/v2/repositories/moby/buildkit/tags/%s" % tag))}
+
+
 RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_trivy, r_curlie, r_golangci,
-             r_tea, r_claude, r_codex, r_agy, r_opencode, r_k8s_images]
+             r_tea, r_claude, r_codex, r_agy, r_opencode, r_k8s_images, r_buildkit]
 
 
 def main(argv=None, resolvers=None):
@@ -344,6 +382,11 @@ def main(argv=None, resolvers=None):
     except (KeyError, IndexError, TypeError, ValueError) as e:
         # Upstream returned something with an unexpected shape.
         print("bump_versions: unexpected upstream data in %s: %r" % (getattr(r, "__name__", r), e), file=sys.stderr)
+        return 1
+    bad = [why for why in (invalid(k, v) for k, v in sorted(updates.items())) if why]
+    if bad:
+        for why in bad:
+            print("bump_versions: refusing to write %s" % why, file=sys.stderr)
         return 1
     old = values(lines)
     for k in sorted(updates):

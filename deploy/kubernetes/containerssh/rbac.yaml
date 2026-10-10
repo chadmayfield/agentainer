@@ -14,11 +14,15 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata: {name: containerssh, namespace: agentainer}
 rules:
+  # Only the one agentainer pod. resourceNames works with create on the pods/exec
+  # subresource (Kubernetes RBAC docs, "Referring to resources").
   - apiGroups: [""]
     resources: [pods]
+    resourceNames: [agentainer-0]
     verbs: [get]
   - apiGroups: [""]
     resources: [pods/exec]
+    resourceNames: [agentainer-0]
     verbs: [create, get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

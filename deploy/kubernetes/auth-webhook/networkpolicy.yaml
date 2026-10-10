@@ -1,0 +1,14 @@
+# Only the ContainerSSH pods may call the webhook. Without a CNI that enforces
+# NetworkPolicy, this object has no effect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agentainer-auth-ingress
+  namespace: containerssh
+spec:
+  podSelector: {matchLabels: {app: agentainer-auth}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: containerssh}}
+      ports: [{protocol: TCP, port: 8080}]

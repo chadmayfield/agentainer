@@ -34,8 +34,9 @@ tar -C /usr/local -xzf go.tgz
 # Rust through rustup-init (https://static.rust-lang.org/rustup/archive/)
 sh $F "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${TRIPLE}-unknown-linux-gnu/rustup-init" sha256 "$(sha RUSTUP)" rustup-init
 chmod +x rustup-init
-# rustup checks each component against the hashes in this versioned manifest; check the
-# manifest itself against versions.env first.
+# Checks that the manifest Rust publishes for this version matches versions.env.
+# rustup-init downloads its own copy and checks each component against it; this check
+# does not bind rustup to the file downloaded here.
 sh $F "https://static.rust-lang.org/dist/channel-rust-${RUST_VERSION}.toml" sha256 "${RUST_MANIFEST_SHA256}" rust-manifest.toml
 RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo ./rustup-init -y --no-modify-path \
 	--profile minimal --default-toolchain "${RUST_VERSION}" --component clippy,rustfmt
