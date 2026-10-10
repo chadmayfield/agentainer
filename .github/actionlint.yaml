@@ -1,0 +1,6 @@
+# actionlint 1.7.12 predates the Ubuntu 26.04 hosted runners. Both labels are listed in
+# github.com/actions/runner-images README.md; drop this file once actionlint knows them.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm

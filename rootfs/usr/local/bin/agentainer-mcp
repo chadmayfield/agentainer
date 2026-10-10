@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+"""agentainer-mcp sync|list: apply ~/.agentainer/mcp.json to every agent (spec section 8).
+
+Only servers this tool added (recorded in ~/.agentainer/mcp-managed.json) are ever
+changed or removed. A value of exactly ${NAME} (or "Bearer ${NAME}" for headers) is a
+reference and is never replaced with the variable's value.
+
+How each agent is updated (checked against agent versions pinned in versions.env):
+  claude    claude mcp add-json/remove --scope user
+  agy       agy mcp add/remove (writes ~/.gemini/config/mcp_config.json)
+  codex     one marked block of [mcp_servers.<name>] tables at the end of
+            ~/.codex/config.toml; nothing outside the markers is touched
+  opencode  agentainer-owned mcp.servers.<name> entries in ~/.config/opencode/opencode.json
+            (OpenCode v2 has no "mcp remove" command)
+Exit status: 0 when every agent was updated, 1 otherwise (the entrypoint retries next start).
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+try:
+    import tomllib  # Python 3.11+; the image has 3.14
+except ImportError:  # host-side unit tests on older Python
+    tomllib = None
+
+REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+BEARER = re.compile(r"^Bearer \$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+AGENTS = ("claude", "codex", "opencode", "agy")
+MARK_BEGIN = "# >>> agentainer-mcp: managed servers; edit ~/.agentainer/mcp.json instead >>>"
+MARK_END = "# <<< agentainer-mcp <<<"
+
+
+class Invalid(Exception):
+    pass
+
+
+def _check_str_map(name, field, value):
+    if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+        raise Invalid("server %r: %s must map names to strings" % (name, field))
+
+
+def load_desired(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except ValueError as e:
+        raise Invalid("%s is not valid JSON: %s" % (path, e))
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    if not isinstance(servers, dict):
+        raise Invalid('%s must contain an object "mcpServers"' % path)
+    for name, s in servers.items():
+        if not re.match(r"^[A-Za-z0-9_-]+$", name):
+            raise Invalid("server name %r may only use letters, digits, - and _" % name)
+        if not isinstance(s, dict) or ("command" in s) == ("url" in s):
+            raise Invalid("server %r needs exactly one of command or url" % name)
+        if "command" in s:
+            if not isinstance(s["command"], str):
+                raise Invalid("server %r: command must be a string" % name)
+            args = s.get("args", [])
+            if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+                raise Invalid("server %r: args must be a list of strings" % name)
+            _check_str_map(name, "env", s.get("env", {}))
+        else:
+            if not isinstance(s["url"], str):
+                raise Invalid("server %r: url must be a string" % name)
+            _check_str_map(name, "headers", s.get("headers", {}))
+    return servers
+
+
+def ref_name(value):
+    m = REF.match(value)
+    return m.group(1) if m else None
+
+
+def check_partial(warn, agent, name, field, value):
+    if "${" in value and not REF.match(value) and not BEARER.match(value):
+        warn("%s: %s on %s: only exact ${NAME} or \"Bearer ${NAME}\" values are references; "
+             "this one is written as literal text" % (agent, field, name))
+
+
+def write_atomic(path, text):
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    # A unique temp name: containers sharing one home volume may write at the same time.
+    fd, tmp = tempfile.mkstemp(dir=d, prefix="." + os.path.basename(path) + ".")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        try:
+            mode = os.stat(path).st_mode & 0o7777
+        except FileNotFoundError:
+            umask = os.umask(0)
+            os.umask(umask)
+            mode = 0o666 & ~umask
+        os.chmod(tmp, mode)  # mkstemp creates 0600; keep the mode open() would give
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
+# ---- claude (CLI) -------------------------------------------------------------
+
+def claude_add(name, s):
+    if "command" in s:
+        cfg = {"type": "stdio", "command": s["command"], "args": s.get("args", []), "env": s.get("env", {})}
+    else:
+        cfg = {"type": "http", "url": s["url"], "headers": s.get("headers", {})}
+    return ["claude", "mcp", "add-json", name, json.dumps(cfg), "--scope", "user"]
+
+
+def claude_remove(name):
+    return ["claude", "mcp", "remove", name, "--scope", "user"]
+
+
+# ---- agy (CLI) ----------------------------------------------------------------
+
+def agy_add(name, s, warn):
+    """agy mcp add: flags must come before the name (agy mcp add --help)."""
+    cmd = ["agy", "mcp", "add"]
+    if "command" in s:
+        for k, v in s.get("env", {}).items():
+            if ref_name(v) is None:
+                check_partial(warn, "agy", name, k, v)
+                cmd += ["--env", "%s=%s" % (k, v)]
+            else:
+                warn("agy: %s on %s is a ${VAR} reference; agy has no documented syntax for it, so it "
+                     "is left out and the server relies on the inherited environment" % (k, name))
+        return cmd + [name, "--", s["command"]] + s.get("args", [])
+    for k, v in s.get("headers", {}).items():
+        if "${" in v:
+            warn("agy: header %s on %s uses ${VAR}; not written, add it by hand" % (k, name))
+        else:
+            cmd += ["--header", "%s: %s" % (k, v)]
+    return cmd + [name, s["url"]]
+
+
+def agy_remove(name):
+    return ["agy", "mcp", "remove", name]
+
+
+def agy_exists(home, name):
+    path = os.path.join(home, ".gemini", "config", "mcp_config.json")
+    try:
+        with open(path) as f:
+            text = f.read()
+        if not text.strip():
+            return False  # agy's sign-in leaves an empty file; agy mcp add accepts it
+        return name in (json.loads(text).get("mcpServers") or {})
+    except FileNotFoundError:
+        return False
+    except (ValueError, AttributeError):
+        return True  # unreadable: treat as taken, the safe answer
+
+
+# ---- codex (config.toml block) --------------------------------------------------
+# codex mcp add cannot set env_vars or headers. Keys from
+# https://learn.chatgpt.com/docs/config-file/config-reference. Codex passes a stdio
+# server only its defaults, env_vars and env (codex-rs/rmcp-client/src/utils.rs).
+
+def toml_str(s):
+    # JSON string syntax is TOML basic-string syntax once non-ASCII stays literal
+    # (TOML forbids surrogate escapes) and DEL is escaped (TOML forbids it raw).
+    return json.dumps(s, ensure_ascii=False).replace("\x7f", "\\u007F")
+
+
+def toml_val(v):
+    if isinstance(v, list):
+        return "[" + ", ".join(toml_str(x) for x in v) + "]"
+    if isinstance(v, dict):
+        return "{ " + ", ".join("%s = %s" % (toml_str(k), toml_str(x)) for k, x in v.items()) + " }"
+    return toml_str(v)
+
+
+def codex_table(name, s, warn):
+    lines = ["[mcp_servers.%s]" % name]
+    if "command" in s:
+        lines.append("command = %s" % toml_str(s["command"]))
+        if s.get("args"):
+            lines.append("args = %s" % toml_val(s["args"]))
+        static, passthru = {}, []
+        for k, v in s.get("env", {}).items():
+            n = ref_name(v)
+            if n is None:
+                check_partial(warn, "codex", name, k, v)
+                static[k] = v
+            elif n == k:
+                passthru.append(k)
+            else:
+                warn("codex: %s=${%s} on %s: Codex passes variables only under their own name; "
+                     "rename one so they match" % (k, n, name))
+        if static:
+            lines.append("env = %s" % toml_val(static))
+        if passthru:
+            lines.append("env_vars = %s" % toml_val(passthru))
+    else:
+        lines.append("url = %s" % toml_str(s["url"]))
+        static, from_env = {}, {}
+        for k, v in s.get("headers", {}).items():
+            m = BEARER.match(v)
+            if k.lower() == "authorization" and m:
+                lines.append("bearer_token_env_var = %s" % toml_str(m.group(1)))
+            elif ref_name(v):
+                from_env[k] = ref_name(v)
+            else:
+                check_partial(warn, "codex", name, k, v)
+                static[k] = v
+        if static:
+            lines.append("http_headers = %s" % toml_val(static))
+        if from_env:
+            lines.append("env_http_headers = %s" % toml_val(from_env))
+    return "\n".join(lines) + "\n"
+
+
+def codex_outside_block(text):
+    """The file without agentainer's marked block."""
+    b = text.find(MARK_BEGIN)
+    e = text.find(MARK_END, b + 1) if b >= 0 else -1
+    if b < 0 or e < 0:
+        return text
+    return text[:b].rstrip("\n") + "\n" + text[e + len(MARK_END):].lstrip("\n")
+
+
+def codex_user_servers(text):
+    """Server names the user defined, in any TOML spelling."""
+    if tomllib is not None:
+        return set((tomllib.loads(text).get("mcp_servers") or {}).keys())
+    names, section = set(), None
+    for line in text.splitlines():
+        s = line.strip()
+        header = re.match(r"^\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$", s)
+        if header:
+            section = header.group(1).replace('"', "")
+            m = re.match(r"^mcp_servers\.([A-Za-z0-9_-]+)", section)
+            if m:
+                names.add(m.group(1))
+            continue
+        dotted = re.match(r'^mcp_servers\."?([A-Za-z0-9_-]+)"?\.', s)
+        if dotted and section is None:
+            names.add(dotted.group(1))
+        inline = re.match(r'^"?([A-Za-z0-9_-]+)"?\s*[=.]', s)
+        if inline and section == "mcp_servers":
+            names.add(inline.group(1))
+    return names
+
+
+def sync_codex(home, desired, managed, warn):
+    path = os.path.join(home, ".codex", "config.toml")
+    try:
+        with open(path) as f:
+            text = f.read()
+    except FileNotFoundError:
+        text = ""
+    outside = codex_outside_block(text)
+    taken = codex_user_servers(outside)
+    result, tables = [], []
+    for name, s in desired.items():
+        if name in taken:
+            warn("codex already has a server named %s that agentainer did not add; leaving it" % name)
+            continue
+        tables.append(codex_table(name, s, warn))
+        result.append(name)
+    new = outside.rstrip("\n")
+    if tables:
+        new += ("\n\n" if new else "") + MARK_BEGIN + "\n" + "\n".join(tables) + MARK_END
+    new += "\n" if new else ""
+    if tomllib is not None:
+        tomllib.loads(new)  # never write a file Codex cannot load
+    write_atomic(path, new)
+    return result
+
+
+# ---- opencode (opencode.json entries) ---------------------------------------------
+
+def oc_value(warn, name, field, v):
+    n = ref_name(v)
+    if n:
+        return "{env:%s}" % n
+    check_partial(warn, "opencode", name, field, v)
+    return v
+
+
+def opencode_entry(name, s, warn):
+    """Same shape "opencode mcp add" writes in OpenCode v2."""
+    if "command" in s:
+        e = {"type": "local", "command": [s["command"]] + s.get("args", [])}
+        if s.get("env"):
+            e["environment"] = {k: oc_value(warn, name, k, v) for k, v in s["env"].items()}
+        return e
+    e = {"type": "remote", "url": s["url"]}
+    if s.get("headers"):
+        hdr = {}
+        for k, v in s["headers"].items():
+            m = BEARER.match(v)
+            hdr[k] = "Bearer {env:%s}" % m.group(1) if m else oc_value(warn, name, k, v)
+        e["headers"] = hdr
+    return e
+
+
+def sync_opencode(home, desired, managed, warn):
+    base = os.path.join(home, ".config", "opencode")
+    path = os.path.join(base, "opencode.json")
+    if os.path.exists(os.path.join(base, "opencode.jsonc")):
+        raise RuntimeError("opencode.jsonc is in use; agentainer does not edit it")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        data = {}
+    if not isinstance(data, dict) or not isinstance(data.setdefault("mcp", {}), dict) \
+            or not isinstance(data["mcp"].setdefault("servers", {}), dict):
+        raise RuntimeError("%s does not have the expected mcp.servers object" % path)
+    servers = data["mcp"]["servers"]
+    for name in managed:
+        if name not in desired:
+            servers.pop(name, None)
+    result = []
+    for name, s in desired.items():
+        if name in servers and name not in managed:
+            warn("opencode already has a server named %s that agentainer did not add; leaving it" % name)
+            continue
+        servers[name] = opencode_entry(name, s, warn)
+        result.append(name)
+    write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    return result
+
+
+# ---- CLI-driven agents --------------------------------------------------------------
+
+class Runner:
+    def __init__(self, env, warn):
+        self.env = env
+        self.warn = warn
+        self.failed = False
+
+    def available(self, binary):
+        return shutil.which(binary, path=self.env.get("PATH")) is not None
+
+    def run(self, argv, quiet=False):
+        # The agent's own error text is not logged: a CLI may echo its arguments, and
+        # literal values from mcp.json would then reach container or pod logs.
+        r = subprocess.run(argv, env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if r.returncode != 0 and not quiet:
+            self.failed = True
+            self.warn("%s failed (exit %d); run 'agentainer-mcp sync' in a shell to retry" % (
+                " ".join(argv[:4]), r.returncode))
+        return r.returncode == 0
+
+    def claude_exists(self, name):
+        return subprocess.run(["claude", "mcp", "get", name], env=self.env,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def sync_cli(agent, desired, managed, runner):
+    home = runner.env["HOME"]
+    if agent == "claude":
+        add = claude_add
+        remove = claude_remove
+        exists = runner.claude_exists
+    else:
+        def add(n, s):
+            return agy_add(n, s, runner.warn)
+        remove = agy_remove
+
+        def exists(n):
+            return agy_exists(home, n)
+    result = []
+    for name in managed:
+        # Removing a name before re-adding it may find it already gone; that is fine.
+        if not runner.run(remove(name), quiet=True) and name not in desired:
+            result.append(name)  # still there: keep tracking it so a later run removes it
+    for name, s in desired.items():
+        if name not in managed and exists(name):
+            runner.warn("%s already has a server named %s that agentainer did not add; leaving it" % (agent, name))
+            continue
+        if runner.run(add(name, s)):
+            result.append(name)
+    return result
+
+
+def main(argv=None, env=None):
+    argv = sys.argv[1:] if argv is None else argv
+    env = dict(os.environ) if env is None else env
+    home = env["HOME"]
+    box = os.path.join(home, ".agentainer")
+    manifest_path = os.path.join(box, "mcp-managed.json")
+
+    def warn(msg):
+        print("agentainer-mcp: warning: %s" % msg, file=sys.stderr)
+
+    cmd = (argv or ["sync"])[0]
+    if cmd not in ("sync", "list"):
+        print("usage: agentainer-mcp sync|list", file=sys.stderr)
+        return 2
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        if not isinstance(manifest, dict):
+            manifest = {}
+    except (FileNotFoundError, ValueError):
+        manifest = {}
+
+    if cmd == "list":
+        for agent in AGENTS:
+            print("%s: %s" % (agent, ", ".join(manifest.get(agent, [])) or "(none)"))
+        return 0
+
+    try:
+        desired = load_desired(os.path.join(box, "mcp.json"))
+    except Invalid as e:
+        print("agentainer-mcp: %s; nothing changed" % e, file=sys.stderr)
+        return 1
+
+    runner = Runner(env, warn)
+    steps = [("claude", lambda m: sync_cli("claude", desired, m, runner)),
+             ("agy", lambda m: sync_cli("agy", desired, m, runner)),
+             ("codex", lambda m: sync_codex(home, desired, m, warn)),
+             ("opencode", lambda m: sync_opencode(home, desired, m, warn))]
+    for agent, step in steps:
+        if not runner.available(agent):
+            continue
+        try:
+            manifest[agent] = step(manifest.get(agent, []))
+        except Exception as e:  # noqa: BLE001 - one agent's failure must not stop the others
+            runner.failed = True
+            warn("%s: not updated: %s" % (agent, e))
+        # Saved after every agent, so a crash later never loses track of what was added.
+        write_atomic(manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    return 1 if runner.failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

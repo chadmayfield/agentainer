@@ -1,0 +1,33 @@
+# Minimal permissions for ContainerSSH v0.6.0 in persistent mode without createMissingPods,
+# from its source (internal/kubernetes, tag v0.6.0):
+#   kubernetesClientImpl.go:72  Pods().Get     (findPod)
+#   kubernetesPodImpl.go:198    SubResource("exec")
+#   kubernetesPodImpl.go:271    remove() returns early in persistent mode, so no delete
+# pods/exec needs "create" for SPDY, and before Kubernetes 1.35 WebSocket exec was
+# authorized with "get" (CHANGELOG-1.35: both now require "create"); both verbs cover
+# every version.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: containerssh, namespace: containerssh}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: containerssh, namespace: agentainer}
+rules:
+  # Only the one agentainer pod. resourceNames works with create on the pods/exec
+  # subresource (Kubernetes RBAC docs, "Referring to resources").
+  - apiGroups: [""]
+    resources: [pods]
+    resourceNames: [agentainer-0]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    resourceNames: [agentainer-0]
+    verbs: [create, get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: containerssh, namespace: agentainer}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: containerssh}
+subjects:
+  - {kind: ServiceAccount, name: containerssh, namespace: containerssh}
