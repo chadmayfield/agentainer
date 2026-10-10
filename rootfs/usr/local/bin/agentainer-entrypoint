@@ -1,11 +1,11 @@
 #!/bin/sh
-# AgentBox startup. Runs each step in /usr/local/lib/agentbox/entrypoint.d in order,
+# Agentainer startup. Runs each step in /usr/local/lib/agentainer/entrypoint.d in order,
 # then runs the container command. Steps below 50 are required; the rest only warn.
 set -u
-STEPS=/usr/local/lib/agentbox/entrypoint.d
+STEPS=/usr/local/lib/agentainer/entrypoint.d
 
-log() { printf 'agentbox: %s\n' "$*" >&2; }
-warn() { printf 'agentbox: warning: %s\n' "$*" >&2; }
+log() { printf 'agentainer: %s\n' "$*" >&2; }
+warn() { printf 'agentainer: warning: %s\n' "$*" >&2; }
 
 # seed_file SRC DEST: copy SRC to DEST only if DEST does not exist (spec 6.2 step 2).
 seed_file() {
@@ -14,9 +14,9 @@ seed_file() {
 }
 
 # A one-shot command (anything but the default "sleep infinity") keeps informational
-# startup lines out of its output unless AGENTBOX_QUIET is set explicitly.
-if [ -z "${AGENTBOX_QUIET:-}" ]; then
-	if [ "$#" -gt 0 ] && [ "$*" != "sleep infinity" ]; then AGENTBOX_QUIET=1; else AGENTBOX_QUIET=0; fi
+# startup lines out of its output unless AGENTAINER_QUIET is set explicitly.
+if [ -z "${AGENTAINER_QUIET:-}" ]; then
+	if [ "$#" -gt 0 ] && [ "$*" != "sleep infinity" ]; then AGENTAINER_QUIET=1; else AGENTAINER_QUIET=0; fi
 fi
 
 # Each step runs in a subshell with set -e. This relies on /bin/sh being dash, which

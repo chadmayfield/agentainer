@@ -1,7 +1,7 @@
 #!/bin/sh
 # Shared helpers for container tests. Source this file.
 RUNTIME=${RUNTIME:-podman}
-IMAGE=${IMAGE:-localhost/agentbox:dev}
+IMAGE=${IMAGE:-localhost/agentainer:dev}
 PLATFORM=${PLATFORM:-}
 _failures=0
 _count=0

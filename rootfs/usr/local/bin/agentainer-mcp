@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""agentbox-mcp sync|list: apply ~/.agentbox/mcp.json to every agent (spec section 8).
+"""agentainer-mcp sync|list: apply ~/.agentainer/mcp.json to every agent (spec section 8).
 
-Only servers this tool added (recorded in ~/.agentbox/mcp-managed.json) are ever
+Only servers this tool added (recorded in ~/.agentainer/mcp-managed.json) are ever
 changed or removed. A value of exactly ${NAME} (or "Bearer ${NAME}" for headers) is a
 reference and is never replaced with the variable's value.
 
@@ -10,7 +10,7 @@ How each agent is updated (checked against agent versions pinned in versions.env
   agy       agy mcp add/remove (writes ~/.gemini/config/mcp_config.json)
   codex     one marked block of [mcp_servers.<name>] tables at the end of
             ~/.codex/config.toml; nothing outside the markers is touched
-  opencode  agentbox-owned mcp.servers.<name> entries in ~/.config/opencode/opencode.json
+  opencode  agentainer-owned mcp.servers.<name> entries in ~/.config/opencode/opencode.json
             (OpenCode v2 has no "mcp remove" command)
 Exit status: 0 when every agent was updated, 1 otherwise (the entrypoint retries next start).
 """
@@ -29,8 +29,8 @@ except ImportError:  # host-side unit tests on older Python
 REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 BEARER = re.compile(r"^Bearer \$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 AGENTS = ("claude", "codex", "opencode", "agy")
-MARK_BEGIN = "# >>> agentbox-mcp: managed servers; edit ~/.agentbox/mcp.json instead >>>"
-MARK_END = "# <<< agentbox-mcp <<<"
+MARK_BEGIN = "# >>> agentainer-mcp: managed servers; edit ~/.agentainer/mcp.json instead >>>"
+MARK_END = "# <<< agentainer-mcp <<<"
 
 
 class Invalid(Exception):
@@ -85,7 +85,7 @@ def check_partial(warn, agent, name, field, value):
 
 def write_atomic(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".agentbox-tmp"
+    tmp = path + ".agentainer-tmp"
     with open(tmp, "w") as f:
         f.write(text)
     os.replace(tmp, path)
@@ -202,7 +202,7 @@ def codex_table(name, s, warn):
 
 
 def codex_outside_block(text):
-    """The file without agentbox's marked block."""
+    """The file without agentainer's marked block."""
     b = text.find(MARK_BEGIN)
     e = text.find(MARK_END, b + 1) if b >= 0 else -1
     if b < 0 or e < 0:
@@ -245,7 +245,7 @@ def sync_codex(home, desired, managed, warn):
     result, tables = [], []
     for name, s in desired.items():
         if name in taken:
-            warn("codex already has a server named %s that agentbox did not add; leaving it" % name)
+            warn("codex already has a server named %s that agentainer did not add; leaving it" % name)
             continue
         tables.append(codex_table(name, s, warn))
         result.append(name)
@@ -290,7 +290,7 @@ def sync_opencode(home, desired, managed, warn):
     base = os.path.join(home, ".config", "opencode")
     path = os.path.join(base, "opencode.json")
     if os.path.exists(os.path.join(base, "opencode.jsonc")):
-        raise RuntimeError("opencode.jsonc is in use; agentbox does not edit it")
+        raise RuntimeError("opencode.jsonc is in use; agentainer does not edit it")
     try:
         with open(path) as f:
             data = json.load(f)
@@ -306,7 +306,7 @@ def sync_opencode(home, desired, managed, warn):
     result = []
     for name, s in desired.items():
         if name in servers and name not in managed:
-            warn("opencode already has a server named %s that agentbox did not add; leaving it" % name)
+            warn("opencode already has a server named %s that agentainer did not add; leaving it" % name)
             continue
         servers[name] = opencode_entry(name, s, warn)
         result.append(name)
@@ -357,7 +357,7 @@ def sync_cli(agent, desired, managed, runner):
             result.append(name)  # still there: keep tracking it so a later run removes it
     for name, s in desired.items():
         if name not in managed and exists(name):
-            runner.warn("%s already has a server named %s that agentbox did not add; leaving it" % (agent, name))
+            runner.warn("%s already has a server named %s that agentainer did not add; leaving it" % (agent, name))
             continue
         if runner.run(add(name, s)):
             result.append(name)
@@ -368,15 +368,15 @@ def main(argv=None, env=None):
     argv = sys.argv[1:] if argv is None else argv
     env = dict(os.environ) if env is None else env
     home = env["HOME"]
-    box = os.path.join(home, ".agentbox")
+    box = os.path.join(home, ".agentainer")
     manifest_path = os.path.join(box, "mcp-managed.json")
 
     def warn(msg):
-        print("agentbox-mcp: warning: %s" % msg, file=sys.stderr)
+        print("agentainer-mcp: warning: %s" % msg, file=sys.stderr)
 
     cmd = (argv or ["sync"])[0]
     if cmd not in ("sync", "list"):
-        print("usage: agentbox-mcp sync|list", file=sys.stderr)
+        print("usage: agentainer-mcp sync|list", file=sys.stderr)
         return 2
     try:
         with open(manifest_path) as f:
@@ -394,7 +394,7 @@ def main(argv=None, env=None):
     try:
         desired = load_desired(os.path.join(box, "mcp.json"))
     except Invalid as e:
-        print("agentbox-mcp: %s; nothing changed" % e, file=sys.stderr)
+        print("agentainer-mcp: %s; nothing changed" % e, file=sys.stderr)
         return 1
 
     runner = Runner(env, warn)

@@ -2,8 +2,8 @@
 # Installs upstream tools pinned in versions.env. Runs as root during the build.
 set -euo pipefail
 # shellcheck source=versions.env
-. /usr/local/share/agentbox/versions.env
-F=/tmp/agentbox-build/fetch.sh
+. /usr/local/share/agentainer/versions.env
+F=/tmp/agentainer-build/fetch.sh
 case "${TARGETARCH:?}" in
 amd64)
 	A=AMD64

@@ -4,7 +4,7 @@
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/../lib.sh"
 cd "$(dirname "$0")/../.." || exit 2
-tag=localhost/agentbox:test-uid
+tag=localhost/agentainer:test-uid
 if RUNTIME="$RUNTIME" sh scripts/build.sh --uid 1001 --gid 20 --tag "$tag" >/dev/null 2>&1; then
 	pass "builds with --uid 1001 --gid 20"
 else

@@ -1,11 +1,11 @@
 #!/bin/sh
-# Builds the AgentBox image with the pins in versions.env.
+# Builds the Agentainer image with the pins in versions.env.
 # Usage: scripts/build.sh [--platform linux/amd64] [--tag name] [--uid N] [--gid N]
 set -eu
 cd "$(dirname "$0")/.."
 RUNTIME=${RUNTIME:-podman}
 platform=""
-tag="localhost/agentbox:dev"
+tag="localhost/agentainer:dev"
 uid=1000
 gid=1000
 while [ "$#" -gt 0 ]; do

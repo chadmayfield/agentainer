@@ -1,0 +1,1 @@
+@~/.agentainer/AGENTS.md

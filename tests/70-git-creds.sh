@@ -3,8 +3,8 @@
 # shellcheck disable=SC2016 # single-quoted scripts expand in the container
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-VOL="agentbox-test-home-$$"
-name="agentbox-test-$$"
+VOL="agentainer-test-home-$$"
+name="agentainer-test-$$"
 "$RUNTIME" volume create "$VOL" >/dev/null
 cleanup() {
 	"$RUNTIME" rm -f "$name" >/dev/null 2>&1
@@ -16,14 +16,14 @@ H="-v $VOL:/home/agent"
 # Review focus 2: no credentials at all.
 out=$(run_in $H -- sh -c 'claude --version && codex --version && opencode --version && agy --version && echo ALL-STARTED' 2>&1)
 assert_contains "all agents start with no credentials" "ALL-STARTED" "$out"
-assert_eq "one-shot commands print no startup log" "none" "$(run_in $H -- true 2>&1 | grep 'agentbox:' || echo none)"
+assert_eq "one-shot commands print no startup log" "none" "$(run_in $H -- true 2>&1 | grep 'agentainer:' || echo none)"
 run_bg "$name" -v "$VOL:/home/agent"
 sleep 2
 assert_contains "a long-running container logs the credential summary" "no credential variables set" "$("$RUNTIME" logs "$name" 2>&1)"
 "$RUNTIME" rm -f "$name" >/dev/null
 
-FAKE=ghp_agentboxtestnotreal
-out=$(run_in $H -e AGENTBOX_QUIET=0 -e GH_TOKEN=$FAKE -e GIT_AUTHOR_NAME="Test User" -e GIT_AUTHOR_EMAIL=test@example.com -- \
+FAKE=ghp_agentainertestnotreal
+out=$(run_in $H -e AGENTAINER_QUIET=0 -e GH_TOKEN=$FAKE -e GIT_AUTHOR_NAME="Test User" -e GIT_AUTHOR_EMAIL=test@example.com -- \
 	sh -c 'git config --global --get-regexp "credential.*helper"; git config --global user.name; git config --global user.email' 2>&1)
 assert_contains "gh is the git credential helper" "gh auth git-credential" "$out"
 assert_contains "identity name from env" "Test User" "$out"
@@ -43,7 +43,7 @@ assert_contains "GITHUB_TOKEN alone sets up git" "gh auth git-credential" \
 	"$(run_in $H -e GITHUB_TOKEN=$FAKE -- git config --global --get-regexp 'credential.*helper' 2>/dev/null)"
 
 # Hostile values never run and never print.
-out=$(run_in $H -e AGENTBOX_QUIET=0 -e 'OPENAI_API_KEY=$(touch /tmp/pwned) `id` "x"' -- sh -c 'test -e /tmp/pwned && echo PWNED; true' 2>&1)
+out=$(run_in $H -e AGENTAINER_QUIET=0 -e 'OPENAI_API_KEY=$(touch /tmp/pwned) `id` "x"' -- sh -c 'test -e /tmp/pwned && echo PWNED; true' 2>&1)
 case "$out" in
 *PWNED* | *'touch /tmp'*) fail "hostile values are not run or printed" "$out" ;;
 *) pass "hostile values are not run or printed" ;;

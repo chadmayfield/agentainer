@@ -2,8 +2,8 @@
 # Installs Claude Code, Codex, Antigravity CLI and OpenCode v2, pinned in versions.env.
 set -euo pipefail
 # shellcheck source=versions.env
-. /usr/local/share/agentbox/versions.env
-F=/tmp/agentbox-build/fetch.sh
+. /usr/local/share/agentainer/versions.env
+F=/tmp/agentainer-build/fetch.sh
 case "${TARGETARCH:?}" in
 amd64)
 	A=AMD64

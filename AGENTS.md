@@ -4,7 +4,7 @@ Instructions for AI coding agents working on this repository. Claude Code, Codex
 
 ## What this repo is
 
-AgentBox is one public container image that bundles several AI coding agents (Claude Code, Codex CLI, Antigravity CLI, OpenCode) and a shared toolset. It runs locally with Docker or Podman and in Kubernetes through ContainerSSH. If `docs/spec.md` (design) and `docs/plan.md` (build steps) exist in your checkout, read both before changing anything. They may be kept out of git, so never `git add` them unless the maintainer asks.
+Agentainer is one public container image that bundles several AI coding agents (Claude Code, Codex CLI, Antigravity CLI, OpenCode) and a shared toolset. It runs locally with Docker or Podman and in Kubernetes through ContainerSSH. If `docs/spec.md` (design) and `docs/plan.md` (build steps) exist in your checkout, read both before changing anything. They may be kept out of git, so never `git add` them unless the maintainer asks.
 
 ## Verify, never guess
 

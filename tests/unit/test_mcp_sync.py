@@ -7,9 +7,9 @@ import tempfile
 import unittest
 
 HERE = os.path.dirname(__file__)
-SRC = os.path.join(HERE, "..", "..", "rootfs", "usr", "local", "bin", "agentbox-mcp")
-loader = importlib.machinery.SourceFileLoader("agentbox_mcp", SRC)
-spec = importlib.util.spec_from_loader("agentbox_mcp", loader)
+SRC = os.path.join(HERE, "..", "..", "rootfs", "usr", "local", "bin", "agentainer-mcp")
+loader = importlib.machinery.SourceFileLoader("agentainer_mcp", SRC)
+spec = importlib.util.spec_from_loader("agentainer_mcp", loader)
 mcp = importlib.util.module_from_spec(spec)
 loader.exec_module(mcp)
 
@@ -26,7 +26,7 @@ class SyncTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.home = os.path.join(self.tmp, "home")
         self.bin = os.path.join(self.tmp, "bin")
-        os.makedirs(os.path.join(self.home, ".agentbox"))
+        os.makedirs(os.path.join(self.home, ".agentainer"))
         os.makedirs(self.bin)
         self.log = os.path.join(self.tmp, "log")
         self.existing = os.path.join(self.tmp, "existing")
@@ -41,7 +41,7 @@ class SyncTests(unittest.TestCase):
                     "LOG": self.log, "EXISTING": self.existing, "SECRET_TOKEN": "s3cr3t-value"}
 
     def write_mcp(self, servers):
-        with open(os.path.join(self.home, ".agentbox", "mcp.json"), "w") as f:
+        with open(os.path.join(self.home, ".agentainer", "mcp.json"), "w") as f:
             json.dump({"mcpServers": servers}, f)
 
     def calls(self):
@@ -70,7 +70,7 @@ class SyncTests(unittest.TestCase):
         self.assertIn("agy mcp add fs -- npx -y @example/fs", log)
         self.assertIn('[mcp_servers.fs]\ncommand = "npx"\nargs = ["-y", "@example/fs"]', self.read(".codex", "config.toml"))
         self.assertEqual(self.opencode_servers()["fs"], {"type": "local", "command": ["npx", "-y", "@example/fs"]})
-        manifest = json.loads(self.read(".agentbox", "mcp-managed.json"))
+        manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
         self.assertEqual(manifest, {"agy": ["fs"], "claude": ["fs"], "codex": ["fs"], "opencode": ["fs"]})
 
     def test_removes_only_managed(self):
@@ -113,14 +113,14 @@ class SyncTests(unittest.TestCase):
         self.assertIn('"update": "disable"', self.read(".config", "opencode", "opencode.json"))
 
     def test_malformed_json_changes_nothing(self):
-        with open(os.path.join(self.home, ".agentbox", "mcp.json"), "w") as f:
+        with open(os.path.join(self.home, ".agentainer", "mcp.json"), "w") as f:
             f.write("{not json")
         self.assertEqual(self.sync(), 1)
         self.assertEqual(self.calls(), "")
-        self.assertFalse(os.path.exists(os.path.join(self.home, ".agentbox", "mcp-managed.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".agentainer", "mcp-managed.json")))
 
     def test_list_works_with_malformed_mcp_json(self):
-        with open(os.path.join(self.home, ".agentbox", "mcp.json"), "w") as f:
+        with open(os.path.join(self.home, ".agentainer", "mcp.json"), "w") as f:
             f.write("{not json")
         self.assertEqual(mcp.main(["list"], env=self.env), 0)
 
@@ -230,7 +230,7 @@ class RobustnessTests(SyncTests):
         self.write_mcp({"k": {"command": "x"}})
         rc = self.sync()
         self.assertNotEqual(rc, 0)
-        manifest = json.loads(self.read(".agentbox", "mcp-managed.json"))
+        manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
         self.assertEqual(manifest["claude"], ["k"])
         self.assertEqual(manifest["agy"], ["k"])
         # Removing k later removes it where it was added.
@@ -246,7 +246,7 @@ class RobustnessTests(SyncTests):
             f.write('#!/bin/sh\necho "claude $*" >> "$LOG"\ncase "$2" in add-json | get) exit 1 ;; esac\nexit 0\n')
         self.write_mcp({"k": {"command": "x"}})
         self.assertNotEqual(self.sync(), 0)
-        manifest = json.loads(self.read(".agentbox", "mcp-managed.json"))
+        manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
         self.assertNotIn("k", manifest.get("claude", []))
 
     def test_partial_reference_warns(self):

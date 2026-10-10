@@ -24,6 +24,6 @@ assert_eq "everything under /opt and /usr/local is root-owned" "END" \
 assert_eq "nothing under /opt and /usr/local is world-writable" "END" \
 	"$(run_in -- sh -c 'find /opt /usr/local -xdev -perm -o+w ! -type l; echo END')"
 assert_eq "no Rust docs shipped" "END" "$(run_in -- sh -c 'find /opt/rustup/toolchains -path "*/share/doc" -prune; echo END')"
-assert_eq "no build leftovers" "rc=2" "$(run_in -- sh -c 'ls /tmp/agentbox-build 2>/dev/null; echo rc=$?')"
+assert_eq "no build leftovers" "rc=2" "$(run_in -- sh -c 'ls /tmp/agentainer-build 2>/dev/null; echo rc=$?')"
 
 finish

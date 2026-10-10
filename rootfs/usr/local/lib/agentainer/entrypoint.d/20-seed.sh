@@ -3,16 +3,16 @@
 try_seed() {
 	seed_file "$1" "$2" 2>/dev/null || warn "could not seed $2 (something else is in the way); skipping"
 }
-src=/etc/agentbox/home
+src=/etc/agentainer/home
 find "$src" -type f | while IFS= read -r f; do
 	try_seed "$f" "$HOME/${f#"$src"/}"
 done
 # A fresh volume or PVC hides the image's dotfiles, so seed the shell defaults too.
-# .profile comes from /etc/agentbox/home (PATH order fixed); the rest from /etc/skel.
+# .profile comes from /etc/agentainer/home (PATH order fixed); the rest from /etc/skel.
 for f in .bashrc .bash_logout; do
 	if [ -f "/etc/skel/$f" ]; then try_seed "/etc/skel/$f" "$HOME/$f"; fi
 done
 for name in AGENTS.md mcp.json; do
-	if [ -f "/etc/agentbox/seed/$name" ]; then try_seed "/etc/agentbox/seed/$name" "$HOME/.agentbox/$name"; fi
+	if [ -f "/etc/agentainer/seed/$name" ]; then try_seed "/etc/agentainer/seed/$name" "$HOME/.agentainer/$name"; fi
 done
-try_seed /etc/agentbox/AGENTS.md "$HOME/.agentbox/AGENTS.md"
+try_seed /etc/agentainer/AGENTS.md "$HOME/.agentainer/AGENTS.md"

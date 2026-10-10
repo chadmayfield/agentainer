@@ -57,7 +57,7 @@ def render_env(lines, updates):
 # ---- HTTP -----------------------------------------------------------------
 
 def fetch(url, accept=None):
-    headers = {"User-Agent": "agentbox-bump"}
+    headers = {"User-Agent": "agentainer-bump"}
     if accept:
         headers["Accept"] = accept
     token = os.environ.get("GITHUB_TOKEN")

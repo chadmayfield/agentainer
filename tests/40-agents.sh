@@ -30,9 +30,9 @@ assert_eq "codex update check stays off despite user config" "false" \
 print(json.load(sys.stdin)["checks"]["updates.status"]["details"]["check for update on startup"])' 2>&1)"
 assert_contains "claude update refused by DISABLE_UPDATES" "Updates are disabled by your administrator" \
 	"$(run_in --network none -- sh -c 'claude update 2>&1 || true')"
-assert_contains "versions.json lists pins" "\"CODEX_VERSION\": \"$CODEX_VERSION\"" "$(run_in -- cat /etc/agentbox/versions.json)"
-assert_contains "versions.json lists apt packages" "\"tmux\":" "$(run_in -- cat /etc/agentbox/versions.json)"
-assert_eq "source label" "https://github.com/chadmayfield/agentbox" \
+assert_contains "versions.json lists pins" "\"CODEX_VERSION\": \"$CODEX_VERSION\"" "$(run_in -- cat /etc/agentainer/versions.json)"
+assert_contains "versions.json lists apt packages" "\"tmux\":" "$(run_in -- cat /etc/agentainer/versions.json)"
+assert_eq "source label" "https://github.com/chadmayfield/agentainer" \
 	"$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Labels "org.opencontainers.image.source"}}')"
 assert_eq "version label is ours, not the base image's" "rc=0" \
 	"$(

@@ -1,5 +1,5 @@
 # ~/.profile: executed by the command interpreter for login shells.
-# Seeded once by AgentBox from Ubuntu's /etc/skel/.profile, with one change: personal
+# Seeded once by Agentainer from Ubuntu's /etc/skel/.profile, with one change: personal
 # bin directories go at the end of PATH, so they never shadow the image's tools.
 
 # if running bash

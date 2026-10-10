@@ -3,7 +3,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 RUNTIME=${RUNTIME:-podman}
-IMAGE=${IMAGE:-localhost/agentbox:dev}
+IMAGE=${IMAGE:-localhost/agentainer:dev}
 # shellcheck disable=SC2016 # the script runs in the container's bash
 "$RUNTIME" run --rm -v "$PWD:/src:ro" -w /src --entrypoint bash "$IMAGE" -c '
 set -euo pipefail
@@ -13,7 +13,7 @@ while IFS= read -r f; do
 done < <(find bin build scripts tests deploy rootfs/usr/local/bin -type f 2>/dev/null)
 shellcheck -x "${files[@]}"
 shfmt -d "${files[@]}"
-steps=rootfs/usr/local/lib/agentbox/entrypoint.d
+steps=rootfs/usr/local/lib/agentainer/entrypoint.d
 if [ -d "$steps" ]; then
 	shellcheck -x -s sh "$steps"/*.sh
 	shfmt -d "$steps"
