@@ -11,7 +11,9 @@ persist) root="$HOME/.agentainer/tools" ;;
 	root=/var/lib/agentainer/tools
 	;;
 esac
-mkdir -p "$root/bin" "$root/npm/bin"
+# npm needs <prefix>/lib even before the first global install; without it npx fails with
+# "ENOENT: lstat .../npm/lib", and so does every MCP server started with npx.
+mkdir -p "$root/bin" "$root/npm/bin" "$root/npm/lib"
 active=/var/lib/agentainer/active
 if [ -e "$active" ] && [ ! -L "$active" ]; then
 	warn "$active was a real directory; moving it to $active.$$.bak"

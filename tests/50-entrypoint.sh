@@ -26,6 +26,11 @@ assert_contains "npm -g lands in tools-active" "/var/lib/agentainer/tools/npm" "
 assert_eq "ephemeral tools gone after restart" "none" "$(run_in $H -- agentainer-entrypoint sh -c 'command -v cowsay || echo none')"
 
 # Persist mode keeps them.
+# npx and npm -g need <prefix>/lib before anything is installed (MCP servers start with npx).
+assert_eq "npm global prefix is usable on a fresh start" "rc=0" \
+	"$(run_in --network none -- agentainer-entrypoint sh -c 'npm ls -g --depth=0 >/dev/null 2>&1; echo rc=$?')"
+assert_eq "npm global prefix is usable in persist mode" "rc=0" \
+	"$(run_in --network none -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c 'npm ls -g --depth=0 >/dev/null 2>&1; echo rc=$?')"
 run_in $H -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint npm install -g --no-fund --no-audit cowsay >/dev/null 2>&1
 assert_contains "persist keeps tools" "/home/agent/.agentainer/tools" "$(run_in $H -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c 'readlink -f "$(command -v cowsay)"')"
 assert_contains "tools status shows persist" "persist" "$(run_in $H -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint agentainer-tools status)"
