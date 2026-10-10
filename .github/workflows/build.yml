@@ -89,6 +89,8 @@ jobs:
             done' | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Secret scan (blocks) and vulnerability scan (report only)
         shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           docker builder prune -af
           docker save -o image.tar "$IMAGE"
@@ -103,8 +105,32 @@ jobs:
           fi
           docker run --rm "${mounts[@]}" --entrypoint trivy "$IMAGE" \
             image --input /scan/image.tar --scanners secret --exit-code 1 "${extra[@]}"
-          docker run --rm "${mounts[@]}" --entrypoint trivy "$IMAGE" \
-            image --input /scan/image.tar --scanners vuln --exit-code 0 | tee -a "$GITHUB_STEP_SUMMARY"
+          # The full report is an artifact: the job summary is limited to 1 MiB.
+          mkdir -p report && chmod 777 report
+          docker run --rm "${mounts[@]}" -v "$PWD/report:/report" --entrypoint trivy "$IMAGE" \
+            image --input /scan/image.tar --scanners vuln --exit-code 0 --format json --output /report/vulnerabilities.json
+          python3 - report/vulnerabilities.json >>"$GITHUB_STEP_SUMMARY" <<'EOF'
+          import collections, json, os, sys
+          vulns = [v for r in json.load(open(sys.argv[1])).get("Results") or [] for v in r.get("Vulnerabilities") or []]
+          count = collections.Counter(v.get("Severity", "UNKNOWN") for v in vulns)
+          print("### Vulnerabilities (report only)\n")
+          print("| Severity | Count |\n|---|---|")
+          for s in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"):
+              print("| %s | %d |" % (s, count.get(s, 0)))
+          crit = sorted({(v["VulnerabilityID"], v.get("PkgName", ""), v.get("InstalledVersion", ""), v.get("FixedVersion", "")) for v in vulns if v.get("Severity") == "CRITICAL"})
+          if crit:
+              print("\n| Critical | Package | Installed | Fixed in |\n|---|---|---|---|")
+              for row in crit[:50]:
+                  print("| %s | %s | %s | %s |" % row)
+          print("\nFull report: the vulnerabilities-%s artifact." % os.environ["ARCH"])
+          EOF
+      - name: Upload the vulnerability report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: vulnerabilities-${{ matrix.arch }}
+          path: report/vulnerabilities.json
+          if-no-files-found: ignore
       - name: Move the image from Docker to Podman
         run: |
           docker rmi "$IMAGE"
