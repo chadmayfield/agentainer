@@ -106,7 +106,8 @@ LABEL org.opencontainers.image.version="${IMAGE_VERSION}" \
 ENV DISABLE_UPDATES=1 \
 	AGY_CLI_DISABLE_AUTO_UPDATE=true \
 	OPENCODE_DISABLE_AUTOUPDATE=1 \
-	CLAUDE_CODE_NONBLOCKING_STDOUT=1
+	CLAUDE_CODE_NONBLOCKING_STDOUT=1 \
+	CLAUDE_CODE_TMUX_TRUECOLOR=1
 
 # Named volumes copy the image's /home/agent on first use, so it carries the same
 # .profile the entrypoint seeds into an empty PVC.

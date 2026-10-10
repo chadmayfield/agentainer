@@ -226,10 +226,17 @@ def r_golangci():
         "ARM64": lambda v: "golangci-lint-%s-linux-arm64.tar.gz" % v})
 
 
+def codex_asset(triple):
+    # The complete package (bin/codex, codex-code-mode-host, rg, bwrap, codex-package.json).
+    # The interactive CLI refuses to start from the bare binary ("this CLI has no complete
+    # local package"); OpenAI's own installer uses this asset (chatgpt.com/codex/install.sh).
+    return "codex-package-%s-unknown-linux-musl.tar.gz" % triple
+
+
 def r_codex():
     return github_tool("CODEX", "openai/codex", {
-        "AMD64": lambda v: "codex-x86_64-unknown-linux-musl.tar.gz",
-        "ARM64": lambda v: "codex-aarch64-unknown-linux-musl.tar.gz"})
+        "AMD64": lambda v: codex_asset("x86_64"),
+        "ARM64": lambda v: codex_asset("aarch64")})
 
 
 def r_tea():
@@ -285,8 +292,32 @@ def r_opencode():
     return out
 
 
+K8S_IMAGES = (("CONTAINERSSH_IMAGE", "containerssh/containerssh", "v0.6",
+                "deploy/kubernetes/containerssh/deployment.yaml"),
+               ("WEBHOOK_PYTHON_IMAGE", "library/python", "3.14-slim",
+                "deploy/kubernetes/auth-webhook/deployment.yaml"))
+
+
+def hub_ref(repo, tag, data):
+    digest = data.get("digest") or ""
+    if not re.match(r"^sha256:[0-9a-f]{64}$", digest):
+        raise LookupFailed("docker hub %s:%s: malformed digest %r" % (repo, tag, digest))
+    return "docker.io/%s:%s@%s" % (repo, tag, digest)
+
+
+def rewrite_image_ref(text, ref):
+    """Replace any digest-pinned reference to the same image with ref."""
+    image = ref.split("@")[0].rsplit(":", 1)[0]
+    return re.sub(re.escape(image) + r":[^\s@]+@sha256:[0-9a-f]{64}", ref, text)
+
+
+def r_k8s_images():
+    return {key: hub_ref(repo, tag, fetch_json("https://hub.docker.com/v2/repositories/%s/tags/%s" % (repo, tag)))
+            for key, repo, tag, _ in K8S_IMAGES}
+
+
 RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_trivy, r_curlie, r_golangci,
-             r_tea, r_claude, r_codex, r_agy, r_opencode]
+             r_tea, r_claude, r_codex, r_agy, r_opencode, r_k8s_images]
 
 
 def main(argv=None, resolvers=None):
@@ -322,6 +353,15 @@ def main(argv=None, resolvers=None):
     with open(tmp, "w") as f:
         f.write(render_env(lines, updates))
     os.replace(tmp, args.file)
+    # The Kubernetes example must use the same image references as versions.env.
+    base = os.path.dirname(os.path.abspath(args.file))
+    for key, _, _, rel in K8S_IMAGES:
+        path = os.path.join(base, rel)
+        if key in updates and os.path.exists(path):
+            with open(path) as f:
+                text = f.read()
+            with open(path, "w") as f:
+                f.write(rewrite_image_ref(text, updates[key]))
     return 0
 
 

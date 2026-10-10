@@ -35,11 +35,18 @@ npm install -g --prefix /usr/local --no-fund --no-audit ./claude-code.tgz
 rm -rf /usr/local/lib/node_modules/@anthropic-ai/claude-code/node_modules/@anthropic-ai/claude-code-linux-*-musl
 claude --version >/dev/null
 
-# Codex: musl release tarball (spec 3.2)
-C="codex-${TRIPLE}-unknown-linux-musl"
-sh $F "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/${C}.tar.gz" sha256 "$(val "CODEX_SHA256_$A")" codex.tgz
-tar -xzf codex.tgz
-install -m 0755 "$C" /usr/local/bin/codex
+# Codex: the complete release package, laid out as OpenAI's installer does
+# (chatgpt.com/codex/install.sh, install_package_release). The interactive CLI needs it.
+sh $F "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-package-${TRIPLE}-unknown-linux-musl.tar.gz" sha256 "$(val "CODEX_SHA256_$A")" codex.tgz
+mkdir -p /opt/codex
+# As root, tar would keep the archive's owner; the install must be root-owned.
+tar --no-same-owner -xzf codex.tgz -C /opt/codex
+chown -R root:root /opt/codex
+test -f /opt/codex/codex-package.json
+chmod 0755 /opt/codex/bin/codex /opt/codex/bin/codex-code-mode-host /opt/codex/codex-path/rg
+if [ -f /opt/codex/codex-resources/bwrap ]; then chmod 0755 /opt/codex/codex-resources/bwrap; fi
+ln -sf bin/codex /opt/codex/codex
+ln -sf /opt/codex/bin/codex /usr/local/bin/codex
 
 # Antigravity CLI: tarball named in versions.env; the binary inside is "antigravity" (install.sh)
 sh $F "$(val "AGY_URL_$A")" sha512 "$(val "AGY_SHA512_$A")" agy.tgz

@@ -85,6 +85,19 @@ class ParserTests(unittest.TestCase):
         with self.assertRaises(bv.LookupFailed):
             bv.parse_npm_channel({"dist-tags": {"latest": "1"}, "versions": {}}, "stable")
 
+    def test_codex_uses_the_complete_package_asset(self):
+        self.assertEqual(bv.codex_asset("aarch64"), "codex-package-aarch64-unknown-linux-musl.tar.gz")
+
+    def test_hub_ref(self):
+        self.assertEqual(bv.hub_ref("library/python", "3.14-slim", {"digest": "sha256:" + "a" * 64}),
+                         "docker.io/library/python:3.14-slim@sha256:" + "a" * 64)
+
+    def test_rewrite_image_ref_in_manifest(self):
+        old = "docker.io/library/python:3.14-slim@sha256:" + "a" * 64
+        new = "docker.io/library/python:3.14-slim@sha256:" + "b" * 64
+        text = "      containers:\n        - image: %s\n          command: [x]\n" % old
+        self.assertEqual(bv.rewrite_image_ref(text, new), text.replace(old, new))
+
     def test_strip_v(self):
         self.assertEqual(bv.strip_v("v2.102.0"), "2.102.0")
         self.assertEqual(bv.strip_v("rust-v0.162.0"), "0.162.0")

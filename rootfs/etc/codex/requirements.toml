@@ -1,3 +1,11 @@
 # Admin-enforced Codex settings (https://learn.chatgpt.com/docs/enterprise/managed-configuration).
 # The image pins Codex; updates arrive with new images.
 check_for_update_on_startup = false
+
+[features]
+# "Set to false in requirements.toml to disable in-app updates"
+# (https://learn.chatgpt.com/docs/config-file/config-reference).
+in_app_updates = false
+# Otherwise the TUI copies its whole package into ~/.codex/packages (agent-writable, on the
+# home volume) and leaves app-server daemons running after it exits.
+daemon_auto_start = false
