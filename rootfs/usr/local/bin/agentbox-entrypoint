@@ -13,6 +13,12 @@ seed_file() {
 	mkdir -p "$(dirname "$2")" && cp "$1" "$2"
 }
 
+# A one-shot command (anything but the default "sleep infinity") keeps informational
+# startup lines out of its output unless AGENTBOX_QUIET is set explicitly.
+if [ -z "${AGENTBOX_QUIET:-}" ]; then
+	if [ "$#" -gt 0 ] && [ "$*" != "sleep infinity" ]; then AGENTBOX_QUIET=1; else AGENTBOX_QUIET=0; fi
+fi
+
 # Each step runs in a subshell with set -e. This relies on /bin/sh being dash, which
 # applies set -e inside sourced files, functions and pipelines here; bash does not when
 # the subshell is an if condition. Steps that must fail also use explicit "return 1".
