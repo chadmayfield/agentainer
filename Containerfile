@@ -56,9 +56,13 @@ RUN test -n "${APT_SNAPSHOT}" \
 # drop NET_RAW (Podman's default, the Kubernetes example). Without it, ping uses an
 # unprivileged ICMP socket, allowed by the net.ipv4.ping_group_range sysctl that the
 # launcher and the pod spec set.
+# The ubuntu:26.04 base image ships Canonical's Pebble service manager in
+# /usr/bin/pebble, owned by no package. Nothing here uses it, and its Go runtime
+# adds scan findings.
 RUN ln -s /usr/bin/fdfind /usr/local/bin/fd \
 	&& ln -s /usr/bin/batcat /usr/local/bin/bat \
-	&& python3 -c 'import os; os.removexattr("/usr/bin/ping", "security.capability")'
+	&& python3 -c 'import os; os.removexattr("/usr/bin/ping", "security.capability")' \
+	&& rm -rf /usr/bin/pebble /var/lib/pebble
 
 # Rename the base image's ubuntu user (UID 1000) to agent (spec 16.2). With other
 # build args, reuse a group that already has GID (for example 20, which is

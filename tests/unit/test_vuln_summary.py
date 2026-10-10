@@ -11,8 +11,10 @@ vs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vs)
 
 
-def report(vulns):
-    return {"Results": [{"Target": "usr/local/bin/x", "Vulnerabilities": vulns}, {"Target": "clean"}]}
+def report(vulns, headers=()):
+    return {"Results": [{"Target": "usr/local/bin/x", "Vulnerabilities": vulns},
+                        {"Target": "img (ubuntu 26.04)", "Class": "os-pkgs", "Vulnerabilities": list(headers)},
+                        {"Target": "clean"}]}
 
 
 def v(vid, sev, pkg="pkg", installed="1", fixed="2"):
@@ -33,8 +35,8 @@ class VulnSummaryTests(unittest.TestCase):
         b = self.write(report([v("CVE-4", "MEDIUM")]))
         out = vs.summary([("amd64", a), ("arm64", b)])
         self.assertIn("| Severity | amd64 | arm64 |", out)
-        self.assertIn("| HIGH | 2 | 0 |", out)
-        self.assertIn("| MEDIUM | 0 | 1 |", out)
+        self.assertIn("| HIGH | 2 (2 fixable) | 0 |", out)
+        self.assertIn("| MEDIUM | 0 | 1 (1 fixable) |", out)
         self.assertIn("| CRITICAL | 0 | 0 |", out)
 
     def test_lists_critical_once_with_its_architectures(self):
@@ -48,7 +50,23 @@ class VulnSummaryTests(unittest.TestCase):
     def test_report_without_results(self):
         out = vs.summary([("amd64", self.write({"SchemaVersion": 2}))])
         self.assertIn("| HIGH | 0 |", out)
+        self.assertNotIn("linux-libc-dev", out)
         self.assertNotIn("| Critical |", out)
+
+    def test_counts_only_findings_with_a_fixed_version_as_fixable(self):
+        a = self.write(report([v("CVE-1", "HIGH", fixed=""), v("CVE-2", "HIGH")]))
+        self.assertIn("| HIGH | 2 (1 fixable) |", vs.summary([("amd64", a)]))
+
+    def test_kernel_headers_are_counted_apart(self):
+        kh = [v("CVE-K%d" % i, "HIGH", "linux-libc-dev", fixed="") for i in range(3)]
+        kh.append(v("CVE-KC", "CRITICAL", "linux-libc-dev", fixed=""))
+        a = self.write(report([v("CVE-1", "HIGH")], headers=kh))
+        out = vs.summary([("amd64", a)])
+        self.assertIn("| HIGH | 1 (1 fixable) |", out)
+        self.assertIn("| CRITICAL | 0 |", out)
+        self.assertNotIn("CVE-KC", out)
+        self.assertIn("linux-libc-dev", out)
+        self.assertIn("amd64 4", out)
 
     def test_stays_small(self):
         many = [v("CVE-%d" % i, "CRITICAL") for i in range(500)]

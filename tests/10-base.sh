@@ -24,4 +24,8 @@ assert_contains "sources use archive.ubuntu.com" "archive.ubuntu.com" "$(run_in 
 assert_eq "sources do not use ports.ubuntu.com" "rc=1" "$(run_in -- sh -c 'grep -rl ports.ubuntu.com /etc/apt; echo rc=$?')"
 assert_eq "no macOS .DS_Store files in the image" "" "$(run_in -- sh -c 'find / -xdev -name .DS_Store 2>/dev/null')"
 
+# Removed to cut scan findings: the base image's unused Pebble service manager, and ImageMagick.
+assert_eq "no pebble from the base image" "none" "$(run_in -- sh -c 'ls /usr/bin/pebble /var/lib/pebble 2>/dev/null || echo none')"
+assert_eq "no ImageMagick" "none" "$(run_in -- sh -c 'command -v magick convert || dpkg -l "imagemagick*" 2>/dev/null | grep ^ii || echo none')"
+
 finish

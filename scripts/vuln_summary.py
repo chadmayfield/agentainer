@@ -13,6 +13,9 @@ import sys
 
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
 MAX_CRITICAL = 50
+# Kernel CVEs filed against the kernel header package. It holds only .h files that
+# glibc and every C compile need; a container runs on the host's kernel.
+KERNEL_HEADERS = "linux-libc-dev"
 
 
 def load(path):
@@ -23,11 +26,14 @@ def load(path):
 
 def summary(reports):
     arches = [a for a, _ in reports]
-    counts = {}
+    counts, fixable, headers = {}, {}, {}
     critical = collections.OrderedDict()
     for arch, path in reports:
-        vulns = load(path)
+        everything = load(path)
+        vulns = [v for v in everything if v.get("PkgName") != KERNEL_HEADERS]
+        headers[arch] = len(everything) - len(vulns)
         counts[arch] = collections.Counter(v.get("Severity", "UNKNOWN") for v in vulns)
+        fixable[arch] = collections.Counter(v.get("Severity", "UNKNOWN") for v in vulns if v.get("FixedVersion"))
         for v in vulns:
             if v.get("Severity") != "CRITICAL":
                 continue
@@ -39,8 +45,16 @@ def summary(reports):
     lines = ["### Vulnerabilities (trivy, report only)", "",
              "| Severity | " + " | ".join(arches) + " |",
              "|---|" + "---|" * len(arches)]
+    def cell(a, s):
+        n, f = counts[a].get(s, 0), fixable[a].get(s, 0)
+        return "%d (%d fixable)" % (n, f) if f else str(n)
     for s in SEVERITIES:
-        lines.append("| %s | %s |" % (s, " | ".join(str(counts[a].get(s, 0)) for a in arches)))
+        lines.append("| %s | %s |" % (s, " | ".join(cell(a, s) for a in arches)))
+    lines += ["", "Fixable means a fixed version exists upstream or in Ubuntu."]
+    if any(headers.values()):
+        lines += ["", "Not counted above: kernel CVEs filed against `%s`, the kernel header files "
+                  "that C compilers need. The container runs on the host's kernel. %s." % (
+                      KERNEL_HEADERS, ", ".join("%s %d" % (a, headers[a]) for a in arches))]
     if critical:
         lines += ["", "| Critical | Package | Installed | Fixed in | Architectures |", "|---|---|---|---|---|"]
         for key, where in sorted(critical.items())[:MAX_CRITICAL]:

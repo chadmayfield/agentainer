@@ -6,7 +6,7 @@
 out=$(run_in -- bash -c '
 for c in ssh tmux rsync git git-lfs git-flow git-filter-repo rg fd fzf bat eza vim nano \
   ctags patch diff jq sqlite3 pgcli make gcc python3 pipx node npm shellcheck shfmt curl wget \
-  http nc ip ping dig unzip zip zstd xz 7z convert exiftool cloc asciinema age ansible oras \
+  http nc ip ping dig unzip zip zstd xz 7z exiftool cloc asciinema age ansible oras \
   bwrap htop tree file less sudo; do
   command -v "$c" >/dev/null 2>&1 || echo "MISSING $c"
 done

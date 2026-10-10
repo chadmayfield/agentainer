@@ -22,7 +22,6 @@ git-lfs
 gnupg
 htop
 httpie
-imagemagick
 iproute2
 iputils-ping
 jq
