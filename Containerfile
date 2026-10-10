@@ -1,4 +1,7 @@
+# check=skip=InvalidDefaultArgInFrom
 # Agentainer image. Build with scripts/build.sh so BASE_IMAGE and APT_SNAPSHOT come from versions.env.
+# BASE_IMAGE has no default on purpose: the digest lives only in versions.env. The check
+# directive above (docs.docker.com/build/checks) silences BuildKit's warning about that.
 ARG BASE_IMAGE
 
 # Throwaway stage: the base image has no CA bundle and snapshot.ubuntu.com is https.
