@@ -184,6 +184,16 @@ Gemini CLI is not included. Google wrote: "On June 18, 2026, Gemini CLI and Gemi
 
 Other controls: the image runs as the non-root user `agent` (UID 1000), agent binaries are root-owned, and CI fails the build if trivy finds a secret in the image.
 
+### Vulnerability reports
+
+CI scans every build with trivy. The vulnerability scan reports and never fails the build. The secret scan fails it.
+
+- Pull requests and `develop`: the run's summary page shows counts by severity and every critical finding. The full trivy JSON is the `vulnerabilities-<arch>` artifact on that run.
+- Releases: the scan runs on the exact images pushed to GHCR. The release notes start with the same summary, and `vulnerabilities-amd64.json` and `vulnerabilities-arm64.json` are attached to the GitHub release.
+- `scripts/vuln_summary.py` turns the JSON reports into that summary (`tests/unit/test_vuln_summary.py`).
+
+Some findings sit in upstream binaries that this repo cannot rebuild. A new upstream release reaches the image through the weekly version bump.
+
 ## Versions and updates
 
 - `versions.env` pins every input: the base image digest, the apt snapshot date, each agent and tool version, and the checksum of every download. The build checks each download against it.

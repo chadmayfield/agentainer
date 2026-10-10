@@ -109,21 +109,8 @@ jobs:
           mkdir -p report && chmod 777 report
           docker run --rm "${mounts[@]}" -v "$PWD/report:/report" --entrypoint trivy "$IMAGE" \
             image --input /scan/image.tar --scanners vuln --exit-code 0 --format json --output /report/vulnerabilities.json
-          python3 - report/vulnerabilities.json >>"$GITHUB_STEP_SUMMARY" <<'EOF'
-          import collections, json, os, sys
-          vulns = [v for r in json.load(open(sys.argv[1])).get("Results") or [] for v in r.get("Vulnerabilities") or []]
-          count = collections.Counter(v.get("Severity", "UNKNOWN") for v in vulns)
-          print("### Vulnerabilities (report only)\n")
-          print("| Severity | Count |\n|---|---|")
-          for s in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"):
-              print("| %s | %d |" % (s, count.get(s, 0)))
-          crit = sorted({(v["VulnerabilityID"], v.get("PkgName", ""), v.get("InstalledVersion", ""), v.get("FixedVersion", "")) for v in vulns if v.get("Severity") == "CRITICAL"})
-          if crit:
-              print("\n| Critical | Package | Installed | Fixed in |\n|---|---|---|---|")
-              for row in crit[:50]:
-                  print("| %s | %s | %s | %s |" % row)
-          print("\nFull report: the vulnerabilities-%s artifact." % os.environ["ARCH"])
-          EOF
+          python3 scripts/vuln_summary.py "$ARCH=report/vulnerabilities.json" >>"$GITHUB_STEP_SUMMARY"
+          echo "Full report: the vulnerabilities-$ARCH artifact." >>"$GITHUB_STEP_SUMMARY"
       - name: Upload the vulnerability report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
@@ -223,6 +210,23 @@ jobs:
         with:
           name: digest-${{ matrix.arch }}
           path: digests/*
+      - name: Scan the pushed image for vulnerabilities
+        env:
+          ARCH: ${{ matrix.arch }}
+          REF: ghcr.io/chadmayfield/agentainer@${{ steps.build.outputs.digest }}
+        run: |
+          set -eu
+          docker pull "$REF"
+          docker save -o image.tar "$REF"
+          chmod 644 image.tar  # docker save writes 0600; trivy runs as UID 1000
+          mkdir -p report && chmod 777 report
+          docker run --rm -v "$PWD/image.tar:/scan/image.tar:ro" -v "$PWD/report:/report" --entrypoint trivy "$REF" \
+            image --input /scan/image.tar --scanners vuln --exit-code 0 --format json \
+            --output "/report/vulnerabilities-$ARCH.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: release-vulnerabilities-${{ matrix.arch }}
+          path: report/vulnerabilities-${{ matrix.arch }}.json
 
   release:
     needs: [version, publish]
@@ -237,6 +241,8 @@ jobs:
         with: {fetch-depth: 0}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with: {pattern: digest-*, merge-multiple: true, path: digests}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with: {pattern: release-vulnerabilities-*, merge-multiple: true, path: report}
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
@@ -261,4 +267,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           V: ${{ needs.version.outputs.version }}
           SHA: ${{ github.sha }}
-        run: gh release create "v$V" --target "$SHA" --title "v$V" --generate-notes
+        run: |
+          set -eu
+          # The summary goes above the generated notes ("--notes" is prepended, gh release create --help).
+          notes=$(python3 scripts/vuln_summary.py amd64=report/vulnerabilities-amd64.json arm64=report/vulnerabilities-arm64.json)
+          notes="$notes
+
+          Full trivy reports for each architecture are attached as vulnerabilities-<arch>.json."
+          gh release create "v$V" --target "$SHA" --title "v$V" --generate-notes --notes "$notes" \
+            report/vulnerabilities-amd64.json report/vulnerabilities-arm64.json
