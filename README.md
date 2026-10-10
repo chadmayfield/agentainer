@@ -176,7 +176,7 @@ It does not isolate:
 - The host kernel. This is a container, not a VM.
 - Everything inside the container once sudo is on.
 
-Agents keep their own approval prompts. The image turns on no skip-permissions mode. If you turn one on, note Anthropic's warning: "When executed with `--dangerously-skip-permissions`, dev containers do not prevent a malicious project from exfiltrating anything accessible inside the container, including the Claude Code credentials" ([devcontainer docs](https://code.claude.com/docs/en/devcontainer)).
+Agents keep their own approval prompts. The image turns on no skip-permissions mode. Codex's own sandbox is off (`sandbox_mode = "danger-full-access"` in the seeded `~/.codex/config.toml`): its bubblewrap sandbox cannot start in a container and fails with "bwrap: Can't mount devpts on /newroot/dev/pts: Permission denied". Codex still asks before it runs a command (`tests/60-agents-md.sh`). If you turn one on, note Anthropic's warning: "When executed with `--dangerously-skip-permissions`, dev containers do not prevent a malicious project from exfiltrating anything accessible inside the container, including the Claude Code credentials" ([devcontainer docs](https://code.claude.com/docs/en/devcontainer)).
 
 Antigravity's terms say: "Wrapping `agy` inside third-party coding agents or applications ... is not supported under consumer plans" ([Antigravity FAQ](https://antigravity.google/docs/faq.md)). Agentainer installs `agy` for you to run yourself and does not wrap it.
 

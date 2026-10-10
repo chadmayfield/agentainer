@@ -22,6 +22,11 @@ doctor=$(run_in $H --network none -- sh -c 'codex --strict-config doctor --json 
 assert_eq "Codex parses the seeded config strictly" "ok" \
 	"$(printf '%s' "$doctor" | python3 -c 'import sys,json; print(json.load(sys.stdin)["checks"]["config.load"]["status"])' 2>&1)"
 assert_contains "Codex stores auth in a file" '"auth storage mode": "File"' "$doctor"
+# Codex's bubblewrap sandbox cannot start in a container ("bwrap: Can't mount devpts on
+# /newroot/dev/pts: Permission denied" under rootless Podman), so the seed turns it off
+# and keeps the approval prompts (spec 3.2, D14).
+assert_contains "Codex filesystem sandbox is off" '"filesystem sandbox": "unrestricted"' "$doctor"
+assert_contains "Codex still asks for approval" '"approval policy": "OnRequest"' "$doctor"
 assert_contains "Codex reads the symlinked AGENTS.md" "Agentainer environment" \
 	"$(run_in $H --network none -- sh -c 'cd /tmp && codex debug prompt-input hi 2>/dev/null')"
 assert_eq "a fresh start prints no warnings" "none" "$(run_in $H -- true 2>&1 | grep -E 'warning|changed' || echo none)"
