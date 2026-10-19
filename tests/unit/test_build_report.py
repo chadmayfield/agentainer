@@ -92,6 +92,17 @@ class BuildReportTests(unittest.TestCase):
         self.assertIn("tests/80-mcp.sh: sync works", out)
         self.assertIn("Docker", out)
 
+    def test_tests_counts_a_file_that_exited_non_zero(self):
+        # tests/run.sh adds an unnumbered "not ok" line when a file exits non-zero
+        # without printing a failing test of its own.
+        log = self.write("# tests/10-base.sh\nok 1 - a\n"
+                         "not ok - exited with status 2 without reporting a failing test\n"
+                         "# tests/20-tools-apt.sh\nok 1 - b\n1..1\n")
+        out = br.tests("Podman", log)
+        self.assertIn("| tests/10-base.sh | 1 | 1 |", out)
+        self.assertIn("| Total | 2 | 1 |", out)
+        self.assertIn("tests/10-base.sh: exited with status 2 without reporting a failing test", out)
+
 
 if __name__ == "__main__":
     unittest.main()

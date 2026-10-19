@@ -8,11 +8,73 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels the run for its previous commit. Every other event
+# gets a group of its own (the run ID), so pushes to develop and main always run to the end.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+# Each job has a timeout well above its normal run time, so a hung step fails the job
+# instead of holding a runner for the 6-hour default.
 jobs:
-  lint-unit:
+  changes:
     runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      image: ${{ steps.diff.outputs.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - id: diff
+        name: Decide whether the change needs an image build
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -u
+          # The image job is skipped only when every changed file is on this list. These
+          # files are not copied into the image. Do not add *.md: the image ships
+          # rootfs/etc/agentainer/AGENTS.md and rootfs/etc/agentainer/home/.claude/CLAUDE.md.
+          # --no-renames lists both paths of a move, so moving a build file into docs/
+          # still counts as a code change.
+          docs_only() {
+            case "$1" in
+            README.md | CONTRIBUTING.md | SECURITY.md | LICENSE | docs/*) return 0 ;;
+            *) return 1 ;;
+            esac
+          }
+          image=true
+          base=
+          case "$EVENT" in
+          pull_request) base=$PR_BASE ;;
+          # A push to main is a release and always builds.
+          push) if [ "$REF" != refs/heads/main ]; then base=$BEFORE; fi ;;
+          esac
+          # An empty or all-zero base (a new branch), a failed fetch or an empty diff
+          # keeps image=true.
+          if [ -n "$base" ] && [ "$base" != 0000000000000000000000000000000000000000 ] &&
+            git fetch -q --depth=1 origin "$base" &&
+            files=$(git diff --no-renames --name-only "$base" HEAD) && [ -n "$files" ]; then
+            printf 'Changed files:\n%s\n' "$files"
+            image=false
+            while IFS= read -r f; do
+              if ! docs_only "$f"; then image=true; break; fi
+            done <<<"$files"
+          fi
+          echo "image=$image" | tee -a "$GITHUB_OUTPUT"
+
+  lint-unit:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: actionlint
+        env:
+          # rhysd/actionlint 1.7.12 from Docker Hub, pinned to the digest of its multi-arch index.
+          ACTIONLINT_IMAGE: docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo "$ACTIONLINT_IMAGE" -color=false
       - name: Python unit tests
         run: python3 -m unittest discover -s tests/unit -v
       - name: Launcher tests
@@ -20,7 +82,8 @@ jobs:
 
   image:
     name: image (${{ matrix.arch }})
-    needs: lint-unit
+    needs: [changes, lint-unit]
+    if: needs.changes.outputs.image == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -28,12 +91,12 @@ jobs:
           - {arch: amd64, runner: ubuntu-26.04}
           - {arch: arm64, runner: ubuntu-26.04-arm}
     runs-on: ${{ matrix.runner }}
+    # A normal run takes 15 to 20 minutes.
+    timeout-minutes: 45
     env:
       IMAGE: localhost/agentainer:dev
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Free runner disk
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - name: Build
         run: RUNTIME=docker sh scripts/build.sh --tag "$IMAGE"
       - name: Build report (versions, changed pins, size)
@@ -167,10 +230,39 @@ jobs:
           python3 scripts/build_report.py tests Podman tests-podman.log >>"$GITHUB_STEP_SUMMARY"
           exit "$rc"
 
+  # The one check that branch protection requires. A matrix job skipped by its "if"
+  # reports a single skipped check instead of "image (amd64)" and "image (arm64)", so
+  # those names would stay pending on a docs-only pull request. A job skipped because a
+  # job it needs failed also counts as passed, so this job runs with always() and fails
+  # unless every job it needs succeeded, or the image job was skipped on purpose.
+  ci:
+    if: always()
+    needs: [changes, lint-unit, image]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the results of the jobs it needs
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          LINT_UNIT: ${{ needs.lint-unit.result }}
+          IMAGE: ${{ needs.image.result }}
+          IMAGE_NEEDED: ${{ needs.changes.outputs.image }}
+        run: |
+          echo "changes=$CHANGES lint-unit=$LINT_UNIT image=$IMAGE (needed: $IMAGE_NEEDED)"
+          for r in "$CHANGES" "$LINT_UNIT"; do
+            [ "$r" = success ] || { echo "::error::A required job did not succeed." >&2; exit 1; }
+          done
+          case "$IMAGE" in
+          success) ;;
+          skipped) [ "$IMAGE_NEEDED" = false ] || { echo "::error::The image job was skipped but the change needs it." >&2; exit 1; } ;;
+          *) echo "::error::The image job ended with \"$IMAGE\"." >&2; exit 1 ;;
+          esac
+
   version:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: image
     runs-on: ubuntu-26.04
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.ver.outputs.version }}
     steps:
@@ -203,6 +295,9 @@ jobs:
           - {arch: amd64, runner: ubuntu-26.04}
           - {arch: arm64, runner: ubuntu-26.04-arm}
     runs-on: ${{ matrix.runner }}
+    # The build takes 6 to 10 minutes; this job adds a push of about 1 GB and a pull and
+    # scan of the pushed image.
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
@@ -270,6 +365,7 @@ jobs:
   release:
     needs: [version, publish]
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     concurrency: release
     permissions:
       contents: write
@@ -302,9 +398,24 @@ jobs:
           img=ghcr.io/chadmayfield/agentainer
           refs=()
           for d in digests/*; do refs+=("$img@sha256:$(basename "$d")"); done
-          docker buildx imagetools create -t "$img:latest" -t "$img:$V" -t "$img:sha-${SHA::7}" "${refs[@]}"
+          # GHCR shows the description of a multi-arch image from the index annotations, not
+          # from image labels (GitHub docs, "Working with the Container registry"). No
+          # licenses annotation: the image bundles software under many licenses, so a single
+          # SPDX identifier would be wrong.
+          desc="Claude Code, Codex, Antigravity CLI and OpenCode in one container"
+          docker buildx imagetools create -t "$img:latest" -t "$img:$V" -t "$img:sha-${SHA::7}" \
+            --annotation "index:org.opencontainers.image.description=$desc" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/chadmayfield/agentainer" \
+            "${refs[@]}"
+          # buildx drops index annotations without an error when every source manifest has a
+          # Docker media type, so check that they arrived.
+          docker buildx imagetools inspect --raw "$img:$V" |
+            DESC="$desc" python3 -c 'import json,os,sys; a=json.load(sys.stdin).get("annotations",{}); sys.exit(a.get("org.opencontainers.image.description")!=os.environ["DESC"])'
           digest=$(docker buildx imagetools inspect "$img:$V" --format '{{json .Manifest}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["digest"])')
-          cosign sign --yes "$img@$digest"
+          # --recursive also signs each per-architecture manifest in the index. A runtime
+          # that pulls the tag resolves it to the manifest for its platform, and a policy
+          # that checks that digest finds no signature on it when only the index is signed.
+          cosign sign --yes --recursive "$img@$digest"
       - name: Git tag and GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
