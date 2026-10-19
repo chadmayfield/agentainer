@@ -13,7 +13,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 H="-v $VOL:/home/agent"
 
-# Review focus 2: no credentials at all.
+# No credentials at all.
 out=$(run_in $H -- sh -c 'claude --version && codex --version && opencode --version && agy --version && echo ALL-STARTED' 2>&1)
 assert_contains "all agents start with no credentials" "ALL-STARTED" "$out"
 assert_eq "one-shot commands print no startup log" "none" "$(run_in $H -- true 2>&1 | grep 'agentainer:' || echo none)"

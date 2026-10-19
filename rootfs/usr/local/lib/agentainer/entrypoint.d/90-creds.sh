@@ -1,4 +1,4 @@
-# Step 9: list credential variable names, never values (spec 6.2). Quiet for one-shot
+# Step 9: list credential variable names, never values. Quiet for one-shot
 # commands (AGENTAINER_QUIET=1, set by the entrypoint); warnings always print.
 is_set() { eval "[ -n \"\${$1+x}\" ]"; }
 is_blank() { eval "[ -z \"\$(printf '%s' \"\${$1}\" | tr -d '[:space:]')\" ]"; }

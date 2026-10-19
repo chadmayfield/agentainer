@@ -8,7 +8,8 @@ find "$src" -type f | while IFS= read -r f; do
 	try_seed "$f" "$HOME/${f#"$src"/}"
 done
 # A fresh volume or PVC hides the image's dotfiles, so seed the shell defaults too.
-# .profile comes from /etc/agentainer/home (PATH order fixed); the rest from /etc/skel.
+# .profile comes from /etc/agentainer/home, which puts personal bin directories last in
+# PATH; the rest comes from /etc/skel.
 for f in .bashrc .bash_logout; do
 	if [ -f "/etc/skel/$f" ]; then try_seed "/etc/skel/$f" "$HOME/$f"; fi
 done

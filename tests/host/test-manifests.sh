@@ -1,5 +1,6 @@
 #!/bin/sh
-# Renders the Kubernetes example offline and checks the settings the spec requires.
+# Renders the Kubernetes example offline and checks the security and wiring settings
+# it depends on.
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/../lib.sh"
 cd "$(dirname "$0")/../.." || exit 2

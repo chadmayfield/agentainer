@@ -1,6 +1,6 @@
 #!/bin/sh
-# Spec test 6 and success criterion 4, locally: agents keep running when an attached
-# terminal client is killed, and a new session reattaches to them.
+# Agents keep running when an attached terminal client is killed, and a new session
+# reattaches to them.
 # shellcheck disable=SC2016 # single-quoted scripts expand in the container
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
@@ -46,7 +46,7 @@ else
 fi
 same_panes "every agent pane survived with the same PID"
 
-# Spec test 6 literally: an interactive exec session from the host, killed from the host.
+# An interactive exec session from the host, killed from the host.
 # "script" gives the host-side exec a TTY (BSD syntax on macOS, util-linux on Linux). Its
 # stdin stays open and idle: end-of-input would reach the active agent as Ctrl-D, which
 # a dropped connection never sends.
@@ -62,7 +62,7 @@ pkill -9 -f "exec -it $name tmux" 2>/dev/null
 wait_for 15 no_client || true
 same_panes "agents survive a killed host-side exec session"
 
-# Codex must not copy its package into home or leave a daemon behind (spec 3.2, 5).
+# Codex must not copy its package into home or leave a daemon behind.
 assert_eq "codex left no package copy in home" "none" "$(x sh -c 'ls -d ~/.codex/packages 2>/dev/null || echo none')"
 assert_eq "no codex app-server daemon" "none" "$(x sh -c 'pgrep -f "[c]odex app-server" || echo none')"
 

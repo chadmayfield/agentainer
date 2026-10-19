@@ -84,7 +84,7 @@ t1=$(date +%s)
 if [ $((t1 - t0)) -ge 4 ]; then pass "sync waits for another container's sync"; else fail "sync waits for another container's sync" "took $((t1 - t0))s"; fi
 assert_contains "the waiting sync still ran" "claude: w" "$(run_in $H --network none -- agentainer-mcp list 2>/dev/null)"
 
-# Review focus 4: a malformed file keeps the container up.
+# A malformed file keeps the container up.
 assert_contains "malformed file keeps the container up" "ok" \
 	"$(run_in $H --entrypoint sh -- -c 'echo "{bad" > ~/.agentainer/mcp.json; agentainer-entrypoint echo ok 2>/dev/null')"
 

@@ -7,7 +7,7 @@ STEPS=/usr/local/lib/agentainer/entrypoint.d
 log() { printf 'agentainer: %s\n' "$*" >&2; }
 warn() { printf 'agentainer: warning: %s\n' "$*" >&2; }
 
-# seed_file SRC DEST: copy SRC to DEST only if DEST does not exist (spec 6.2 step 2).
+# seed_file SRC DEST: copy SRC to DEST only if DEST does not exist.
 seed_file() {
 	[ -e "$2" ] || [ -L "$2" ] && return 0
 	mkdir -p "$(dirname "$2")" && cp "$1" "$2"

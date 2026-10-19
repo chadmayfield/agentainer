@@ -99,7 +99,7 @@ class SyncTests(SyncBase):
             f.write(text)
 
     def test_agy_empty_config_has_no_servers(self):
-        # agy's sign-in leaves an empty mcp_config.json (seen in the maintainer's session).
+        # agy's sign-in leaves an empty mcp_config.json.
         for text in ("", "  \n"):
             open(self.log, "w").close()
             self.agy_config(text)

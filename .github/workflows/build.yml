@@ -132,17 +132,17 @@ jobs:
           exit "$rc"
       - name: Manifest tests
         run: RUNTIME=docker sh tests/host/test-manifests.sh
-      - name: Linux host checks with Docker (spec tests 10a and 11)
+      - name: Linux host checks with Docker
         run: |
           set -eu
           # sudo blocked by no-new-privileges=true, allowed without it
           if docker run --rm --security-opt no-new-privileges=true "$IMAGE" sudo -n true; then
             echo "FAIL: sudo worked with no-new-privileges"; exit 1; fi
           docker run --rm "$IMAGE" sudo -n true
-          # rootful Docker writes as UID 1000 (documented limitation, spec 12.4)
+          # rootful Docker writes as UID 1000 (a documented limitation, see the README)
           mkdir -p ws && sudo chmod 777 ws && docker run --rm -v "$PWD/ws:/workspace" "$IMAGE" touch /workspace/d
           echo "docker-created file owner: $(stat -c %u ws/d) (runner uid $(id -u))" | tee -a "$GITHUB_STEP_SUMMARY"
-          # SSH agent forwarding on a Linux host (open item 7). ssh-agent refuses a peer
+          # SSH agent forwarding on a Linux host. ssh-agent refuses a peer
           # with a different UID (openssh-portable ssh-agent.c, "uid mismatch"), so the
           # client runs as the runner's UID, as it does for a host user with UID 1000.
           eval "$(ssh-agent -s)" && ssh-keygen -q -t ed25519 -N '' -f k && ssh-add k
@@ -269,7 +269,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with: {fetch-depth: 0}
       - id: ver
-        name: Version from the merged release branch (spec 16.4)
+        name: Version from the merged release branch
         shell: bash
         env:
           SHA: ${{ github.sha }}
@@ -334,8 +334,8 @@ jobs:
             BUILD_DATE=${{ steps.pins.outputs.date }}
           sbom: true
           provenance: true
-          # zstd: 946 MB to download against 1,191 MB with gzip, measured on this image. BuildKit
-          # maps levels 9 to 22 to its "Best" setting (about zstd 11; Docker build exporters docs).
+          # zstd makes this image's download about 20% smaller than gzip. BuildKit maps levels 9
+          # to 22 to its "Best" setting (about zstd 11; Docker build exporters docs).
           outputs: type=image,name=ghcr.io/chadmayfield/agentainer,push-by-digest=true,name-canonical=true,push=true,compression=zstd,compression-level=9,force-compression=true
       - run: mkdir -p digests && touch "digests/${DIGEST#sha256:}"
         env:

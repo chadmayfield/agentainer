@@ -16,7 +16,7 @@ assert_eq "tools-active is ephemeral by default" "/var/lib/agentainer/tools" "$(
 assert_eq "image-version stamp written" "yes" "$(run_in $H -- agentainer-entrypoint sh -c 'test -s ~/.agentainer/image-version && echo yes')"
 assert_eq "shell dotfiles seeded" "yes" "$(run_in $H -- agentainer-entrypoint sh -c 'test -f ~/.bashrc && test -f ~/.profile && echo yes')"
 
-# Review focus 1: user edits survive a restart.
+# User edits survive a restart.
 run_in $H -- agentainer-entrypoint sh -c 'echo "# mine" > ~/.agentainer/AGENTS.md' >/dev/null
 assert_eq "keeps edited files" "# mine" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.agentainer/AGENTS.md)"
 
@@ -43,7 +43,7 @@ assert_eq "npm -g installs in persist mode" "rc=0" "$(run_in $H $FX -e AGENTAINE
 assert_contains "persist keeps tools" "/home/agent/.agentainer/tools" "$(run_in $H -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c 'readlink -f "$(command -v fixture-npm)"')"
 assert_contains "tools status shows persist" "persist" "$(run_in $H -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint agentainer-tools status)"
 
-# Spec test 4: uv tool and go install land in the active root too.
+# uv tool and go install land in the active root too.
 assert_contains "uv tool lands in tools-active" "/home/agent/.agentainer/tools" "$(run_in $H $FX -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c 'fx=$(bash /fixtures/make-tools.sh) && uv tool install -q --offline "$fx/fixture_uv-1.0-py3-none-any.whl" >/dev/null 2>&1 && readlink -f "$(command -v fixture-uv)"')"
 assert_contains "go install lands in tools-active" "/home/agent/.agentainer/tools" "$(run_in $H $FX -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c 'fx=$(bash /fixtures/make-tools.sh) && cd "$fx/gomod" && GOFLAGS=-mod=mod go install . >/dev/null 2>&1 && readlink -f "$(command -v fixture)"')"
 
@@ -101,7 +101,7 @@ out=$(run_in $H -- sh -c 'echo started' 2>&1)
 assert_contains "blocked seed path still starts" "started" "$out"
 assert_contains "blocked seed path warns" "could not seed" "$out"
 
-# Login shells keep image directories ahead of ~/.local/bin (spec 10).
+# Login shells keep image directories ahead of ~/.local/bin.
 # Both directories present, and /usr/local/bin first (compared by position in PATH).
 assert_eq "bash -l keeps /usr/local/bin before ~/.local/bin" "rc=0" \
 	"$(run_in $H -- bash -l -c 'mkdir -p ~/.local/bin; p=$(bash -l -c "echo \$PATH")

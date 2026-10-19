@@ -7,7 +7,7 @@
 # Exact version lines, so a pin of 1.3.2 cannot match 1.3.21.
 assert_eq "claude version" "$CLAUDE_CODE_VERSION (Claude Code)" "$(run_in -- claude --version 2>/dev/null)"
 assert_eq "codex version" "codex-cli $CODEX_VERSION" "$(run_in -- codex --version 2>/dev/null)"
-# agy prints the bare version for --version (checked in the built image).
+# agy prints the bare version for --version.
 assert_eq "agy version" "$AGY_VERSION" "$(run_in -- agy --version 2>/dev/null)"
 assert_eq "opencode version" "opencode v$OPENCODE_VERSION" "$(run_in -- opencode --version 2>/dev/null | tail -1)"
 

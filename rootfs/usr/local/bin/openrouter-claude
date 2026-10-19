@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs Claude Code through OpenRouter for this process only (spec 11).
+# Runs Claude Code through OpenRouter for this process only.
 # Source: https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration
 set -eu
 if [ -z "${OPENROUTER_API_KEY:-}" ]; then

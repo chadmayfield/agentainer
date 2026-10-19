@@ -1,4 +1,4 @@
-# Step 8: sync MCP servers when ~/.agentainer/mcp.json changed (spec 8).
+# Step 8: sync MCP servers when ~/.agentainer/mcp.json changed.
 # Containers sharing a home volume take turns: each holds a lock while it compares the
 # hash, syncs and records the new hash. The lock is released when this step's subshell exits,
 # and agentainer-mcp gets fd 9 closed, so no agent process it starts can keep the lock.

@@ -8,7 +8,7 @@ assert_contains "go version" "go$GO_VERSION " "$(run_in -- go version)"
 assert_contains "rustc version" "rustc $RUST_VERSION " "$(run_in -- rustc --version)"
 assert_contains "cargo version" "cargo $RUST_VERSION " "$(run_in -- cargo --version)"
 assert_eq "clippy and rustfmt installed" "rc=0" "$(run_in -- sh -c 'cargo clippy --version >/dev/null && cargo fmt --version >/dev/null; echo rc=$?')"
-assert_eq "cargo builds with a run-time CARGO_HOME (spec 10)" "rc=0" \
+assert_eq "cargo builds with a run-time CARGO_HOME" "rc=0" \
 	"$(run_in -e CARGO_HOME=/tmp/ch -- sh -c 'cd /tmp && cargo new -q h && cd h && cargo build -q 2>&1 && ./target/debug/h >/dev/null; echo rc=$?')"
 assert_contains "yq is mikefarah" "mikefarah" "$(run_in -- yq --version)"
 assert_contains "yq version" "v$YQ_VERSION" "$(run_in -- yq --version)"

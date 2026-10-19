@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""agentainer-mcp sync|list: apply ~/.agentainer/mcp.json to every agent (spec section 8).
+"""agentainer-mcp sync|list: apply ~/.agentainer/mcp.json to every agent.
 
 Only servers this tool added (recorded in ~/.agentainer/mcp-managed.json) are ever
 changed or removed. A value of exactly ${NAME} (or "Bearer ${NAME}" for headers) is a

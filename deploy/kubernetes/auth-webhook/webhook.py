@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ContainerSSH auth and config webhook for one Agentainer user (spec 15.2).
+"""ContainerSSH auth and config webhook for one Agentainer user.
 
 POST /pubkey   accepts the configured user with a key from AUTHORIZED_KEYS
 POST /password always rejects

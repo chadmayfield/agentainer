@@ -26,7 +26,7 @@ assert_eq "Codex parses the seeded config strictly" "ok" \
 assert_contains "Codex stores auth in a file" '"auth storage mode": "File"' "$doctor"
 # Codex's bubblewrap sandbox cannot start in a container ("bwrap: Can't mount devpts on
 # /newroot/dev/pts: Permission denied" under rootless Podman), so the seed turns it off
-# and keeps the approval prompts (spec 3.2, D14).
+# and keeps the approval prompts.
 assert_contains "Codex filesystem sandbox is off" '"filesystem sandbox": "unrestricted"' "$doctor"
 assert_contains "Codex still asks for approval" '"approval policy": "OnRequest"' "$doctor"
 assert_contains "Codex reads the symlinked AGENTS.md" "Agentainer environment" \
@@ -35,7 +35,7 @@ assert_contains "Codex reads the symlinked AGENTS.md" "Agentainer environment" \
 assert_absent "a fresh start prints no warnings" "$(run_in -- echo STARTED 2>&1)" STARTED warning changed
 assert_contains "default AGENTS.md describes the container" "/workspace" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.agentainer/AGENTS.md)"
 
-# Review focus 3: a user's own global file is kept, with a warning.
+# A user's own global file is kept, with a warning.
 "$RUNTIME" volume rm -f "$VOL" >/dev/null
 "$RUNTIME" volume create "$VOL" >/dev/null
 run_in $H --entrypoint sh -- -c 'mkdir -p ~/.codex && echo mine > ~/.codex/AGENTS.md' >/dev/null

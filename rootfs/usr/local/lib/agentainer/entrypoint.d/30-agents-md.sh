@@ -1,4 +1,4 @@
-# Step 3: wire ~/.agentainer/AGENTS.md into each agent's user-level file (spec 7).
+# Step 3: wire ~/.agentainer/AGENTS.md into each agent's user-level file.
 # Anything the user already has at a target path is left alone, with a warning.
 canon="$HOME/.agentainer/AGENTS.md"
 for target in "$HOME/.codex/AGENTS.md" "$HOME/.gemini/AGENTS.md" "$HOME/.config/opencode/AGENTS.md"; do

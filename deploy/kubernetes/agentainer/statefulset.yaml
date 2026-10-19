@@ -38,7 +38,7 @@ spec:
             capabilities: {drop: [ALL]}
             # To enable sudo, replace the two lines above with the block below. This moves
             # the pod to the Baseline profile; relabel the namespace to baseline as well.
-            # The capability list is not verified.
+            # The capability list is untested.
             # allowPrivilegeEscalation: true
             # capabilities: {drop: [ALL], add: [SETUID, SETGID, AUDIT_WRITE]}
           resources:  # example values

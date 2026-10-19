@@ -1,4 +1,4 @@
-# Step 5: use gh as the git credential helper when a GitHub token is set (spec 6.2).
+# Step 5: use gh as the git credential helper when a GitHub token is set.
 # gh reads GH_TOKEN, then GITHUB_TOKEN ("gh help environment").
 [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ] || return 0
 # Skip it when this container's gh already is the helper: setup-git rewrites ~/.gitconfig

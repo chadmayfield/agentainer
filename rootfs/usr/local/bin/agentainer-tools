@@ -1,5 +1,5 @@
 #!/bin/sh
-# agentainer-tools status|reset (spec section 10)
+# agentainer-tools status|reset: show or reset the tools that agents installed.
 set -eu
 # shellcheck source=rootfs/usr/local/lib/agentainer/tools-layout.sh
 . /usr/local/lib/agentainer/tools-layout.sh
