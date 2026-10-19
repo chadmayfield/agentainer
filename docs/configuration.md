@@ -41,7 +41,7 @@ Define servers once in `~/.agentainer/mcp.json`, in the `mcpServers` format most
 | Antigravity | `agy mcp add` |
 | OpenCode | `mcp.servers` in `~/.config/opencode/opencode.json` |
 
-The entrypoint runs the sync when `mcp.json` changes, and `agentainer-mcp list` shows what it manages. It adds, updates and removes only the servers it added and never touches servers you added yourself. Deleting `mcp.json` removes the servers it added. Config files that are symlinks stay symlinks; the sync writes the file the link points to. When containers sharing a home volume start at once, their syncs run one at a time.
+The entrypoint runs the sync when `mcp.json` changes, and `agentainer-mcp list` shows what it manages. It adds, updates and removes only the servers it added and never touches servers you added yourself. Deleting `mcp.json` removes the servers it added. Config files that are symlinks stay symlinks; the sync writes the file the link points to. Direct syncs and startup syncs share one lock, so they run one at a time on a shared home volume. Startup uses `agentainer-mcp sync --if-changed`, which checks and records the input hash under that same lock; a direct `agentainer-mcp sync` runs even when the input has not changed.
 
 Server names may use only letters, digits, `-` and `_`. Any other name stops the sync with an error such as `agentainer-mcp: server name 'my.server' may only use letters, digits, - and _; nothing changed`.
 

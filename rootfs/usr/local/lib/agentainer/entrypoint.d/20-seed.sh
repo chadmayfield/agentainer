@@ -13,7 +13,6 @@ done
 for f in .bashrc .bash_logout; do
 	if [ -f "/etc/skel/$f" ]; then try_seed "/etc/skel/$f" "$HOME/$f"; fi
 done
-for name in AGENTS.md mcp.json; do
-	if [ -f "/etc/agentainer/seed/$name" ]; then try_seed "/etc/agentainer/seed/$name" "$HOME/.agentainer/$name"; fi
-done
-try_seed /etc/agentainer/AGENTS.md "$HOME/.agentainer/AGENTS.md"
+if [ -f /etc/agentainer/seed/mcp.json ]; then
+	try_seed /etc/agentainer/seed/mcp.json "$HOME/.agentainer/mcp.json"
+fi

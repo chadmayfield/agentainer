@@ -43,6 +43,8 @@ A runtime needs zstd support to pull the image. These are the first versions wit
 | containerd, including Kubernetes nodes that use it | 1.5.0 ("Add support for layers compressed with zstd", [containerd v1.5.0 release notes](https://github.com/containerd/containerd/releases/tag/v1.5.0)) |
 | Podman | Not verified. Podman's release notes do not name a version. containers/image added zstd in containers/image#639, and Podman 1.6.2 is the first release whose `go.mod` uses a containers/image version with that change. |
 
+The release job refreshes `main` while holding its release lock. Only the highest calendar version in main's first-parent release merges can move `latest`. A delayed older build or retry publishes its own version tag and leaves `latest` alone. The comparison includes numeric same-day suffixes, so `.10` follows `.2` ([release script](../scripts/release-image.sh), [version comparison](../scripts/release_order.py)).
+
 The published image is a fresh build from the release commit with the same pinned inputs, not the exact image the pull request's tests ran on.
 
 Instructions for checking the signature with `cosign verify` will be added with the first release, once they have been run against a published image.

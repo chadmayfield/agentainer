@@ -27,7 +27,7 @@ N defaults to `agentainer`. These variables override the launcher's defaults:
 
 - `update` changes nothing when the pull fails, when DIR or the env file no longer exists, or when the container was not made by `up`.
 - `update` pulls from a registry, so it cannot update a container that runs an image you built locally (`localhost/...`). Use `agentainer down` and `agentainer up --image ...` for those.
-- DIR must not contain `:`, because `-v` splits its value at `:`. Use a symlink without `:` instead.
+- DIR must not contain `:`, because `-v` splits its value at `:`. Rename the directory to remove `:`.
 
 ## Without the launcher
 

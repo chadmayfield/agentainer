@@ -64,7 +64,7 @@ create() {
 	# -v splits its value at ':' (SRC:DEST[:OPTIONS]), so such a path cannot be mounted.
 	case "$dir" in
 	*:*)
-		echo "agentainer: $dir contains ':', which podman and docker -v cannot mount; rename it or use a symlink without ':'" >&2
+		echo "agentainer: $dir contains ':', which podman and docker -v cannot mount; rename the directory to remove ':'" >&2
 		exit 1
 		;;
 	esac
@@ -84,7 +84,7 @@ create() {
 		}
 		case "$home" in
 		*:*)
-			echo "agentainer: $home contains ':', which podman and docker -v cannot mount; rename it or use a symlink without ':'" >&2
+			echo "agentainer: $home contains ':', which podman and docker -v cannot mount; rename the directory to remove ':'" >&2
 			exit 1
 			;;
 		esac

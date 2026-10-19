@@ -85,6 +85,30 @@ class SyncBase(unittest.TestCase):
 
 
 class SyncTests(SyncBase):
+    def test_startup_skips_unchanged_successful_input_but_direct_sync_runs(self):
+        self.write_mcp({"fs": {"command": "example"}})
+        self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+        first = self.calls()
+        self.assertIn("claude mcp add-json fs", first)
+        self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+        self.assertEqual(self.calls(), first)
+        self.assertEqual(self.sync(), 0)
+        self.assertNotEqual(self.calls(), first)
+
+    def test_startup_removes_servers_and_stamp_after_input_is_deleted(self):
+        self.write_mcp({"fs": {"command": "example"}})
+        self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+        self.assertTrue(self.read(".agentainer", ".mcp-synced.sha256"))
+        os.unlink(os.path.join(self.home, ".agentainer", "mcp.json"))
+        self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+        manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
+        self.assertTrue(manifest)
+        self.assertTrue(all(not names for names in manifest.values()))
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".agentainer", ".mcp-synced.sha256")))
+        calls = self.calls()
+        self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+        self.assertEqual(self.calls(), calls)
+
     def test_adds_servers_to_each_agent(self):
         self.write_mcp({"fs": {"command": "npx", "args": ["-y", "@example/fs"]}})
         self.assertEqual(self.sync(), 0)

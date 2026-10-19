@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""agentainer-mcp sync|list: apply ~/.agentainer/mcp.json to every agent.
+"""agentainer-mcp sync [--if-changed]|list: apply ~/.agentainer/mcp.json to every agent.
 
 Only servers this tool added (recorded in ~/.agentainer/mcp-managed.json) are ever
 changed or removed. A value of exactly ${NAME} (or "Bearer ${NAME}" for headers) is a
@@ -12,8 +12,13 @@ How each agent is updated (checked against agent versions pinned in versions.env
             ~/.codex/config.toml; nothing outside the markers is touched
   opencode  agentainer-owned mcp.servers.<name> entries in ~/.config/opencode/opencode.json
             (OpenCode v2 has no "mcp remove" command)
+--if-changed skips a successful sync whose input has not changed. Both modes lock the
+whole read, update and write operation on a shared home.
 Exit status: 0 when every agent was updated, 1 otherwise (the entrypoint retries next start).
 """
+import contextlib
+import fcntl
+import hashlib
 import json
 import os
 import re
@@ -21,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 try:
     import tomllib  # Python 3.11+; the image has 3.14
@@ -433,20 +439,44 @@ def sync_cli(agent, desired, managed, runner):
     return result
 
 
-def main(argv=None, env=None):
-    argv = sys.argv[1:] if argv is None else argv
-    env = dict(os.environ) if env is None else env
+@contextlib.contextmanager
+def sync_lock(box):
+    """Serialize direct and startup syncs, including their manifests and hash stamps."""
+    os.makedirs(box, exist_ok=True)
+    # Python opens the descriptor non-inheritable; agent subprocesses cannot retain it.
+    with open(os.path.join(box, ".mcp-sync.lock"), "a") as lock:
+        deadline = time.monotonic() + 120
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("another sync held the MCP lock for 120 seconds")
+                time.sleep(0.1)
+        yield
+
+
+def sync(env, if_changed, warn):
     home = env["HOME"]
     box = os.path.join(home, ".agentainer")
     manifest_path = os.path.join(box, "mcp-managed.json")
-
-    def warn(msg):
-        print("agentainer-mcp: warning: %s" % msg, file=sys.stderr)
-
-    cmd = (argv or ["sync"])[0]
-    if cmd not in ("sync", "list"):
-        print("usage: agentainer-mcp sync|list", file=sys.stderr)
-        return 2
+    stamp = os.path.join(box, ".mcp-synced.sha256")
+    try:
+        with open(os.path.join(box, "mcp.json"), "rb") as f:
+            current = hashlib.sha256(f.read()).hexdigest()
+    except FileNotFoundError:
+        current = None
+    if if_changed:
+        try:
+            with open(stamp) as f:
+                previous = f.read().strip()
+        except FileNotFoundError:
+            if current is None:
+                return 0
+        else:
+            if current is not None and previous == current:
+                return 0
     try:
         with open(manifest_path) as f:
             manifest = json.load(f)
@@ -454,11 +484,6 @@ def main(argv=None, env=None):
             manifest = {}
     except (FileNotFoundError, ValueError):
         manifest = {}
-
-    if cmd == "list":
-        for agent in AGENTS:
-            print("%s: %s" % (agent, ", ".join(manifest.get(agent, [])) or "(none)"))
-        return 0
 
     try:
         desired = load_desired(os.path.join(box, "mcp.json"), warn)
@@ -481,7 +506,46 @@ def main(argv=None, env=None):
             warn("%s: not updated: %s" % (agent, e))
         # Saved after every agent, so a crash later never loses track of what was added.
         write_atomic(manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-    return 1 if runner.failed else 0
+    if runner.failed:
+        return 1
+    if current is None:
+        try:
+            os.unlink(stamp)
+        except FileNotFoundError:
+            pass
+    else:
+        write_atomic(stamp, current + "\n")
+    return 0
+
+
+def main(argv=None, env=None):
+    argv = sys.argv[1:] if argv is None else argv
+    env = dict(os.environ) if env is None else env
+    if argv not in ([], ["sync"], ["sync", "--if-changed"], ["list"]):
+        print("usage: agentainer-mcp sync [--if-changed]|list", file=sys.stderr)
+        return 2
+    box = os.path.join(env["HOME"], ".agentainer")
+    if argv == ["list"]:
+        try:
+            with open(os.path.join(box, "mcp-managed.json")) as f:
+                manifest = json.load(f)
+            if not isinstance(manifest, dict):
+                manifest = {}
+        except (FileNotFoundError, ValueError):
+            manifest = {}
+        for agent in AGENTS:
+            print("%s: %s" % (agent, ", ".join(manifest.get(agent, [])) or "(none)"))
+        return 0
+
+    def warn(msg):
+        print("agentainer-mcp: warning: %s" % msg, file=sys.stderr)
+
+    try:
+        with sync_lock(box):
+            return sync(env, "--if-changed" in argv, warn)
+    except (OSError, TimeoutError) as e:
+        warn("sync failed: %s" % e)
+        return 1
 
 
 if __name__ == "__main__":

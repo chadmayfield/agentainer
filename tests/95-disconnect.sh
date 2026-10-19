@@ -90,7 +90,11 @@ assert_contains "new-session -A exits 0" "rc=0" "$out"
 assert_contains "new-session -A attached to main" "[detached (from session main)]" "$out"
 if wait_for 10 x test -e /tmp/reattached; then pass "the attach hook ran on main"; else fail "the attach hook ran on main" "no /tmp/reattached"; fi
 x tmux set-hook -u -t main client-attached
-assert_eq "reattaching kept the one session" "$sid" "$(x tmux list-sessions -F '#{session_id}')"
+# Both sides are empty when no container ran, so require a real session id first.
+case "$sid" in
+'$'[0-9]*) assert_eq "reattaching kept the one session" "$sid" "$(x tmux list-sessions -F '#{session_id}')" ;;
+*) fail "reattaching kept the one session" "no session id for main: [$sid]" ;;
+esac
 same_panes "reattaching keeps every agent process"
 x tmux new-session -d -s l 'echo $LANG; sleep 30'
 wait_for 10 pane_shows l || true

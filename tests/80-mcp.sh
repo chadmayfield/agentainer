@@ -79,15 +79,15 @@ run_in $H --entrypoint sh -- -c 'mkdir -p ~/.agentainer && printf "%s" "{\"mcpSe
 # The test holds the lock from one container until it creates a release file, then starts
 # a second container whose startup sync must block on the lock and write nothing until then.
 held() { "$RUNTIME" exec "$lockname" test -e /home/agent/.agentainer/held; }
-# A flock process in the sync container waits on the MCP lock file (its fd 9).
+# The sync process opens the shared lock before waiting; it writes nothing until acquired.
 sync_blocked() {
-	"$RUNTIME" exec "$syncname" sh -c 'for p in $(pgrep -x flock); do readlink /proc/$p/fd/9; done' | grep -q '/\.mcp-sync\.lock$'
+	"$RUNTIME" exec "$syncname" sh -c 'for p in $(pgrep -f "[a]gentainer-mcp sync --if-changed"); do readlink /proc/$p/fd/* 2>/dev/null; done' | grep -q '/\.mcp-sync\.lock$'
 }
 "$RUNTIME" run -d ${PLATFORM:+--platform "$PLATFORM"} --name "$lockname" $H --entrypoint sh "$IMAGE" -c \
 	'cd ~/.agentainer && flock .mcp-sync.lock sh -c "touch held; until [ -e release ]; do sleep 0.2; done"' >/dev/null
 wait_for 30 held || fail "the test holds the sync lock" "no held file"
 "$RUNTIME" run -d ${PLATFORM:+--platform "$PLATFORM"} --name "$syncname" $H --network none "$IMAGE" true >/dev/null
-if wait_for 60 sync_blocked; then pass "sync waits for another container's sync"; else fail "sync waits for another container's sync" "no flock process waiting on .mcp-sync.lock"; fi
+if wait_for 60 sync_blocked; then pass "sync waits for another container's sync"; else fail "sync waits for another container's sync" "no sync process waiting on .mcp-sync.lock"; fi
 assert_eq "the waiting sync wrote nothing while the lock was held" "absent" \
 	"$("$RUNTIME" exec "$lockname" sh -c 'test -e ~/.agentainer/mcp-managed.json && echo present || echo absent' 2>&1)"
 "$RUNTIME" exec "$lockname" touch /home/agent/.agentainer/release

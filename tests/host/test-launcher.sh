@@ -79,6 +79,14 @@ mkdir -p "$T/a:b"
 assert_contains "DIR with a colon is rejected" "contains ':'" "$(pod up "$T/a:b" 2>&1 || true)"
 assert_eq "DIR with a colon runs nothing" "" "$(pod up "$T/a:b" 2>/dev/null || true)"
 
+# Physical paths still contain the colon when reached through a symlink.
+ln -s "$T/a:b" "$T/colon-link"
+out=$(pod up "$T/colon-link" 2>&1 || true)
+assert_absent "colon DIR message does not recommend a symlink" "$out" "contains ':'" "symlink"
+assert_contains "colon DIR message recommends renaming" "rename" "$out"
+out=$(AGENTAINER_HOME_VOLUME="$T/colon-link" pod up "$T/my code" 2>&1 || true)
+assert_absent "colon home message does not recommend a symlink" "$out" "contains ':'" "symlink"
+
 # up records its options as labels, so update can recreate the container.
 out=$(AGENTAINER_HOME_VOLUME=h2 pod up --sudo --name proj --image example.com/i:2 "$T/my code")
 has_line "up records DIR" "io.github.chadmayfield.agentainer.dir=$(cd "$T/my code" && pwd -P)" "$out"
