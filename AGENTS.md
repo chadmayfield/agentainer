@@ -76,11 +76,13 @@ Check each command's exit code directly. Piping into `tail` or `grep` hides a fa
 
 - Follow the branch rules in [CONTRIBUTING.md](CONTRIBUTING.md). Never push to `main` and never run `git flow release finish`.
 - Before each commit, show a file-by-file summary of what changed and wait for the maintainer's approval.
-- End every commit message with this trailer:
+- When an AI agent writes a commit, end the message with a `Co-Authored-By` trailer that names that agent, with the address its maker documents for this purpose. Claude Code uses:
 
   ```
   Co-Authored-By: Claude <noreply@anthropic.com>
   ```
+
+  If your maker documents no address, ask the maintainer before you commit.
 
 - Do not force-push, rewrite published history, or delete branches without explicit instruction.
 
