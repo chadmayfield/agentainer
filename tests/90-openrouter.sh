@@ -20,10 +20,7 @@ assert_contains "codex gets the openrouter provider" 'model_provider="openrouter
 assert_contains "codex base URL" "https://openrouter.ai/api/v1" "$out"
 assert_contains "codex default model is an OpenRouter id" 'model="~openai/gpt-sol-latest"' "$out"
 assert_eq "user args come last and intact" "exec|two words" "$(printf '%s\n' "$out" | tail -2 | paste -sd '|' -)"
-case "$out" in
-*sk-or-test*) fail "codex argv has no key" ;;
-*) pass "codex argv has no key" ;;
-esac
+assert_absent "codex argv has no key" "$out" 'model_provider="openrouter"' sk-or-test
 
 # End to end against a local fake endpoint: the key reaches the Authorization header.
 hdr=$(run_in --network none -e OPENROUTER_API_KEY=sk-or-e2e --entrypoint sh -- -c '
@@ -46,9 +43,6 @@ assert_contains "codex sends the OpenRouter key as a Bearer token" "Bearer sk-or
 doctor=$(run_in --network none -e OPENROUTER_API_KEY=sk-or-test -- sh -c 'openrouter-codex doctor --json 2>/dev/null')
 assert_eq "real codex accepts the provider overrides" "ok" \
 	"$(printf '%s' "$doctor" | python3 -c 'import sys,json; print(json.load(sys.stdin)["checks"]["config.load"]["status"])' 2>&1)"
-case "$doctor" in
-*sk-or-test*) fail "codex doctor output has no key" ;;
-*) pass "codex doctor output has no key" ;;
-esac
+assert_absent "codex doctor output has no key" "$doctor" '"config.load"' sk-or-test
 
 finish

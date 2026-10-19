@@ -6,6 +6,8 @@
 VOL="agentainer-test-home-$$"
 "$RUNTIME" volume create "$VOL" >/dev/null
 trap '"$RUNTIME" volume rm -f "$VOL" >/dev/null' EXIT
+# dash skips the EXIT trap on a signal; exiting from the signal trap runs it.
+trap 'exit 130' INT TERM
 H="-v $VOL:/home/agent"
 
 for t in .codex/AGENTS.md .gemini/AGENTS.md .config/opencode/AGENTS.md; do
@@ -29,7 +31,8 @@ assert_contains "Codex filesystem sandbox is off" '"filesystem sandbox": "unrest
 assert_contains "Codex still asks for approval" '"approval policy": "OnRequest"' "$doctor"
 assert_contains "Codex reads the symlinked AGENTS.md" "Agentainer environment" \
 	"$(run_in $H --network none -- sh -c 'cd /tmp && codex debug prompt-input hi 2>/dev/null')"
-assert_eq "a fresh start prints no warnings" "none" "$(run_in $H -- true 2>&1 | grep -E 'warning|changed' || echo none)"
+# A fresh home: no volume, so every first-start step runs.
+assert_absent "a fresh start prints no warnings" "$(run_in -- echo STARTED 2>&1)" STARTED warning changed
 assert_contains "default AGENTS.md describes the container" "/workspace" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.agentainer/AGENTS.md)"
 
 # Review focus 3: a user's own global file is kept, with a warning.
@@ -56,7 +59,7 @@ assert_contains "warns about a dangling symlink" "points to a missing file" "$ou
 # A changed image default prints one notice and diff shows it.
 run_in $H -- agentainer-entrypoint sh -c 'echo stale > ~/.agentainer/agents-default.sha256' >/dev/null
 assert_contains "notice on changed default" "agentainer-agents diff" "$(run_in $H -- agentainer-entrypoint true 2>&1)"
-assert_eq "no notice the second time" "none" "$(run_in $H -- agentainer-entrypoint true 2>&1 | grep 'agentainer-agents diff' || echo none)"
+assert_absent "no notice the second time" "$(run_in $H -- agentainer-entrypoint echo STARTED 2>&1)" STARTED "agentainer-agents diff"
 run_in $H -- agentainer-entrypoint sh -c 'echo "# edited" >> ~/.agentainer/AGENTS.md' >/dev/null
 assert_contains "diff shows the user's edit" "# edited" "$(run_in $H -- agentainer-entrypoint agentainer-agents diff)"
 assert_eq "diff exits 0 when files differ" "rc=0" "$(run_in $H -- agentainer-entrypoint sh -c 'agentainer-agents diff >/dev/null; echo rc=$?')"

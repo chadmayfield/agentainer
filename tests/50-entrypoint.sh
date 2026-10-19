@@ -7,6 +7,8 @@ VOL="agentainer-test-home-$$"
 "$RUNTIME" volume create "$VOL" >/dev/null
 name="agentainer-test-$$"
 trap '"$RUNTIME" rm -f "$name" >/dev/null 2>&1; "$RUNTIME" volume rm -f "$VOL" >/dev/null' EXIT
+# dash skips the EXIT trap on a signal; exiting from the signal trap runs it.
+trap 'exit 130' INT TERM
 H="-v $VOL:/home/agent"
 
 assert_eq "entrypoint runs the command" "hello" "$(run_in $H -- agentainer-entrypoint echo hello)"
@@ -80,7 +82,7 @@ run_in $H -e AGENTAINER_TOOLS=persist -- sh -c 'mkdir -p ~/.agentainer/tools/bin
 run_in $H -e AGENTAINER_TOOLS=persist -- true >/dev/null 2>&1
 assert_contains "warning repeats on the next start" "image changed" "$(run_in $H -e AGENTAINER_TOOLS=persist -- true 2>&1)"
 run_in $H -- agentainer-tools reset >/dev/null 2>&1
-assert_eq "no warning after reset" "none" "$(run_in $H -e AGENTAINER_TOOLS=persist -- true 2>&1 | grep 'image changed' || echo none)"
+assert_absent "no warning after reset" "$(run_in $H -e AGENTAINER_TOOLS=persist -- echo STARTED 2>&1)" STARTED "image changed"
 run_in $H -- sh -c 'agentainer-tools reset; mkdir -p ~/.agentainer/tools/bin; agentainer-tools reset' >/dev/null 2>&1
 assert_eq "two resets make two separate backups" "rc=0" \
 	"$(run_in $H -- sh -c 'n=$(ls -d ~/.agentainer/tools.*.bak | wc -l); [ "$n" -ge 2 ] && ! ls -d ~/.agentainer/tools.*.bak/tools >/dev/null 2>&1; echo rc=$?')"
@@ -94,8 +96,12 @@ assert_contains "blocked seed path still starts" "started" "$out"
 assert_contains "blocked seed path warns" "could not seed" "$out"
 
 # Login shells keep image directories ahead of ~/.local/bin (spec 10).
+# Both directories present, and /usr/local/bin first (compared by position in PATH).
 assert_eq "bash -l keeps /usr/local/bin before ~/.local/bin" "rc=0" \
-	"$(run_in $H -- bash -l -c 'mkdir -p ~/.local/bin; p=$(bash -l -c "echo \$PATH"); case "$p" in */usr/local/bin*/home/agent/.local/bin* | */usr/local/bin*) ;; *) exit 1 ;; esac; case "$p" in /home/agent/.local/bin:*) exit 1 ;; esac; echo rc=0' 2>/dev/null || echo rc=1)"
+	"$(run_in $H -- bash -l -c 'mkdir -p ~/.local/bin; p=$(bash -l -c "echo \$PATH")
+		a=$(echo "$p" | tr : "\n" | grep -nx /usr/local/bin | head -1 | cut -d: -f1)
+		b=$(echo "$p" | tr : "\n" | grep -nx /home/agent/.local/bin | head -1 | cut -d: -f1)
+		if [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; then echo rc=0; else echo "rc=1 PATH=$p"; fi' 2>/dev/null)"
 
 # Optional steps report a failure and the container still starts.
 assert_contains "a failing opencode setup step warns" "70-opencode.sh failed" \

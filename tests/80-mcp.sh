@@ -6,6 +6,8 @@
 VOL="agentainer-test-home-$$"
 "$RUNTIME" volume create "$VOL" >/dev/null
 trap '"$RUNTIME" volume rm -f "$VOL" >/dev/null' EXIT
+# dash skips the EXIT trap on a signal; exiting from the signal trap runs it.
+trap 'exit 130' INT TERM
 H="-v $VOL:/home/agent"
 
 run_in $H --entrypoint sh -- -c 'mkdir -p ~/.agentainer && printf "%s" "{\"mcpServers\":{\"everything\":{\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-everything\"]},\"web\":{\"url\":\"https://mcp.example.com/mcp\",\"headers\":{\"Authorization\":\"Bearer \${WEB_TOKEN}\"}}}}" > ~/.agentainer/mcp.json' >/dev/null
@@ -24,10 +26,8 @@ assert_contains "codex uses the bearer env var" 'bearer_token_env_var = "WEB_TOK
 # Removing a server from mcp.json removes it everywhere on the next start.
 run_in $H --entrypoint sh -- -c 'printf "%s" "{\"mcpServers\":{\"web\":{\"url\":\"https://mcp.example.com/mcp\"}}}" > ~/.agentainer/mcp.json' >/dev/null
 out=$(run_in $H --network none -- sh -c 'claude mcp list; codex mcp list; opencode debug config; agy mcp list' 2>/dev/null)
-case "$out" in
-*everything*) fail "removed server is gone from every agent" "$out" ;;
-*) pass "removed server is gone from every agent" ;;
-esac
+assert_contains "the server still in mcp.json stays" "web" "$out"
+assert_absent "removed server is gone from every agent" "$out" '"update"' everything
 
 # The unit tests again, on the image's Python, where the real TOML parser checks Codex output.
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -44,10 +44,7 @@ assert_eq "Codex still loads its config" "ok" \
 # Deleting mcp.json removes every managed server on the next start.
 run_in $H --entrypoint sh -- -c 'rm ~/.agentainer/mcp.json' >/dev/null
 out=$(run_in $H --network none -- sh -c 'claude mcp list; codex mcp list; opencode debug config; agy mcp list' 2>/dev/null)
-case "$out" in
-*web2*) fail "deleting mcp.json removes managed servers" "$out" ;;
-*) pass "deleting mcp.json removes managed servers" ;;
-esac
+assert_absent "deleting mcp.json removes managed servers" "$out" '"update"' web2
 assert_eq "user Codex settings survive the removal" "1" "$(run_in $H -- grep -c keepme /home/agent/.codex/config.toml 2>/dev/null)"
 
 # Review focus 4: a malformed file keeps the container up.

@@ -60,6 +60,8 @@ chmod 600 "$envf"
 assert_eq "a symlinked 600 env file is accepted quietly" "none" "$(AGENTAINER_ENV_FILE=$T/envlink pod up "$T/my code" 2>&1 | grep "should" || echo none)"
 
 assert_eq "attach uses tmux" "exec|-it|agentainer|tmux|new-session|-A|-s|main" "$(pod attach | paste -sd '|' -)"
+assert_eq "shell opens a bash login shell" "exec|-it|agentainer|bash|-l" "$(pod shell | paste -sd '|' -)"
+has_line "AGENTAINER_IMAGE sets the image" "example.com/x:1" "$(AGENTAINER_IMAGE=example.com/x:1 pod up "$T/my code")"
 assert_eq "down keeps the home volume" "rm|-f|agentainer" "$(pod down | paste -sd '|' -)"
 has_line "status filters on the label" "label=io.github.chadmayfield.agentainer=1" "$(pod status)"
 assert_contains "unknown command fails" "usage" "$(sh "$L" bogus 2>&1 || true)"

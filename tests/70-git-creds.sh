@@ -29,10 +29,7 @@ assert_contains "gh is the git credential helper" "gh auth git-credential" "$out
 assert_contains "identity name from env" "Test User" "$out"
 assert_contains "identity email from env" "test@example.com" "$out"
 assert_contains "names GH_TOKEN" "credential variables set: GH_TOKEN" "$out"
-case "$out" in
-*"$FAKE"*) fail "never prints credential values" ;;
-*) pass "never prints credential values" ;;
-esac
+assert_absent "never prints credential values" "$out" "credential variables set" "$FAKE"
 assert_eq "no duplicate helper lines on a second start" "2" \
 	"$(run_in $H -e GH_TOKEN=$FAKE -- sh -c 'git config --global --get-all credential.https://github.com.helper | wc -l | tr -d " "' 2>/dev/null)"
 
@@ -43,11 +40,8 @@ assert_contains "GITHUB_TOKEN alone sets up git" "gh auth git-credential" \
 	"$(run_in $H -e GITHUB_TOKEN=$FAKE -- git config --global --get-regexp 'credential.*helper' 2>/dev/null)"
 
 # Hostile values never run and never print.
-out=$(run_in $H -e AGENTAINER_QUIET=0 -e 'OPENAI_API_KEY=$(touch /tmp/pwned) `id` "x"' -- sh -c 'test -e /tmp/pwned && echo PWNED; true' 2>&1)
-case "$out" in
-*PWNED* | *'touch /tmp'*) fail "hostile values are not run or printed" "$out" ;;
-*) pass "hostile values are not run or printed" ;;
-esac
+out=$(run_in $H -e AGENTAINER_QUIET=0 -e 'OPENAI_API_KEY=$(touch /tmp/pwned) `id` "x"' -- sh -c 'test -e /tmp/pwned && echo PWNED; echo RAN' 2>&1)
+assert_absent "hostile values are not run or printed" "$out" RAN PWNED "touch /tmp"
 
 assert_contains "warns about empty variables" "set but empty" "$(run_in $H -e GIT_AUTHOR_NAME= -- true 2>&1)"
 run_in $H -e GIT_AUTHOR_NAME="Test User" -- true >/dev/null 2>&1
