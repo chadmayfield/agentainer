@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import stat
 import tempfile
 import unittest
@@ -22,9 +23,12 @@ exit 0
 """
 
 
-class SyncTests(unittest.TestCase):
+class SyncBase(unittest.TestCase):
+    """A temporary home and stub agent CLIs that log their arguments."""
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
         self.home = os.path.join(self.tmp, "home")
         self.bin = os.path.join(self.tmp, "bin")
         os.makedirs(os.path.join(self.home, ".agentainer"))
@@ -61,6 +65,8 @@ class SyncTests(unittest.TestCase):
         text = self.read(".config", "opencode", "opencode.json")
         return (json.loads(text).get("mcp") or {}).get("servers", {}) if text else {}
 
+
+class SyncTests(SyncBase):
     def test_adds_servers_to_each_agent(self):
         self.write_mcp({"fs": {"command": "npx", "args": ["-y", "@example/fs"]}})
         self.assertEqual(self.sync(), 0)
@@ -211,7 +217,7 @@ class SyncTests(unittest.TestCase):
         self.assertIn("agy mcp add --header X-Static: 1 web https://mcp.example.com/mcp", log)
 
 
-class RobustnessTests(SyncTests):
+class RobustnessTests(SyncBase):
     def codex_path(self):
         os.makedirs(os.path.join(self.home, ".codex"), exist_ok=True)
         return os.path.join(self.home, ".codex", "config.toml")
@@ -379,9 +385,14 @@ class RobustnessTests(SyncTests):
 
 
 class WriteAtomicTests(unittest.TestCase):
+    def tmpdir(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        return d
+
     def test_another_writers_temp_file_does_not_block(self):
         # Two containers can share one home volume, so a fixed temp name can collide.
-        d = tempfile.mkdtemp()
+        d = self.tmpdir()
         path = os.path.join(d, "mcp-managed.json")
         os.mkdir(path + ".agentainer-tmp")
         mcp.write_atomic(path, "{}")
@@ -390,7 +401,7 @@ class WriteAtomicTests(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(d)), ["mcp-managed.json", "mcp-managed.json.agentainer-tmp"])
 
     def test_keeps_the_mode_of_a_replaced_file(self):
-        d = tempfile.mkdtemp()
+        d = self.tmpdir()
         path = os.path.join(d, "config.toml")
         with open(path, "w") as f:
             f.write("old")
@@ -400,7 +411,7 @@ class WriteAtomicTests(unittest.TestCase):
 
     def test_symlinked_file_stays_a_symlink(self):
         # A user who keeps config.toml in a dotfiles repo links it into place.
-        d = tempfile.mkdtemp()
+        d = self.tmpdir()
         os.mkdir(os.path.join(d, "dotfiles"))
         target = os.path.join(d, "dotfiles", "config.toml")
         with open(target, "w") as f:
@@ -419,7 +430,7 @@ class WriteAtomicTests(unittest.TestCase):
         os.fsync = lambda fd: (calls.append("fsync"), real_fsync(fd))[1]
         os.replace = lambda a, b: (calls.append("replace"), real_replace(a, b))[1]
         try:
-            mcp.write_atomic(os.path.join(tempfile.mkdtemp(), "f"), "x")
+            mcp.write_atomic(os.path.join(self.tmpdir(), "f"), "x")
         finally:
             os.fsync, os.replace = real_fsync, real_replace
         self.assertEqual(calls[:2], ["fsync", "replace"])
