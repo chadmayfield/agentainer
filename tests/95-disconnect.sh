@@ -5,7 +5,9 @@
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
 name="agentainer-disc-$$"
-trap '"$RUNTIME" rm -f "$name" >/dev/null 2>&1' EXIT INT TERM
+trap '"$RUNTIME" rm -f "$name" >/dev/null 2>&1' EXIT
+# dash skips the EXIT trap on a signal; exiting from the signal trap runs it.
+trap 'exit 130' INT TERM
 run_bg "$name"
 sleep 2
 x() { "$RUNTIME" exec "$name" "$@"; }

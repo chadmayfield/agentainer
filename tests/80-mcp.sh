@@ -26,9 +26,9 @@ assert_contains "codex uses the bearer env var" 'bearer_token_env_var = "WEB_TOK
 
 # Removing a server from mcp.json removes it everywhere on the next start.
 run_in $H --entrypoint sh -- -c 'printf "%s" "{\"mcpServers\":{\"web\":{\"url\":\"https://mcp.example.com/mcp\"}}}" > ~/.agentainer/mcp.json' >/dev/null
-out=$(run_in $H --network none -- sh -c 'claude mcp list; codex mcp list; opencode debug config; agy mcp list' 2>/dev/null)
+out=$(run_in $H --network none -- sh -c 'claude mcp list && codex mcp list && opencode debug config && agy mcp list && echo LISTED' 2>/dev/null)
 assert_contains "the server still in mcp.json stays" "web" "$out"
-assert_absent "removed server is gone from every agent" "$out" '"update"' everything
+assert_absent "removed server is gone from every agent" "$out" LISTED everything
 
 # The unit tests again, on the image's Python, where the real TOML parser checks Codex output.
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -44,8 +44,8 @@ assert_eq "Codex still loads its config" "ok" \
 
 # Deleting mcp.json removes every managed server on the next start.
 run_in $H --entrypoint sh -- -c 'rm ~/.agentainer/mcp.json' >/dev/null
-out=$(run_in $H --network none -- sh -c 'claude mcp list; codex mcp list; opencode debug config; agy mcp list' 2>/dev/null)
-assert_absent "deleting mcp.json removes managed servers" "$out" '"update"' web2
+out=$(run_in $H --network none -- sh -c 'claude mcp list && codex mcp list && opencode debug config && agy mcp list && echo LISTED' 2>/dev/null)
+assert_absent "deleting mcp.json removes managed servers" "$out" LISTED web2
 assert_eq "user Codex settings survive the removal" "1" "$(run_in $H -- grep -c keepme /home/agent/.codex/config.toml 2>/dev/null)"
 
 # SSE servers reach Claude as SSE; Codex and agy cannot use them and say so.

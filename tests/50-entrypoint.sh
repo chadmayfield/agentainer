@@ -22,12 +22,16 @@ assert_eq "keeps edited files" "# mine" "$(run_in $H -- agentainer-entrypoint ca
 
 # Tools install from local fixtures (tests/fixtures/make-tools.sh), with no network.
 repo=$(cd "$(dirname "$0")/.." && pwd)
-FX="-v $repo/tests/fixtures:/fixtures:ro --network none"
+fixtures="$repo/tests/fixtures:/fixtures:ro"
 npm_fixture='fx=$(bash /fixtures/make-tools.sh) && npm install -g --offline --no-fund --no-audit "$fx/fixture.tgz" >/dev/null 2>&1'
 
 # Tools land in the active root from an exec session, then vanish in ephemeral mode.
-run_bg "$name" -v "$VOL:/home/agent" $FX
-wait_for 30 "$RUNTIME" exec "$name" test -L /var/lib/agentainer/active || fail "entrypoint linked the tools root"
+run_bg "$name" -v "$VOL:/home/agent" -v "$fixtures" --network none
+if wait_for 30 "$RUNTIME" exec "$name" test -L /var/lib/agentainer/active; then
+	pass "entrypoint linked the tools root"
+else
+	fail "entrypoint linked the tools root"
+fi
 assert_eq "npm -g installs from an exec session" "rc=0" "$("$RUNTIME" exec "$name" sh -c "$npm_fixture; echo rc=\$?")"
 assert_contains "npm -g lands in tools-active" "/var/lib/agentainer/tools/npm" "$("$RUNTIME" exec "$name" sh -c 'readlink -f "$(command -v fixture-npm)"')"
 "$RUNTIME" rm -f "$name" >/dev/null
@@ -39,13 +43,13 @@ assert_eq "npm global prefix is usable on a fresh start" "rc=0" \
 	"$(run_in --network none -- agentainer-entrypoint sh -c 'npm ls -g --depth=0 >/dev/null 2>&1; echo rc=$?')"
 assert_eq "npm global prefix is usable in persist mode" "rc=0" \
 	"$(run_in --network none -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c 'npm ls -g --depth=0 >/dev/null 2>&1; echo rc=$?')"
-assert_eq "npm -g installs in persist mode" "rc=0" "$(run_in $H $FX -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c "$npm_fixture; echo rc=\$?")"
+assert_eq "npm -g installs in persist mode" "rc=0" "$(run_in $H -v "$fixtures" --network none -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c "$npm_fixture; echo rc=\$?")"
 assert_contains "persist keeps tools" "/home/agent/.agentainer/tools" "$(run_in $H -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c 'readlink -f "$(command -v fixture-npm)"')"
 assert_contains "tools status shows persist" "persist" "$(run_in $H -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint agentainer-tools status)"
 
 # uv tool and go install land in the active root too.
-assert_contains "uv tool lands in tools-active" "/home/agent/.agentainer/tools" "$(run_in $H $FX -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c 'fx=$(bash /fixtures/make-tools.sh) && uv tool install -q --offline "$fx/fixture_uv-1.0-py3-none-any.whl" >/dev/null 2>&1 && readlink -f "$(command -v fixture-uv)"')"
-assert_contains "go install lands in tools-active" "/home/agent/.agentainer/tools" "$(run_in $H $FX -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c 'fx=$(bash /fixtures/make-tools.sh) && cd "$fx/gomod" && GOFLAGS=-mod=mod go install . >/dev/null 2>&1 && readlink -f "$(command -v fixture)"')"
+assert_contains "uv tool lands in tools-active" "/home/agent/.agentainer/tools" "$(run_in $H -v "$fixtures" --network none -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c 'fx=$(bash /fixtures/make-tools.sh) && uv tool install -q --offline "$fx/fixture_uv-1.0-py3-none-any.whl" >/dev/null 2>&1 && readlink -f "$(command -v fixture-uv)"')"
+assert_contains "go install lands in tools-active" "/home/agent/.agentainer/tools" "$(run_in $H -v "$fixtures" --network none -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c 'fx=$(bash /fixtures/make-tools.sh) && cd "$fx/gomod" && GOFLAGS=-mod=mod go install . >/dev/null 2>&1 && readlink -f "$(command -v fixture)"')"
 
 # Version stamp warning after an image change.
 run_in $H -- agentainer-entrypoint sh -c 'echo old > ~/.agentainer/tools-image-version' >/dev/null

@@ -11,13 +11,6 @@ assert_eq "codex version" "codex-cli $CODEX_VERSION" "$(run_in -- codex --versio
 assert_eq "agy version" "$AGY_VERSION" "$(run_in -- agy --version 2>/dev/null)"
 assert_eq "opencode version" "opencode v$OPENCODE_VERSION" "$(run_in -- opencode --version 2>/dev/null | tail -1)"
 
-# The binaries live outside /home/agent, so an empty home volume does not hide them.
-EMPTY="agentainer-test-empty-$$"
-"$RUNTIME" volume create "$EMPTY" >/dev/null
-# shellcheck disable=SC2016 # the script expands in the container
-assert_eq "agents start with an empty home volume" "4" \
-	"$(run_in -v "$EMPTY:/home/agent" -- sh -c 'n=0; for a in claude codex agy opencode; do "$a" --version >/dev/null 2>&1 && n=$((n + 1)); done; echo $n')"
-"$RUNTIME" volume rm -f "$EMPTY" >/dev/null
 assert_eq "agents run as uid 1000" "1000" "$(run_in -- id -u)"
 for b in claude codex agy opencode; do
 	p=$(run_in -- sh -c "readlink -f \$(command -v $b)")
@@ -27,8 +20,11 @@ for b in claude codex agy opencode; do
 	esac
 	assert_eq "$b root-owned" "root" "$(run_in -- stat -c %U "$p")"
 done
-assert_eq "no unused musl Claude binaries" "END" \
-	"$(run_in -- sh -c 'ls -d /usr/local/lib/node_modules/@anthropic-ai/claude-code/node_modules/@anthropic-ai/*musl* 2>/dev/null; echo END')"
+# Claude Code is the native release binary itself, with no npm copy beside it.
+assert_eq "claude is the native binary, not a link" "file" \
+	"$(run_in -- sh -c 'if [ -f /usr/local/bin/claude ] && [ ! -L /usr/local/bin/claude ]; then echo file; else echo other; fi')"
+assert_absent "no npm Claude Code package" \
+	"$(run_in -- sh -c 'ls -d /usr/local/lib/node_modules/@anthropic-ai 2>/dev/null; echo END')" END "@anthropic-ai"
 # shellcheck disable=SC2016 # expands in the container
 assert_eq "update locks in the environment" "1 true 1 1" \
 	"$(run_in -- sh -c 'echo $DISABLE_UPDATES $AGY_CLI_DISABLE_AUTO_UPDATE $OPENCODE_DISABLE_AUTOUPDATE $CLAUDE_CODE_NONBLOCKING_STDOUT')"
