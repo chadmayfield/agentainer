@@ -62,7 +62,7 @@ Check each command's exit code directly. Piping into `tail` or `grep` hides a fa
 ## Image and runtime
 
 - Image-owned files live outside `/home/agent`.
-- The entrypoint never replaces a user's file with the image's copy; it only adds files that are missing. Exceptions, each limited to what it manages: `~/.agentainer/AGENTS.md` follows a new image default when the user never edited it; `agentainer-mcp sync` edits only the MCP servers it added; `gh auth setup-git` and the git identity step write `~/.gitconfig`.
+- The entrypoint never replaces a user's file with the image's copy; it only adds files that are missing. Exceptions, each limited to what it manages: `~/.agentainer/AGENTS.md` follows a new image default when the user never edited it; `agentainer-mcp sync` edits only the MCP servers it added; `gh auth setup-git` and the git identity step write `~/.gitconfig`; the OpenCode step runs `opencode service set disabled true` once, which writes `~/.config/opencode/service.json`.
 - Containers may share one home volume. Anything that writes to it must cope with another container doing the same at the same time (unique temp files, `flock`).
 - Shell scripts are POSIX sh unless they need bash, and must pass `shellcheck` and `shfmt`. `/bin/sh` in the image is dash.
 

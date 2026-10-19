@@ -28,8 +28,8 @@ class LookupFailed(Exception):
 
 # ---- versions.env handling -------------------------------------------------
 
-# The build sources versions.env as root, so every value written must match a strict
-# pattern for its key. Anything else, including an unknown key, is refused.
+# Shell scripts source versions.env and the build passes its values into RUN steps as
+# root, so every value written must match a strict pattern for its key. Anything else, including an unknown key, is refused.
 IMAGE_REF = r"[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}"
 VALUE_PATTERNS = [
     (r"(BASE_IMAGE|[A-Z0-9_]+_IMAGE)", IMAGE_REF),

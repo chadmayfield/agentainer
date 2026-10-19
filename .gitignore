@@ -1,4 +1,4 @@
-# Files the README steps create next to the repo; never commit them.
+# Secret files a user may create inside a checkout (the SSH host key, the env file).
 host.key
 env
 .DS_Store

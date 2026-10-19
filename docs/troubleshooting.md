@@ -18,6 +18,9 @@ That is rootful Docker with a host UID other than 1000. Build an image with your
 **An agent shows an old setting after an upgrade.**
 The entrypoint never overwrites files in your home volume, so new default settings in the image do not replace yours. Compare your files with the image's copies in `/etc/agentainer/home/` ([docs/running.md](running.md#upgrading)).
 
+**`claude doctor` warns that `~/.local/bin` is not in `PATH` and says to run `claude install`.**
+The image installs Claude Code at `/usr/local/bin/claude`, and a new image brings a new version. The warnings look for Anthropic's per-user install in `~/.local`, which the image does not use. Ignore them: `claude install` prints "Updates are disabled by your administrator" and changes nothing.
+
 **`agentainer-mcp` warns that an agent "already has a server named ... that agentainer did not add".**
 That agent's own config has a server with the same name, which the sync leaves alone. Rename one of them in `~/.agentainer/mcp.json` or in the agent.
 

@@ -264,7 +264,7 @@ class WriteTests(unittest.TestCase):
         self.assertEqual(self.read(), "A=1\nGO_VERSION=1.27.3\n")
 
     def test_value_that_could_run_code_is_refused(self):
-        # versions.env is sourced by the build as root, so upstream text must not reach it raw.
+        # Shell scripts source versions.env, so upstream text must not reach it raw.
         bad = [
             {"AGY_URL_AMD64": "https://storage.googleapis.com/antigravity-public/$(touch /tmp/x)/a.tgz"},
             {"GO_VERSION": "1.27.3;id"},
@@ -273,7 +273,7 @@ class WriteTests(unittest.TestCase):
             {"APT_SNAPSHOT": "20261008"},
             {"GO_SHA256_AMD64": "A" * 64},
             {"AGY_SHA512_AMD64": "a" * 127},
-            {"CLAUDE_CODE_INTEGRITY": "sha512-abc def"},
+            {"OPENCODE_INTEGRITY_AMD64": "sha512-abc def"},
             {"NEW_THING": "1"},
         ]
         for update in bad:
