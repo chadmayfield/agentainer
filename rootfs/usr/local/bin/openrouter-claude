@@ -6,7 +6,10 @@ if [ -z "${OPENROUTER_API_KEY:-}" ]; then
 	echo "openrouter-claude: set OPENROUTER_API_KEY first" >&2
 	exit 2
 fi
+# The guide marks CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 as optional; it turns on
+# the gateway model picker. A value the user already set is kept.
 ANTHROPIC_BASE_URL=https://openrouter.ai/api \
 	ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY" \
 	ANTHROPIC_API_KEY="" \
+	CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY="${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY-1}" \
 	exec claude "$@"

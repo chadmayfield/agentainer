@@ -15,10 +15,9 @@ spec = importlib.util.spec_from_loader("agentainer_mcp", loader)
 mcp = importlib.util.module_from_spec(spec)
 loader.exec_module(mcp)
 
-# Stub CLI: logs its argv; "claude mcp get NAME" succeeds when "claude NAME" is in $EXISTING.
+# Stub CLI: logs its argv and succeeds.
 STUB = """#!/bin/sh
 echo "$(basename "$0") $*" >> "$LOG"
-if [ "$1 $2" = "mcp get" ]; then grep -qx "$(basename "$0") $3" "$EXISTING"; exit $?; fi
 exit 0
 """
 
@@ -31,16 +30,14 @@ class SyncTests(unittest.TestCase):
         os.makedirs(os.path.join(self.home, ".agentainer"))
         os.makedirs(self.bin)
         self.log = os.path.join(self.tmp, "log")
-        self.existing = os.path.join(self.tmp, "existing")
         open(self.log, "w").close()
-        open(self.existing, "w").close()
         for name in ("claude", "codex", "opencode", "agy"):
             p = os.path.join(self.bin, name)
             with open(p, "w") as f:
                 f.write(STUB)
             os.chmod(p, os.stat(p).st_mode | stat.S_IEXEC)
         self.env = {"HOME": self.home, "PATH": self.bin + ":/usr/bin:/bin",
-                    "LOG": self.log, "EXISTING": self.existing, "SECRET_TOKEN": "s3cr3t-value"}
+                    "LOG": self.log, "SECRET_TOKEN": "s3cr3t-value"}
 
     def write_mcp(self, servers):
         with open(os.path.join(self.home, ".agentainer", "mcp.json"), "w") as f:
@@ -81,7 +78,7 @@ class SyncTests(unittest.TestCase):
         p = os.path.join(self.bin, "claude")
         with open(p, "w") as f:
             f.write('#!/bin/sh\necho "$(basename "$0") $*" >> "$LOG"\n'
-                    '[ "$1 $2" = "mcp get" ] && exit 1\necho "bad config: $*" >&2\nexit 3\n')
+                    'echo "bad config: $*" >&2\nexit 3\n')
         os.chmod(p, 0o755)
         self.write_mcp({"web": {"url": "https://mcp.example.com", "headers": {"X-Key": "literal-secret-123"}}})
         err = io.StringIO()
@@ -126,8 +123,8 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(sorted(self.opencode_servers()), ["a"])
 
     def test_keeps_unmanaged_servers(self):
-        with open(self.existing, "w") as f:
-            f.write("claude mine\n")
+        with open(os.path.join(self.home, ".claude.json"), "w") as f:
+            json.dump({"mcpServers": {"mine": {"type": "stdio", "command": "theirs"}}}, f)
         os.makedirs(os.path.join(self.home, ".codex"))
         with open(os.path.join(self.home, ".codex", "config.toml"), "w") as f:
             f.write('model = "x"\n\n[mcp_servers.mine]\ncommand = "theirs"\n')
@@ -281,7 +278,7 @@ class RobustnessTests(SyncTests):
     def test_failed_cli_add_returns_nonzero(self):
         p = os.path.join(self.bin, "claude")
         with open(p, "w") as f:
-            f.write('#!/bin/sh\necho "claude $*" >> "$LOG"\ncase "$2" in add-json | get) exit 1 ;; esac\nexit 0\n')
+            f.write('#!/bin/sh\necho "claude $*" >> "$LOG"\ncase "$2" in add-json) exit 1 ;; esac\nexit 0\n')
         self.write_mcp({"k": {"command": "x"}})
         self.assertNotEqual(self.sync(), 0)
         manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
@@ -295,6 +292,89 @@ class RobustnessTests(SyncTests):
         with contextlib.redirect_stderr(err):
             self.sync()
         self.assertIn("only exact ${NAME}", err.getvalue())
+
+    def sync_err(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = self.sync()
+        return rc, err.getvalue()
+
+    def test_codex_bearer_reference_on_other_header_is_left_out(self):
+        # Codex env_http_headers sends the variable's value as the whole header, so
+        # "Bearer ${T}" on a header other than Authorization has no Codex spelling.
+        self.write_mcp({"w": {"url": "https://x.example.com", "headers": {"X-Auth": "Bearer ${T}"}}})
+        rc, err = self.sync_err()
+        toml = self.read(".codex", "config.toml")
+        self.assertNotIn("X-Auth", toml)
+        self.assertNotIn("${T}", toml)
+        self.assertIn("codex: header X-Auth on w", err)
+        self.assertEqual(rc, 0)
+
+    def test_sse_server_goes_to_claude_as_sse(self):
+        self.write_mcp({"s": {"type": "sse", "url": "https://x.example.com/sse"}})
+        rc, err = self.sync_err()
+        self.assertIn('"type": "sse"', self.calls())
+        self.assertNotIn("[mcp_servers.s]", self.read(".codex", "config.toml"))
+        self.assertNotIn("agy mcp add", self.calls())
+        self.assertIn("codex: s uses SSE", err)
+        self.assertIn("agy: s uses SSE", err)
+        manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
+        self.assertEqual(manifest["claude"], ["s"])
+        self.assertEqual(manifest["codex"], [])
+        self.assertEqual(manifest["agy"], [])
+        self.assertEqual(rc, 0)
+
+    def test_http_type_is_accepted(self):
+        self.write_mcp({"h": {"type": "http", "url": "https://x.example.com/mcp"},
+                        "c": {"type": "stdio", "command": "srv"}})
+        rc, err = self.sync_err()
+        self.assertEqual(rc, 0)
+        self.assertNotIn("warning", err)
+        self.assertIn('"type": "http"', self.calls())
+
+    def test_bad_type_is_rejected(self):
+        for s in ({"type": "sse", "command": "srv"}, {"type": "ws", "url": "wss://x.example.com"}):
+            open(self.log, "w").close()
+            self.write_mcp({"b": s})
+            self.assertEqual(self.sync_err()[0], 1)
+            self.assertEqual(self.calls(), "")
+
+    def test_unknown_keys_warn(self):
+        self.write_mcp({"c": {"command": "srv", "cwd": "/tmp", "timeout": 5, "disabled": True}})
+        rc, err = self.sync_err()
+        self.assertIn("c: cwd, disabled, timeout", err)
+        self.assertIn("claude mcp add-json c", self.calls())
+
+    def claude_json(self, data):
+        with open(os.path.join(self.home, ".claude.json"), "w") as f:
+            f.write(data if isinstance(data, str) else json.dumps(data))
+
+    def test_claude_conflict_reads_user_scope_only(self):
+        # A project-scope server of the same name (in /workspace) is not a conflict.
+        self.claude_json({"mcpServers": {"mine": {"type": "stdio", "command": "x"}},
+                          "projects": {"/workspace": {"mcpServers": {"proj": {"command": "y"}}}}})
+        self.write_mcp({"mine": {"command": "z"}, "proj": {"command": "z"}})
+        self.sync()
+        log = self.calls()
+        self.assertNotIn("claude mcp get", log)
+        self.assertNotIn("claude mcp add-json mine", log)
+        self.assertIn("claude mcp add-json proj", log)
+
+    def test_claude_conflict_honours_claude_config_dir(self):
+        d = os.path.join(self.tmp, "cc")
+        os.makedirs(d)
+        with open(os.path.join(d, ".claude.json"), "w") as f:
+            json.dump({"mcpServers": {"mine": {"command": "x"}}}, f)
+        self.env["CLAUDE_CONFIG_DIR"] = d
+        self.write_mcp({"mine": {"command": "z"}})
+        self.sync()
+        self.assertNotIn("claude mcp add-json mine", self.calls())
+
+    def test_unreadable_claude_json_counts_as_taken(self):
+        self.claude_json("{broken")
+        self.write_mcp({"k": {"command": "z"}})
+        self.sync()
+        self.assertNotIn("claude mcp add-json k", self.calls())
 
 
 
@@ -317,6 +397,32 @@ class WriteAtomicTests(unittest.TestCase):
         os.chmod(path, 0o640)
         mcp.write_atomic(path, "new")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o640)
+
+    def test_symlinked_file_stays_a_symlink(self):
+        # A user who keeps config.toml in a dotfiles repo links it into place.
+        d = tempfile.mkdtemp()
+        os.mkdir(os.path.join(d, "dotfiles"))
+        target = os.path.join(d, "dotfiles", "config.toml")
+        with open(target, "w") as f:
+            f.write("old")
+        link = os.path.join(d, "config.toml")
+        os.symlink(os.path.join("dotfiles", "config.toml"), link)
+        mcp.write_atomic(link, "new")
+        self.assertTrue(os.path.islink(link))
+        with open(target) as f:
+            self.assertEqual(f.read(), "new")
+        self.assertEqual(sorted(os.listdir(os.path.join(d, "dotfiles"))), ["config.toml"])
+
+    def test_syncs_data_before_rename(self):
+        calls = []
+        real_fsync, real_replace = os.fsync, os.replace
+        os.fsync = lambda fd: (calls.append("fsync"), real_fsync(fd))[1]
+        os.replace = lambda a, b: (calls.append("replace"), real_replace(a, b))[1]
+        try:
+            mcp.write_atomic(os.path.join(tempfile.mkdtemp(), "f"), "x")
+        finally:
+            os.fsync, os.replace = real_fsync, real_replace
+        self.assertEqual(calls[:2], ["fsync", "replace"])
 
 if __name__ == "__main__":
     unittest.main()

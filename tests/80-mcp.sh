@@ -4,8 +4,9 @@
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
 VOL="agentainer-test-home-$$"
+lockname="agentainer-test-lock-$$"
 "$RUNTIME" volume create "$VOL" >/dev/null
-trap '"$RUNTIME" volume rm -f "$VOL" >/dev/null' EXIT
+trap '"$RUNTIME" rm -f "$lockname" >/dev/null 2>&1; "$RUNTIME" volume rm -f "$VOL" >/dev/null' EXIT
 # dash skips the EXIT trap on a signal; exiting from the signal trap runs it.
 trap 'exit 130' INT TERM
 H="-v $VOL:/home/agent"
@@ -46,6 +47,42 @@ run_in $H --entrypoint sh -- -c 'rm ~/.agentainer/mcp.json' >/dev/null
 out=$(run_in $H --network none -- sh -c 'claude mcp list; codex mcp list; opencode debug config; agy mcp list' 2>/dev/null)
 assert_absent "deleting mcp.json removes managed servers" "$out" '"update"' web2
 assert_eq "user Codex settings survive the removal" "1" "$(run_in $H -- grep -c keepme /home/agent/.codex/config.toml 2>/dev/null)"
+
+# SSE servers reach Claude as SSE; Codex and agy cannot use them and say so.
+"$RUNTIME" volume rm -f "$VOL" >/dev/null
+"$RUNTIME" volume create "$VOL" >/dev/null
+run_in $H --entrypoint sh -- -c 'mkdir -p ~/.agentainer && printf "%s" "{\"mcpServers\":{\"ev\":{\"type\":\"sse\",\"url\":\"https://mcp.example.com/sse\",\"cwd\":\"/tmp\"}}}" > ~/.agentainer/mcp.json' >/dev/null
+out=$(run_in $H --network none -- agentainer-entrypoint claude mcp get ev 2>&1)
+assert_contains "claude gets an SSE server as sse" "Type: sse" "$out"
+assert_contains "codex warns about SSE" "codex: ev uses SSE" "$out"
+assert_contains "agy warns about SSE" "agy: ev uses SSE" "$out"
+assert_contains "unknown keys warn" "ev: cwd not supported" "$out"
+
+# A user-scope Claude server the user added is left alone. A local-scope server for
+# /workspace (the working directory at startup) with the name of a managed one is no
+# conflict: only user scope counts.
+"$RUNTIME" volume rm -f "$VOL" >/dev/null
+"$RUNTIME" volume create "$VOL" >/dev/null
+run_in $H --network none --entrypoint sh -- -c 'claude mcp add-json mine "{\"type\":\"stdio\",\"command\":\"theirs\"}" --scope user >/dev/null; cd /workspace && claude mcp add-json proj "{\"type\":\"stdio\",\"command\":\"theirs\"}" --scope local >/dev/null; mkdir -p ~/.agentainer && printf "%s" "{\"mcpServers\":{\"mine\":{\"command\":\"ours\"},\"proj\":{\"command\":\"ours\"}}}" > ~/.agentainer/mcp.json' >/dev/null
+out=$(run_in $H --network none -w /workspace -- agentainer-entrypoint sh -c 'cd /tmp && claude mcp get mine' 2>&1)
+assert_contains "claude: user's own server is reported" "claude already has a server named mine" "$out"
+assert_absent "claude: user's own server is kept" "$out" "Command: theirs" "Command: ours"
+out=$(run_in $H --network none -- sh -c 'cd /tmp && claude mcp get proj' 2>&1)
+assert_absent "claude: a local-scope server in /workspace is no conflict" "$out" "Scope: User config" "Command: theirs"
+assert_contains "claude: managed server added at user scope" "Command: ours" "$out"
+
+# Containers sharing one home volume take turns running the sync.
+"$RUNTIME" volume rm -f "$VOL" >/dev/null
+"$RUNTIME" volume create "$VOL" >/dev/null
+run_in $H --entrypoint sh -- -c 'mkdir -p ~/.agentainer && printf "%s" "{\"mcpServers\":{\"w\":{\"url\":\"https://mcp.example.com/mcp\"}}}" > ~/.agentainer/mcp.json' >/dev/null
+"$RUNTIME" run -d ${PLATFORM:+--platform "$PLATFORM"} --name "$lockname" $H --entrypoint sh "$IMAGE" -c 'flock ~/.agentainer/.mcp-sync.lock sleep 8' >/dev/null
+sleep 2
+t0=$(date +%s)
+run_in $H --network none -- agentainer-entrypoint true >/dev/null 2>&1
+t1=$(date +%s)
+"$RUNTIME" rm -f "$lockname" >/dev/null 2>&1
+if [ $((t1 - t0)) -ge 4 ]; then pass "sync waits for another container's sync"; else fail "sync waits for another container's sync" "took $((t1 - t0))s"; fi
+assert_contains "the waiting sync still ran" "claude: w" "$(run_in $H --network none -- agentainer-mcp list 2>/dev/null)"
 
 # Review focus 4: a malformed file keeps the container up.
 assert_contains "malformed file keeps the container up" "ok" \

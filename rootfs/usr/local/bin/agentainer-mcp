@@ -30,6 +30,10 @@ except ImportError:  # host-side unit tests on older Python
 REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 BEARER = re.compile(r"^Bearer \$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 AGENTS = ("claude", "codex", "opencode", "agy")
+# Keys each kind of server entry may have. "type" follows Claude Code's .mcp.json
+# ("stdio", "http" or "sse"; https://code.claude.com/docs/en/mcp).
+KEYS = {"command": {"type", "command", "args", "env"}, "url": {"type", "url", "headers"}}
+TYPES = {"command": (None, "stdio"), "url": (None, "http", "sse")}
 MARK_BEGIN = "# >>> agentainer-mcp: managed servers; edit ~/.agentainer/mcp.json instead >>>"
 MARK_END = "# <<< agentainer-mcp <<<"
 
@@ -43,7 +47,7 @@ def _check_str_map(name, field, value):
         raise Invalid("server %r: %s must map names to strings" % (name, field))
 
 
-def load_desired(path):
+def load_desired(path, warn=None):
     try:
         with open(path) as f:
             data = json.load(f)
@@ -70,7 +74,18 @@ def load_desired(path):
             if not isinstance(s["url"], str):
                 raise Invalid("server %r: url must be a string" % name)
             _check_str_map(name, "headers", s.get("headers", {}))
+        kind = "command" if "command" in s else "url"
+        if s.get("type") not in TYPES[kind]:
+            raise Invalid("server %r: type must be one of %s for a %s server" % (
+                name, ", ".join(t for t in TYPES[kind] if t), kind))
+        extra = sorted(set(s) - KEYS[kind])
+        if extra and warn:
+            warn("%s: %s not supported by agentainer-mcp; left out for every agent" % (name, ", ".join(extra)))
     return servers
+
+
+def is_sse(s):
+    return s.get("type") == "sse"
 
 
 def ref_name(value):
@@ -85,6 +100,8 @@ def check_partial(warn, agent, name, field, value):
 
 
 def write_atomic(path, text):
+    # Write through a symlink, so a linked config (a dotfiles repo, say) stays linked.
+    path = os.path.realpath(path)
     d = os.path.dirname(path)
     os.makedirs(d, exist_ok=True)
     # A unique temp name: containers sharing one home volume may write at the same time.
@@ -92,6 +109,8 @@ def write_atomic(path, text):
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())  # the data is on disk before the rename makes it visible
         try:
             mode = os.stat(path).st_mode & 0o7777
         except FileNotFoundError:
@@ -111,7 +130,7 @@ def claude_add(name, s):
     if "command" in s:
         cfg = {"type": "stdio", "command": s["command"], "args": s.get("args", []), "env": s.get("env", {})}
     else:
-        cfg = {"type": "http", "url": s["url"], "headers": s.get("headers", {})}
+        cfg = {"type": s.get("type") or "http", "url": s["url"], "headers": s.get("headers", {})}
     return ["claude", "mcp", "add-json", name, json.dumps(cfg), "--scope", "user"]
 
 
@@ -133,6 +152,9 @@ def agy_add(name, s, warn):
                 warn("agy: %s on %s is a ${VAR} reference; agy has no documented syntax for it, so it "
                      "is left out and the server relies on the inherited environment" % (k, name))
         return cmd + [name, "--", s["command"]] + s.get("args", [])
+    if is_sse(s):
+        warn("agy: %s uses SSE; agy mcp add supports only stdio and http, so it is left out" % name)
+        return None
     for k, v in s.get("headers", {}).items():
         if "${" in v:
             warn("agy: header %s on %s uses ${VAR}; not written, add it by hand" % (k, name))
@@ -179,6 +201,10 @@ def toml_val(v):
 
 
 def codex_table(name, s, warn):
+    if is_sse(s):
+        # "codex mcp add --help": --url is "URL for a streamable HTTP MCP server".
+        warn("codex: %s uses SSE; Codex supports only streamable HTTP, so it is left out" % name)
+        return None
     lines = ["[mcp_servers.%s]" % name]
     if "command" in s:
         lines.append("command = %s" % toml_str(s["command"]))
@@ -206,6 +232,11 @@ def codex_table(name, s, warn):
             m = BEARER.match(v)
             if k.lower() == "authorization" and m:
                 lines.append("bearer_token_env_var = %s" % toml_str(m.group(1)))
+            elif m:
+                # env_http_headers sends the variable's value as the whole header value.
+                warn("codex: header %s on %s is \"Bearer ${%s}\"; Codex can send a variable only as "
+                     "the whole value, so the header is left out (store \"Bearer ...\" in the variable "
+                     "and use ${%s} to pass it)" % (k, name, m.group(1), m.group(1)))
             elif ref_name(v):
                 from_env[k] = ref_name(v)
             else:
@@ -264,7 +295,10 @@ def sync_codex(home, desired, managed, warn):
         if name in taken:
             warn("codex already has a server named %s that agentainer did not add; leaving it" % name)
             continue
-        tables.append(codex_table(name, s, warn))
+        table = codex_table(name, s, warn)
+        if table is None:
+            continue
+        tables.append(table)
         result.append(name)
     new = outside.rstrip("\n")
     if tables:
@@ -293,6 +327,9 @@ def opencode_entry(name, s, warn):
         if s.get("env"):
             e["environment"] = {k: oc_value(warn, name, k, v) for k, v in s["env"].items()}
         return e
+    if is_sse(s):
+        warn("opencode: %s uses SSE; it is written as a remote server, and whether OpenCode "
+             "connects to SSE servers is not verified" % name)
     e = {"type": "remote", "url": s["url"]}
     if s.get("headers"):
         hdr = {}
@@ -353,8 +390,19 @@ class Runner:
         return r.returncode == 0
 
     def claude_exists(self, name):
-        return subprocess.run(["claude", "mcp", "get", name], env=self.env,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        """True when Claude has a user-scope server with this name. Claude stores those in
+        the top-level mcpServers of ~/.claude.json, or of $CLAUDE_CONFIG_DIR/.claude.json
+        (https://code.claude.com/docs/en/mcp). Reading the file, instead of running
+        "claude mcp get", ignores project servers in the working directory and does not
+        start the server."""
+        base = self.env.get("CLAUDE_CONFIG_DIR") or self.env["HOME"]
+        try:
+            with open(os.path.join(base, ".claude.json")) as f:
+                return name in (json.load(f).get("mcpServers") or {})
+        except FileNotFoundError:
+            return False
+        except (ValueError, AttributeError, OSError):
+            return True  # unreadable: treat as taken, the safe answer
 
 
 def sync_cli(agent, desired, managed, runner):
@@ -379,7 +427,8 @@ def sync_cli(agent, desired, managed, runner):
         if name not in managed and exists(name):
             runner.warn("%s already has a server named %s that agentainer did not add; leaving it" % (agent, name))
             continue
-        if runner.run(add(name, s)):
+        argv = add(name, s)
+        if argv is not None and runner.run(argv):
             result.append(name)
     return result
 
@@ -412,7 +461,7 @@ def main(argv=None, env=None):
         return 0
 
     try:
-        desired = load_desired(os.path.join(box, "mcp.json"))
+        desired = load_desired(os.path.join(box, "mcp.json"), warn)
     except Invalid as e:
         print("agentainer-mcp: %s; nothing changed" % e, file=sys.stderr)
         return 1

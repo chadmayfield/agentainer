@@ -56,10 +56,33 @@ out=$(run_in $H -- readlink /home/agent/.gemini/AGENTS.md 2>&1)
 assert_contains "keeps a dangling user symlink" "/nonexistent" "$out"
 assert_contains "warns about a dangling symlink" "points to a missing file" "$out"
 
-# A changed image default prints one notice and diff shows it.
-run_in $H -- agentainer-entrypoint sh -c 'echo stale > ~/.agentainer/agents-default.sha256' >/dev/null
+# An unedited file (it matches an earlier image default) follows a new default, with one line.
+run_in $H -- agentainer-entrypoint sh -c 'echo "# old default" > ~/.agentainer/AGENTS.md; chmod 600 ~/.agentainer/AGENTS.md; sha256sum ~/.agentainer/AGENTS.md | cut -d" " -f1 > ~/.agentainer/agents-default.sha256' >/dev/null
+out=$(run_in $H -- agentainer-entrypoint true 2>&1)
+assert_contains "unedited file: notice" "replaced it with the new default" "$out"
+assert_absent "unedited file: no diff notice" "$out" "replaced it" "agentainer-agents diff"
+assert_eq "unedited file: replaced with the new default" "same" \
+	"$(run_in $H -- agentainer-entrypoint sh -c 'cmp -s ~/.agentainer/AGENTS.md /etc/agentainer/AGENTS.md && echo same')"
+assert_eq "unedited file: owner and mode kept" "agent 600" \
+	"$(run_in $H -- agentainer-entrypoint stat -c '%U %a' /home/agent/.agentainer/AGENTS.md)"
+
+# A symlinked AGENTS.md (for example from a dotfiles manager) is never replaced, even
+# when its target matches an earlier default.
+run_in $H -- agentainer-entrypoint sh -c 'echo "# old default 2" > ~/dotfiles-agents.md; ln -sf ~/dotfiles-agents.md ~/.agentainer/AGENTS.md; sha256sum ~/dotfiles-agents.md | cut -d" " -f1 > ~/.agentainer/agents-default.sha256' >/dev/null
+run_in $H -- agentainer-entrypoint true >/dev/null 2>&1
+assert_eq "symlinked file: link and target kept" "link # old default 2" \
+	"$(run_in $H -- agentainer-entrypoint sh -c 'test -L ~/.agentainer/AGENTS.md && printf "link "; cat ~/dotfiles-agents.md')"
+run_in $H -- agentainer-entrypoint sh -c 'rm ~/.agentainer/AGENTS.md ~/dotfiles-agents.md; cp /etc/agentainer/AGENTS.md ~/.agentainer/AGENTS.md' >/dev/null
+
+# An edited file is never touched: a changed default prints one notice and diff shows it.
+run_in $H -- agentainer-entrypoint sh -c 'echo "# mine" >> ~/.agentainer/AGENTS.md; echo stale > ~/.agentainer/agents-default.sha256' >/dev/null
 assert_contains "notice on changed default" "agentainer-agents diff" "$(run_in $H -- agentainer-entrypoint true 2>&1)"
+assert_contains "edited file is kept" "# mine" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.agentainer/AGENTS.md)"
 assert_absent "no notice the second time" "$(run_in $H -- agentainer-entrypoint echo STARTED 2>&1)" STARTED "agentainer-agents diff"
+# Two images on one home: a default this home has seen before prints nothing, so the
+# notice does not flip back and forth. Here the current default is not the last one seen.
+run_in $H -- agentainer-entrypoint sh -c 'h=$(sha256sum /etc/agentainer/AGENTS.md | cut -d" " -f1); printf "%s\n" "$h" other > ~/.agentainer/agents-default.sha256' >/dev/null
+assert_absent "no notice for a default seen before" "$(run_in $H -- agentainer-entrypoint echo STARTED 2>&1)" STARTED "agentainer-agents diff" "replaced it"
 run_in $H -- agentainer-entrypoint sh -c 'echo "# edited" >> ~/.agentainer/AGENTS.md' >/dev/null
 assert_contains "diff shows the user's edit" "# edited" "$(run_in $H -- agentainer-entrypoint agentainer-agents diff)"
 assert_eq "diff exits 0 when files differ" "rc=0" "$(run_in $H -- agentainer-entrypoint sh -c 'agentainer-agents diff >/dev/null; echo rc=$?')"

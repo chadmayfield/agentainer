@@ -45,4 +45,12 @@ assert_eq "real codex accepts the provider overrides" "ok" \
 	"$(printf '%s' "$doctor" | python3 -c 'import sys,json; print(json.load(sys.stdin)["checks"]["config.load"]["status"])' 2>&1)"
 assert_absent "codex doctor output has no key" "$doctor" '"config.load"' sk-or-test
 
+# openrouter-claude turns on Claude Code's gateway model picker unless the user set the
+# variable.
+orstub='mkdir -p /tmp/s && printf "#!/bin/sh\nenv\n" >/tmp/s/claude && chmod +x /tmp/s/claude'
+assert_contains "openrouter-claude enables gateway model discovery" "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1" \
+	"$(run_in -e OPENROUTER_API_KEY=sk-or-test --entrypoint sh -- -c "$orstub"'; PATH=/tmp/s:$PATH openrouter-claude')"
+assert_contains "openrouter-claude keeps the user's discovery setting" "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=0" \
+	"$(run_in -e OPENROUTER_API_KEY=sk-or-test -e CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=0 --entrypoint sh -- -c "$orstub"'; PATH=/tmp/s:$PATH openrouter-claude')"
+
 finish
