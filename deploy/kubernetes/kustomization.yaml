@@ -1,3 +1,8 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources: [agentainer, containerssh, auth-webhook]
+# Label every object. includeSelectors: false leaves selectors and pod templates
+# alone, so the label can change without recreating workloads.
+labels:
+  - pairs: {app.kubernetes.io/part-of: agentainer}
+    includeSelectors: false

@@ -13,6 +13,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 1022  # the image's own user (image config User 1022:1022)
         runAsGroup: 1022
+        fsGroup: 1022  # the kubelet gives this group read access to the host key
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: containerssh
@@ -22,6 +23,9 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
+          resources:  # example values
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
           volumeMounts:
             - {name: config, mountPath: /etc/containerssh/config.yaml, subPath: config.yaml, readOnly: true}
             - {name: hostkey, mountPath: /etc/containerssh/hostkey, readOnly: true}
@@ -29,4 +33,8 @@ spec:
         - name: config
           configMap: {name: containerssh-config}
         - name: hostkey
-          secret: {secretName: containerssh-hostkey}
+          secret:
+            secretName: containerssh-hostkey
+            items: [{key: host.key, path: host.key}]  # the key name from --from-file=.../host.key
+            # Owner read only. With fsGroup set, the kubelet adds group read (0440).
+            defaultMode: 0400

@@ -16,13 +16,22 @@ spec.loader.exec_module(webhook)
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOnlyForTests user@example.com"
 OTHER = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDifferentKeyForTests"
 OPTKEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKeyWithOptionsForTests"
+ECDSA = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYExampleEcdsaKey"
+SK = "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tExampleSkKey"
+RSA = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABExampleRsaKey"
+ECDSA384 = "ecdsa-sha2-nistp384 AAAAE2VjZHNhLXNoYTItbmlzdHAzODQExampleEcdsa384Key"
+ECDSA521 = "ecdsa-sha2-nistp521 AAAAE2VjZHNhLXNoYTItbmlzdHA1MjEExampleEcdsa521Key"
+SKECDSA = "sk-ecdsa-sha2-nistp256@openssh.com AAAAInNrLWVjZHNhLXNoYTItbmlzdHAyNTZAb3BlbnNzaC5jb20ExampleSkEcdsa"
+CERT = "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tExampleCert"
 
 
 class WebhookTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.keys = tempfile.NamedTemporaryFile("w", delete=False)
-        cls.keys.write("# comment\n\n" + KEY + "\nrestrict,no-pty " + OPTKEY + "\n")
+        cls.keys.write("# comment\n\n" + KEY + "\nrestrict,no-pty " + OPTKEY + "\n"
+                       + ECDSA + " a@example.com\n" + SK + "\n" + RSA + "\n" + ECDSA384 + "\n" + ECDSA521 + "\n"
+                       + SKECDSA + "\n" + CERT + " c@example.com\n")
         cls.keys.close()
         settings = webhook.Settings(user="dev", keys_path=cls.keys.name, pod="agentainer-0", namespace="agentainer")
         cls.server = webhook.make_server(("127.0.0.1", 0), settings)
@@ -49,6 +58,24 @@ class WebhookTests(unittest.TestCase):
         r = self.post("/pubkey", self.base(publicKey=KEY.rsplit(" ", 1)[0]))
         self.assertTrue(r["success"])
         self.assertEqual((r["username"], r["connectionId"], r["remoteAddress"]), ("dev", "abc", "203.0.113.5:5000"))
+
+    def test_containerssh_key_shape_accepted(self):
+        # ContainerSSH v0.6.0 sends strings.TrimSpace(ssh.MarshalAuthorizedKey(key)):
+        # "type base64" with no comment and no trailing newline (internal/sshserver/serverImpl.go).
+        for key in (ECDSA, SK, RSA, ECDSA384, ECDSA521, SKECDSA):
+            with self.subTest(key=key.split()[0]):
+                self.assertTrue(self.post("/pubkey", self.base(publicKey=key))["success"])
+
+    def test_certificate_line_is_refused(self):
+        # sshd trusts certificates only through a cert-authority line, so a certificate
+        # listed as a plain key must not grant access.
+        self.assertFalse(self.post("/pubkey", self.base(publicKey=CERT))["success"])
+
+    def test_unknown_path_is_404(self):
+        req = urllib.request.Request("http://127.0.0.1:%d/other" % self.port, data=b"{}")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 404)
 
     def test_key_with_options_is_refused(self):
         # Options such as from=, restrict or command= are not enforced, so such keys are
@@ -88,7 +115,9 @@ class WebhookTests(unittest.TestCase):
         self.assertEqual(pod["metadata"], {"name": "agentainer-0", "namespace": "agentainer"})
         self.assertFalse(pod["createMissingPods"])
         self.assertTrue(pod["disableAgent"])
-        self.assertEqual(pod["shellCommand"], ["tmux", "new-session", "-A", "-s", "main"])
+        # disableAgent drops the client's TERM, and tmux 3.6 exits without one.
+        self.assertEqual(pod["shellCommand"],
+                         ["/usr/bin/env", "TERM=xterm-256color", "tmux", "new-session", "-A", "-s", "main"])
         self.assertNotIn("spec", pod)
 
     def test_bad_json_is_400(self):

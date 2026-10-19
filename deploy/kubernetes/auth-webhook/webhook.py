@@ -8,11 +8,16 @@ Standard library only. Formats follow ContainerSSH v0.6.0 containerssh-authconfi
 """
 import json
 import os
-import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-KEY_TYPE = re.compile(r"^(ssh-|ecdsa-sha2-|sk-ssh-|sk-ecdsa-)")
+# The key types sshd(8) of OpenSSH 10.4 lists under AUTHORIZED_KEYS FILE FORMAT. Certificate types
+# (*-cert-v01@openssh.com) are left out: sshd trusts a certificate only through a
+# cert-authority line, so a certificate listed as a plain key must not grant access.
+KEY_TYPES = frozenset((
+    "sk-ecdsa-sha2-nistp256@openssh.com", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521", "sk-ssh-ed25519@openssh.com", "ssh-ed25519", "ssh-rsa",
+))
 MAX_BODY = 64 * 1024
 
 
@@ -30,7 +35,7 @@ def load_keys(path):
     with open(path) as f:
         for line in f:
             parts = line.split()
-            if len(parts) >= 2 and KEY_TYPE.match(parts[0]):
+            if len(parts) >= 2 and parts[0] in KEY_TYPES:
                 keys.add(parts[0] + " " + parts[1])
     return keys
 
@@ -83,7 +88,11 @@ def make_handler(s):
                     "metadata": {"name": s.pod, "namespace": s.namespace},
                     "createMissingPods": False,
                     "disableAgent": True,
-                    "shellCommand": ["tmux", "new-session", "-A", "-s", "main"],
+                    # disableAgent drops the client's environment, TERM included
+                    # (ContainerSSH v0.6.0 kubernetesPodImpl.go createExecLocked), and
+                    # tmux exits with "open terminal failed" when TERM is unset.
+                    "shellCommand": ["/usr/bin/env", "TERM=xterm-256color",
+                                     "tmux", "new-session", "-A", "-s", "main"],
                 }}}
             else:
                 return self._reply(404, {"message": "not found"})
