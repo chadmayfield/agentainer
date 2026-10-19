@@ -69,6 +69,9 @@ assert_eq "no codex app-server daemon" "none" "$(x sh -c 'pgrep -f "[c]odex app-
 # Reattach the way users do, from a new exec session.
 assert_contains "new-session -A reattaches" "opencode" \
 	"$(x sh -c 'script -qfc "tmux new-session -A -s main \; detach" /dev/null >/dev/null 2>&1; tmux list-windows -t main -F "#{window_name}"')"
+same_panes "reattaching keeps every agent process"
+assert_eq "LANG is UTF-8 inside tmux" "C.UTF-8" \
+	"$(x sh -c 'tmux new-session -d -s l "echo \$LANG; sleep 5"; sleep 1; tmux capture-pane -p -t l | head -1')"
 assert_contains "UTF-8 passes through tmux" "é" \
 	"$(x sh -c 'tmux new-session -d -s u "printf \"é\\n\"; sleep 5"; sleep 1; tmux capture-pane -p -t u')"
 

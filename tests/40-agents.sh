@@ -10,6 +10,13 @@ assert_eq "codex version" "codex-cli $CODEX_VERSION" "$(run_in -- codex --versio
 # agy prints the bare version for --version (checked in the built image).
 assert_eq "agy version" "$AGY_VERSION" "$(run_in -- agy --version 2>/dev/null)"
 assert_eq "opencode version" "opencode v$OPENCODE_VERSION" "$(run_in -- opencode --version 2>/dev/null | tail -1)"
+
+# The binaries live outside /home/agent, so an empty home volume does not hide them.
+EMPTY="agentainer-test-empty-$$"
+"$RUNTIME" volume create "$EMPTY" >/dev/null
+assert_eq "agents start with an empty home volume" "4" \
+	"$(run_in -v "$EMPTY:/home/agent" -- sh -c 'n=0; for a in claude codex agy opencode; do "$a" --version >/dev/null 2>&1 && n=$((n + 1)); done; echo $n')"
+"$RUNTIME" volume rm -f "$EMPTY" >/dev/null
 assert_eq "agents run as uid 1000" "1000" "$(run_in -- id -u)"
 for b in claude codex agy opencode; do
 	p=$(run_in -- sh -c "readlink -f \$(command -v $b)")
