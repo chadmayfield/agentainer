@@ -14,6 +14,7 @@ assert_eq "opencode version" "opencode v$OPENCODE_VERSION" "$(run_in -- opencode
 # The binaries live outside /home/agent, so an empty home volume does not hide them.
 EMPTY="agentainer-test-empty-$$"
 "$RUNTIME" volume create "$EMPTY" >/dev/null
+# shellcheck disable=SC2016 # the script expands in the container
 assert_eq "agents start with an empty home volume" "4" \
 	"$(run_in -v "$EMPTY:/home/agent" -- sh -c 'n=0; for a in claude codex agy opencode; do "$a" --version >/dev/null 2>&1 && n=$((n + 1)); done; echo $n')"
 "$RUNTIME" volume rm -f "$EMPTY" >/dev/null
