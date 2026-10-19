@@ -103,6 +103,19 @@ assert_eq "bash -l keeps /usr/local/bin before ~/.local/bin" "rc=0" \
 		b=$(echo "$p" | tr : "\n" | grep -nx /home/agent/.local/bin | head -1 | cut -d: -f1)
 		if [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; then echo rc=0; else echo "rc=1 PATH=$p"; fi' 2>/dev/null)"
 
+# gh auth setup-git runs only when gh is not already the credential helper, so containers
+# sharing a home volume do not rewrite ~/.gitconfig at the same time.
+ghstub='mkdir -p /tmp/f && printf "#!/bin/sh\necho \"gh \$*\" >> /tmp/f/log\n" >/tmp/f/gh && chmod +x /tmp/f/gh'
+assert_contains "setup-git runs when no helper is set" "gh auth setup-git" \
+	"$(run_in -e GH_TOKEN=x --entrypoint sh -- -c "$ghstub"'; PATH=/tmp/f:$PATH agentainer-entrypoint true 2>/dev/null; cat /tmp/f/log')"
+assert_absent "setup-git is skipped when gh is the helper" \
+	"$(run_in -e GH_TOKEN=x --entrypoint sh -- -c "$ghstub"'; git config --global --add credential.https://github.com.helper "!/tmp/f/gh auth git-credential"; PATH=/tmp/f:$PATH agentainer-entrypoint echo STARTED 2>&1; cat /tmp/f/log 2>/dev/null')" \
+	STARTED "setup-git"
+# A helper that points at a gh outside the container (for example copied from a host's
+# ~/.gitconfig) does not count.
+assert_contains "setup-git runs when the helper names another gh" "setup-git" \
+	"$(run_in -e GH_TOKEN=x --entrypoint sh -- -c "$ghstub"'; git config --global --add credential.https://github.com.helper "!/opt/homebrew/bin/gh auth git-credential"; PATH=/tmp/f:$PATH agentainer-entrypoint echo STARTED >/dev/null 2>&1; cat /tmp/f/log 2>/dev/null')"
+
 # Optional steps report a failure and the container still starts.
 assert_contains "a failing opencode setup step warns" "70-opencode.sh failed" \
 	"$(run_in --entrypoint sh -- -c 'mkdir -p /tmp/f && printf "#!/bin/sh\nexit 1\n" >/tmp/f/opencode && chmod +x /tmp/f/opencode && PATH=/tmp/f:$PATH agentainer-entrypoint echo started 2>&1')"
