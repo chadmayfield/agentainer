@@ -19,6 +19,9 @@ OPTKEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKeyWithOptionsForTests"
 ECDSA = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYExampleEcdsaKey"
 SK = "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tExampleSkKey"
 RSA = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABExampleRsaKey"
+ECDSA384 = "ecdsa-sha2-nistp384 AAAAE2VjZHNhLXNoYTItbmlzdHAzODQExampleEcdsa384Key"
+ECDSA521 = "ecdsa-sha2-nistp521 AAAAE2VjZHNhLXNoYTItbmlzdHA1MjEExampleEcdsa521Key"
+SKECDSA = "sk-ecdsa-sha2-nistp256@openssh.com AAAAInNrLWVjZHNhLXNoYTItbmlzdHAyNTZAb3BlbnNzaC5jb20ExampleSkEcdsa"
 CERT = "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tExampleCert"
 
 
@@ -27,7 +30,8 @@ class WebhookTests(unittest.TestCase):
     def setUpClass(cls):
         cls.keys = tempfile.NamedTemporaryFile("w", delete=False)
         cls.keys.write("# comment\n\n" + KEY + "\nrestrict,no-pty " + OPTKEY + "\n"
-                       + ECDSA + " a@example.com\n" + SK + "\n" + RSA + "\n" + CERT + " c@example.com\n")
+                       + ECDSA + " a@example.com\n" + SK + "\n" + RSA + "\n" + ECDSA384 + "\n" + ECDSA521 + "\n"
+                       + SKECDSA + "\n" + CERT + " c@example.com\n")
         cls.keys.close()
         settings = webhook.Settings(user="dev", keys_path=cls.keys.name, pod="agentainer-0", namespace="agentainer")
         cls.server = webhook.make_server(("127.0.0.1", 0), settings)
@@ -58,7 +62,7 @@ class WebhookTests(unittest.TestCase):
     def test_containerssh_key_shape_accepted(self):
         # ContainerSSH v0.6.0 sends strings.TrimSpace(ssh.MarshalAuthorizedKey(key)):
         # "type base64" with no comment and no trailing newline (internal/sshserver/serverImpl.go).
-        for key in (ECDSA, SK, RSA):
+        for key in (ECDSA, SK, RSA, ECDSA384, ECDSA521, SKECDSA):
             with self.subTest(key=key.split()[0]):
                 self.assertTrue(self.post("/pubkey", self.base(publicKey=key))["success"])
 

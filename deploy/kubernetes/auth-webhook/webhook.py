@@ -11,7 +11,7 @@ import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# The key types sshd(8) lists under AUTHORIZED_KEYS FILE FORMAT. Certificate types
+# The key types sshd(8) of OpenSSH 10.4 lists under AUTHORIZED_KEYS FILE FORMAT. Certificate types
 # (*-cert-v01@openssh.com) are left out: sshd trusts a certificate only through a
 # cert-authority line, so a certificate listed as a plain key must not grant access.
 KEY_TYPES = frozenset((
