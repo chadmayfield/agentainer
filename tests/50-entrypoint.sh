@@ -44,6 +44,8 @@ run_in $H -- agentainer-entrypoint sh -c 'echo old > ~/.agentainer/tools-image-v
 assert_contains "warns on image change with persisted tools" "image changed" "$(run_in $H -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint true 2>&1)"
 run_in $H -- agentainer-entrypoint agentainer-tools reset >/dev/null
 assert_contains "reset renames, never deletes" "tools." "$(run_in $H -- agentainer-entrypoint ls /home/agent/.agentainer)"
+assert_eq "npm works right after reset, without a restart" "rc=0" \
+	"$(run_in --network none -e AGENTAINER_TOOLS=persist -- agentainer-entrypoint sh -c 'agentainer-tools reset >/dev/null; npm ls -g --depth=0 >/dev/null 2>&1; echo rc=$?')"
 assert_eq "reset leaves an empty tools dir" "yes" "$(run_in $H -- agentainer-entrypoint sh -c 'test -d ~/.agentainer/tools/bin && echo yes')"
 
 # A bad AGENTAINER_TOOLS value falls back to ephemeral with a warning.

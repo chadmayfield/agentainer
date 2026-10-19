@@ -37,8 +37,7 @@ assert_eq "source label" "https://github.com/chadmayfield/agentainer" \
 assert_eq "version label is ours, not the base image's" "rc=0" \
 	"$(
 		v=$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
-		[ "$v" != 26.04 ] && [ -n "$v" ]
-		echo rc=$?
+		if [ "$v" != 26.04 ] && [ -n "$v" ]; then echo rc=0; else echo rc=1; fi
 	)"
 
 # Codex's voice host needs a microphone, which a container does not have.

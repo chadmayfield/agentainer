@@ -34,6 +34,6 @@ jobs:
           git push origin "$b"
           { echo "Automated weekly pin update. Review and merge by hand."; echo; echo '```'; cat changes.txt; echo '```'; } > body.md
           gh pr create --base develop --head "$b" --title "Weekly version bump $(date -u +%Y-%m-%d)" --body-file body.md
-          # On the first bump PR (#2), GitHub created the pull_request CI run but held it as
-          # "action_required" until a maintainer chose "Approve and run". A dispatched run did
-          # not count toward the PR's required checks, so none is started here.
+          # A pull request opened with GITHUB_TOKEN gets its CI runs "in an approval-required
+          # state" (GitHub docs, actions-do-not-trigger-workflows): a maintainer starts them with
+          # "Approve workflows to run".

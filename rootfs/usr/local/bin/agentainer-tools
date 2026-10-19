@@ -1,6 +1,8 @@
 #!/bin/sh
 # agentainer-tools status|reset (spec section 10)
 set -eu
+# shellcheck source=rootfs/usr/local/lib/agentainer/tools-layout.sh
+. /usr/local/lib/agentainer/tools-layout.sh
 active=/var/lib/agentainer/active
 case "${1:-status}" in
 status)
@@ -12,7 +14,7 @@ reset)
 	if [ -d "$dir" ]; then
 		dest="$dir.$(date -u +%Y%m%dT%H%M%SZ).$$.bak"
 		mv "$dir" "$dest"
-		mkdir -p "$dir/bin" "$dir/npm/bin"
+		tools_mkdirs "$dir"
 		rm -f "$HOME/.agentainer/tools-image-version"
 		echo "moved $dir to $dest"
 	else

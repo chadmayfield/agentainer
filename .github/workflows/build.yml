@@ -239,8 +239,9 @@ jobs:
             BUILD_DATE=${{ steps.pins.outputs.date }}
           sbom: true
           provenance: true
-          # zstd level 19: measured on this image, 946 MB to download against 1,191 MB with gzip.
-          outputs: type=image,name=ghcr.io/chadmayfield/agentainer,push-by-digest=true,name-canonical=true,push=true,compression=zstd,compression-level=19,force-compression=true
+          # zstd: 946 MB to download against 1,191 MB with gzip, measured on this image. BuildKit
+          # maps levels 9 to 22 to its "Best" setting (about zstd 11; Docker build exporters docs).
+          outputs: type=image,name=ghcr.io/chadmayfield/agentainer,push-by-digest=true,name-canonical=true,push=true,compression=zstd,compression-level=9,force-compression=true
       - run: mkdir -p digests && touch "digests/${DIGEST#sha256:}"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
