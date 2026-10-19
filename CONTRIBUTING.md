@@ -21,6 +21,7 @@ sh tests/run.sh                             # container tests against that image
 sh tests/lint.sh                            # shellcheck and shfmt, run from the image
 python3 -m unittest discover -s tests/unit  # unit tests, no container needed
 sh tests/host/test-launcher.sh              # launcher tests, no container needed
+sh tests/host/test-build-script.sh          # scripts/build.sh tests, no container needed
 sh tests/host/test-manifests.sh             # Kubernetes manifest tests (kubectl, and the image for yq)
 ```
 

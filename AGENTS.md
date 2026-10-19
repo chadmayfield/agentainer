@@ -28,6 +28,7 @@ sh tests/run.sh [tests/NN-name.sh ...]      # container tests
 sh tests/lint.sh                            # shellcheck and shfmt
 python3 -m unittest discover -s tests/unit
 sh tests/host/test-launcher.sh
+sh tests/host/test-build-script.sh
 sh tests/host/test-manifests.sh
 ```
 
@@ -49,7 +50,7 @@ Check each command's exit code directly. Piping into `tail` or `grep` hides a fa
 ## Pins and downloads
 
 - Every pinned version, digest and checksum for the image lives in `versions.env`. Do not hardcode versions in the `Containerfile` or scripts. Exceptions: GitHub Actions and the actionlint image are pinned by SHA or digest in the workflow files, and the two image references in `deploy/kubernetes/*/deployment.yaml` repeat their `versions.env` pins (`bump_versions.py` rewrites them and `tests/host/test-manifests.sh` checks they match).
-- A new pin needs a resolver in `scripts/bump_versions.py`, and its key must match a pattern in `VALUE_PATTERNS` (most keys match by suffix, such as `_VERSION` or `_SHA256_ARM64`). The weekly update refuses to write a value that matches no pattern.
+- A new pin needs a resolver in `scripts/bump_versions.py`, unless the weekly update must never change it (`SOURCE_DATE_EPOCH`). Its key must match a pattern in `VALUE_PATTERNS` (most keys match by suffix, such as `_VERSION` or `_SHA256_ARM64`). The weekly update refuses to write a value that matches no pattern.
 - Check every download against the checksum the project publishes. When a project publishes none, record the SHA-256 you computed and say so in a comment.
 - Install upstream release binaries. Do not build a tool from source to pick up a newer Go, Rust or library version.
 

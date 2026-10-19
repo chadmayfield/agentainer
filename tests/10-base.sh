@@ -23,6 +23,9 @@ assert_eq "no snapshot pin left in sources" "rc=1" "$(run_in -- sh -c 'grep -rl 
 assert_contains "sources use archive.ubuntu.com" "archive.ubuntu.com" "$(run_in -- cat /etc/apt/sources.list.d/ubuntu.sources)"
 assert_eq "sources do not use ports.ubuntu.com" "rc=1" "$(run_in -- sh -c 'grep -rl ports.ubuntu.com /etc/apt; echo rc=$?')"
 assert_absent "no macOS .DS_Store files in the image" "$(run_in -- sh -c 'find / -xdev -name .DS_Store 2>/dev/null; echo END')" END .DS_Store
+# Build steps that run a tool as root can leave state in /root, which would ship in the image.
+assert_absent "no build leftovers in /root" "$(run_in --user root --entrypoint find -- /root -mindepth 1)" \
+	/root/.profile .codex .cache .npm .config
 
 # Not in the image: the base image's unused Pebble service manager and ImageMagick, which
 # add scanner findings.

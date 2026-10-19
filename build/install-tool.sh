@@ -1,0 +1,143 @@
+#!/bin/bash
+# Installs one tool into its final path inside a build stage: install-tool.sh NAME.
+# Each Containerfile stage passes only that tool's pins from versions.env as build
+# arguments, so a bump of one tool rebuilds only its stage. Every download is checked
+# against a pin before it is used (fetch.sh).
+set -euo pipefail
+F=/usr/local/lib/agentainer-build/fetch.sh
+case "${TARGETARCH:?}" in
+amd64)
+	A=AMD64
+	TRIPLE=x86_64
+	TRIVY_ARCH=64bit
+	OC=linux-x64-baseline
+	CLAUDE_PLATFORM=linux-x64
+	;;
+arm64)
+	A=ARM64
+	TRIPLE=aarch64
+	TRIVY_ARCH=ARM64
+	OC=linux-arm64
+	CLAUDE_PLATFORM=linux-arm64
+	;;
+*)
+	echo "unsupported arch $TARGETARCH" >&2
+	exit 1
+	;;
+esac
+# pin NAME: the value of the build argument NAME_<arch>, for example GO_SHA256_ARM64.
+pin() {
+	local v="$1_$A"
+	printf '%s' "${!v}"
+}
+W=$(mktemp -d)
+cd "$W"
+
+case "${1:?usage: install-tool.sh NAME}" in
+go)
+	# https://go.dev/dl/
+	sh $F "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" sha256 "$(pin GO_SHA256)" go.tgz
+	tar -C /usr/local -xzf go.tgz
+	# go build, vet, test and doc do not use Go's own test suite or API lists (29 MB).
+	rm -rf /usr/local/go/test /usr/local/go/api
+	;;
+rust)
+	# rustup-init from https://static.rust-lang.org/rustup/archive/
+	sh $F "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${TRIPLE}-unknown-linux-gnu/rustup-init" sha256 "$(pin RUSTUP_SHA256)" rustup-init
+	chmod +x rustup-init
+	# Checks that the manifest Rust publishes for this version matches versions.env.
+	# rustup-init downloads its own copy and checks each component against it; this
+	# check does not bind rustup to the file downloaded here.
+	sh $F "https://static.rust-lang.org/dist/channel-rust-${RUST_VERSION}.toml" sha256 "${RUST_MANIFEST_SHA256}" rust-manifest.toml
+	RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo ./rustup-init -y --no-modify-path \
+		--profile minimal --default-toolchain "${RUST_VERSION}" --component clippy,rustfmt
+	rm -rf /opt/rustup/toolchains/*/share/doc
+	chmod -R a+rX /opt/rustup /opt/cargo
+	;;
+yq)
+	sh $F "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${TARGETARCH}" sha256 "$(pin YQ_SHA256)" yq
+	install -m 0755 yq /usr/local/bin/yq
+	;;
+gh)
+	sh $F "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz" sha256 "$(pin GH_SHA256)" gh.tgz
+	tar -xzf gh.tgz
+	install -m 0755 "gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" /usr/local/bin/gh
+	;;
+uv)
+	sh $F "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${TRIPLE}-unknown-linux-gnu.tar.gz" sha256 "$(pin UV_SHA256)" uv.tgz
+	tar -xzf uv.tgz
+	install -m 0755 "uv-${TRIPLE}-unknown-linux-gnu/uv" "uv-${TRIPLE}-unknown-linux-gnu/uvx" /usr/local/bin/
+	;;
+trivy)
+	sh $F "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" sha256 "$(pin TRIVY_SHA256)" trivy.tgz
+	tar -xzf trivy.tgz trivy
+	install -m 0755 trivy /usr/local/bin/trivy
+	;;
+curlie)
+	sh $F "https://github.com/rs/curlie/releases/download/v${CURLIE_VERSION}/curlie_${CURLIE_VERSION}_linux_${TARGETARCH}.tar.gz" sha256 "$(pin CURLIE_SHA256)" curlie.tgz
+	tar -xzf curlie.tgz curlie
+	install -m 0755 curlie /usr/local/bin/curlie
+	;;
+golangci-lint)
+	G="golangci-lint-${GOLANGCI_LINT_VERSION}-linux-${TARGETARCH}"
+	sh $F "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/${G}.tar.gz" sha256 "$(pin GOLANGCI_LINT_SHA256)" golangci.tgz
+	tar -xzf golangci.tgz
+	install -m 0755 "${G}/golangci-lint" /usr/local/bin/golangci-lint
+	;;
+tea)
+	# Gitea CLI, from gitea.com
+	sh $F "https://gitea.com/gitea/tea/releases/download/v${TEA_VERSION}/tea-${TEA_VERSION}-linux-${TARGETARCH}.xz" sha256 "$(pin TEA_SHA256)" tea.xz
+	xz -d tea.xz
+	install -m 0755 tea /usr/local/bin/tea
+	;;
+claude)
+	# The native Claude Code binary from Anthropic's release host, the file the native
+	# installer downloads (https://claude.ai/install.sh). The pinned SHA-256 comes from
+	# the release's GPG-signed manifest.json (code.claude.com/docs/en/setup, "Binary
+	# integrity and code signing").
+	sh $F "https://downloads.claude.ai/claude-code-releases/${CLAUDE_CODE_VERSION}/${CLAUDE_PLATFORM}/claude" sha256 "$(pin CLAUDE_CODE_SHA256)" claude
+	install -m 0755 claude /usr/local/bin/claude
+	/usr/local/bin/claude --version >/dev/null
+	;;
+codex)
+	# The complete release package, laid out as OpenAI's installer does
+	# (chatgpt.com/codex/install.sh, install_package_release). The interactive CLI needs it.
+	sh $F "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-package-${TRIPLE}-unknown-linux-musl.tar.gz" sha256 "$(pin CODEX_SHA256)" codex.tgz
+	mkdir -p /opt/codex
+	# As root, tar would keep the archive's owner; the install must be root-owned.
+	tar --no-same-owner -xzf codex.tgz -C /opt/codex
+	chown -R root:root /opt/codex
+	test -f /opt/codex/codex-package.json
+	chmod 0755 /opt/codex/bin/codex /opt/codex/bin/codex-code-mode-host /opt/codex/codex-path/rg
+	if [ -f /opt/codex/codex-resources/bwrap ]; then chmod 0755 /opt/codex/codex-resources/bwrap; fi
+	# The voice host (77 MB) captures audio for dictation; a container has no microphone.
+	rm -rf /opt/codex/codex-resources/voice
+	ln -sf bin/codex /opt/codex/codex
+	# Codex writes state under $HOME when it runs. This stage's /root is not copied
+	# into the image.
+	/opt/codex/bin/codex --version >/dev/null
+	;;
+agy)
+	# The tarball named in versions.env; the binary inside is "antigravity" (install.sh).
+	sh $F "$(pin AGY_URL)" sha512 "$(pin AGY_SHA512)" agy.tgz
+	if tar -tzf agy.tgz >/dev/null 2>&1; then
+		tar -xzf agy.tgz antigravity
+		install -m 0755 antigravity /usr/local/bin/agy
+	else
+		# The official install.sh also accepts a raw binary payload.
+		install -m 0755 agy.tgz /usr/local/bin/agy
+	fi
+	;;
+opencode)
+	# OpenCode v2: the npm platform package, checked against the registry's integrity.
+	sh $F "https://registry.npmjs.org/@opencode/cli-${OC}/-/cli-${OC}-${OPENCODE_VERSION}.tgz" sri "$(pin OPENCODE_INTEGRITY)" opencode.tgz
+	tar -xzf opencode.tgz package/bin/opencode
+	install -m 0755 package/bin/opencode /usr/local/bin/opencode
+	;;
+*)
+	echo "install-tool.sh: unknown tool $1" >&2
+	exit 2
+	;;
+esac
+cd /
+rm -rf "$W"

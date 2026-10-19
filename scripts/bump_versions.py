@@ -9,6 +9,8 @@ import datetime
 import json
 import os
 import re
+import subprocess
+import tempfile
 import sys
 import urllib.request
 
@@ -32,6 +34,7 @@ IMAGE_REF = r"[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f
 VALUE_PATTERNS = [
     (r"(BASE_IMAGE|[A-Z0-9_]+_IMAGE)", IMAGE_REF),
     (r"APT_SNAPSHOT", r"[0-9]{8}T[0-9]{6}Z"),
+    (r"SOURCE_DATE_EPOCH", r"[0-9]{1,12}"),
     (r"[A-Z0-9_]+_VERSION", r"v?[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.-]+)?"),
     (r"[A-Z0-9_]+_SHA256(_[A-Z0-9]+)?", r"[0-9a-f]{64}"),
     (r"[A-Z0-9_]+_SHA512(_[A-Z0-9]+)?", r"[0-9a-f]{128}"),
@@ -89,6 +92,15 @@ def fetch(url, accept=None):
     try:
         with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r:
             return r.read().decode()
+    except Exception as e:  # noqa: BLE001 - report any network error the same way
+        raise LookupFailed("%s: %s" % (url, e))
+
+
+def fetch_bytes(url):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "agentainer-bump"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.read()
     except Exception as e:  # noqa: BLE001 - report any network error the same way
         raise LookupFailed("%s: %s" % (url, e))
 
@@ -275,21 +287,78 @@ def r_tea():
     return out
 
 
-def parse_npm_channel(doc, tag):
-    """Version and tarball integrity for an npm dist-tag."""
-    ver = (doc.get("dist-tags") or {}).get(tag)
-    if not ver:
-        raise LookupFailed("npm: no %r dist-tag" % tag)
-    try:
-        return ver, doc["versions"][ver]["dist"]["integrity"]
-    except KeyError:
-        raise LookupFailed("npm: no integrity for %s" % ver)
+# Claude Code's native release host, the one https://claude.ai/install.sh downloads from.
+# Each release's manifest.json lists a SHA-256 per platform and is signed with this key
+# (code.claude.com/docs/en/setup, "Binary integrity and code signing").
+CLAUDE_RELEASES = "https://downloads.claude.ai/claude-code-releases"
+CLAUDE_KEY_URL = "https://downloads.claude.ai/keys/claude-code.asc"
+CLAUDE_KEY_FINGERPRINT = "31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
+CLAUDE_PLATFORMS = (("AMD64", "linux-x64"), ("ARM64", "linux-arm64"))
+
+
+def parse_claude_manifest(doc, ver):
+    """The pins for one Claude Code release from its manifest.json."""
+    if doc.get("version") != ver:
+        raise LookupFailed("claude: manifest is for %r, not %s" % (doc.get("version"), ver))
+    out = {"CLAUDE_CODE_VERSION": ver}
+    for up, platform in CLAUDE_PLATFORMS:
+        checksum = ((doc.get("platforms") or {}).get(platform) or {}).get("checksum", "")
+        if not HEX64.match(checksum):
+            raise LookupFailed("claude %s: no valid checksum for %s" % (ver, platform))
+        out["CLAUDE_CODE_SHA256_" + up] = checksum
+    return out
+
+
+def verify_signature(data, sig, key, fingerprint):
+    """Raise LookupFailed unless sig is a valid signature of data by the key with fingerprint.
+
+    The key file comes from the same host as the data, so it must hold exactly one primary
+    key, and gpg's status output must name that key as the signer. gpg --verify alone
+    accepts a signature by any key in the keyring.
+    """
+    with tempfile.TemporaryDirectory() as home:
+        env = dict(os.environ, GNUPGHOME=home)
+        paths = {}
+        for name, content in (("key", key), ("data", data), ("sig", sig)):
+            paths[name] = os.path.join(home, name)
+            with open(paths[name], "wb") as f:
+                f.write(content)
+        gpg = ["gpg", "--batch", "--no-tty"]
+        try:
+            subprocess.run(gpg + ["--import", paths["key"]], env=env, check=True, capture_output=True)
+            listing = subprocess.run(gpg + ["--with-colons", "--fingerprint"], env=env, check=True,
+                                     capture_output=True, text=True).stdout
+            lines = listing.splitlines()
+            # The fpr line right after each pub line is that primary key's fingerprint.
+            primaries = [lines[i + 1].split(":")[9] for i, line in enumerate(lines)
+                         if line.startswith("pub:") and i + 1 < len(lines) and lines[i + 1].startswith("fpr:")]
+            if primaries != [fingerprint]:
+                raise LookupFailed("signing key file holds %s, expected only %s" % (primaries, fingerprint))
+            # --trusted-key accepts this key for the check without a trust database entry.
+            status = subprocess.run(gpg + ["--status-fd", "1", "--trusted-key", fingerprint[-16:],
+                                           "--verify", paths["sig"], paths["data"]],
+                                    env=env, check=True, capture_output=True, text=True).stdout
+        except (OSError, subprocess.CalledProcessError) as e:
+            raise LookupFailed("signature check failed: %s" % e)
+    # GnuPG doc/DETAILS: GOODSIG means a good signature by a key that is neither expired nor
+    # revoked; the last VALIDSIG field is the signing key's primary key fingerprint.
+    words = [line.split() for line in status.splitlines() if line.startswith("[GNUPG:] ")]
+    good = any(w[1] == "GOODSIG" for w in words if len(w) > 1)
+    signers = [w[-1] for w in words if len(w) > 2 and w[1] == "VALIDSIG"]
+    if not good or signers != [fingerprint]:
+        raise LookupFailed("signature is not a good signature by %s" % fingerprint)
 
 
 def r_claude():
     # The "stable" channel Anthropic documents for Claude Code (code.claude.com/docs/en/setup).
-    ver, integrity = parse_npm_channel(fetch_json("https://registry.npmjs.org/@anthropic-ai/claude-code"), "stable")
-    return {"CLAUDE_CODE_VERSION": ver, "CLAUDE_CODE_INTEGRITY": integrity}
+    ver = fetch(CLAUDE_RELEASES + "/stable").strip()
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", ver):
+        raise LookupFailed("claude: unexpected stable version %r" % ver[:40])
+    base = "%s/%s/" % (CLAUDE_RELEASES, ver)
+    manifest = fetch_bytes(base + "manifest.json")
+    verify_signature(manifest, fetch_bytes(base + "manifest.json.sig"), fetch_bytes(CLAUDE_KEY_URL),
+                     CLAUDE_KEY_FINGERPRINT)
+    return parse_claude_manifest(json.loads(manifest), ver)
 
 
 def r_agy():

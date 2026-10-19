@@ -79,6 +79,8 @@ jobs:
         run: python3 -m unittest discover -s tests/unit -v
       - name: Launcher tests
         run: sh tests/host/test-launcher.sh
+      - name: Build script tests
+        run: sh tests/host/test-build-script.sh
 
   image:
     name: image (${{ matrix.arch }})
@@ -139,7 +141,7 @@ jobs:
           if docker run --rm --security-opt no-new-privileges=true "$IMAGE" sudo -n true; then
             echo "FAIL: sudo worked with no-new-privileges"; exit 1; fi
           docker run --rm "$IMAGE" sudo -n true
-          # rootful Docker writes as UID 1000 (a documented limitation, see the README)
+          # rootful Docker writes as UID 1000 (a documented limitation, see docs/running.md)
           mkdir -p ws && sudo chmod 777 ws && docker run --rm -v "$PWD/ws:/workspace" "$IMAGE" touch /workspace/d
           echo "docker-created file owner: $(stat -c %u ws/d) (runner uid $(id -u))" | tee -a "$GITHUB_STEP_SUMMARY"
           # SSH agent forwarding on a Linux host. ssh-agent refuses a peer
@@ -305,10 +307,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - id: pins
         name: Build arguments, as scripts/build.sh passes them
+        # Each pin a Containerfile stage declares with ARG becomes a build argument, plus
+        # SOURCE_DATE_EPOCH, which BuildKit reads to fix file times (rewrite-timestamp).
         run: |
           {
-            echo "base=$(sed -n 's/^BASE_IMAGE=//p' versions.env)"
-            echo "snapshot=$(sed -n 's/^APT_SNAPSHOT=//p' versions.env)"
+            echo "args<<PINS_EOF"
+            names=$( (sed -n 's/^ARG \([A-Z0-9_]*\).*/\1/p' Containerfile; echo SOURCE_DATE_EPOCH) | sort -u)
+            grep -v -e '^#' -e '^$' versions.env | while IFS= read -r line; do
+              if printf '%s\n' "$names" | grep -qx "${line%%=*}"; then printf '%s\n' "$line"; fi
+            done
+            echo "PINS_EOF"
             echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "buildkit=$(sed -n 's/^BUILDKIT_IMAGE=//p' versions.env)"
           } >> "$GITHUB_OUTPUT"
@@ -327,8 +335,7 @@ jobs:
           file: Containerfile
           platforms: linux/${{ matrix.arch }}
           build-args: |
-            BASE_IMAGE=${{ steps.pins.outputs.base }}
-            APT_SNAPSHOT=${{ steps.pins.outputs.snapshot }}
+            ${{ steps.pins.outputs.args }}
             IMAGE_VERSION=${{ needs.version.outputs.version }}
             VCS_REF=${{ github.sha }}
             BUILD_DATE=${{ steps.pins.outputs.date }}
@@ -336,7 +343,7 @@ jobs:
           provenance: true
           # zstd makes this image's download about 20% smaller than gzip. BuildKit maps levels 9
           # to 22 to its "Best" setting (about zstd 11; Docker build exporters docs).
-          outputs: type=image,name=ghcr.io/chadmayfield/agentainer,push-by-digest=true,name-canonical=true,push=true,compression=zstd,compression-level=9,force-compression=true
+          outputs: type=image,name=ghcr.io/chadmayfield/agentainer,push-by-digest=true,name-canonical=true,push=true,compression=zstd,compression-level=9,force-compression=true,rewrite-timestamp=true
       - run: mkdir -p digests && touch "digests/${DIGEST#sha256:}"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
