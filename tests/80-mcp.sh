@@ -5,8 +5,9 @@
 . "$(dirname "$0")/lib.sh"
 VOL="agentainer-test-home-$$"
 lockname="agentainer-test-lock-$$"
+syncname="agentainer-test-sync-$$"
 "$RUNTIME" volume create "$VOL" >/dev/null
-trap '"$RUNTIME" rm -f "$lockname" >/dev/null 2>&1; "$RUNTIME" volume rm -f "$VOL" >/dev/null' EXIT
+trap '"$RUNTIME" rm -f "$lockname" "$syncname" >/dev/null 2>&1; "$RUNTIME" volume rm -f "$VOL" >/dev/null' EXIT
 # dash skips the EXIT trap on a signal; exiting from the signal trap runs it.
 trap 'exit 130' INT TERM
 H="-v $VOL:/home/agent"
@@ -75,13 +76,23 @@ assert_contains "claude: managed server added at user scope" "Command: ours" "$o
 "$RUNTIME" volume rm -f "$VOL" >/dev/null
 "$RUNTIME" volume create "$VOL" >/dev/null
 run_in $H --entrypoint sh -- -c 'mkdir -p ~/.agentainer && printf "%s" "{\"mcpServers\":{\"w\":{\"url\":\"https://mcp.example.com/mcp\"}}}" > ~/.agentainer/mcp.json' >/dev/null
-"$RUNTIME" run -d ${PLATFORM:+--platform "$PLATFORM"} --name "$lockname" $H --entrypoint sh "$IMAGE" -c 'flock ~/.agentainer/.mcp-sync.lock sleep 8' >/dev/null
-sleep 2
-t0=$(date +%s)
-run_in $H --network none -- agentainer-entrypoint true >/dev/null 2>&1
-t1=$(date +%s)
-"$RUNTIME" rm -f "$lockname" >/dev/null 2>&1
-if [ $((t1 - t0)) -ge 4 ]; then pass "sync waits for another container's sync"; else fail "sync waits for another container's sync" "took $((t1 - t0))s"; fi
+# The test holds the lock from one container until it creates a release file, then starts
+# a second container whose startup sync must block on the lock and write nothing until then.
+held() { "$RUNTIME" exec "$lockname" test -e /home/agent/.agentainer/held; }
+# A flock process in the sync container waits on the MCP lock file (its fd 9).
+sync_blocked() {
+	"$RUNTIME" exec "$syncname" sh -c 'for p in $(pgrep -x flock); do readlink /proc/$p/fd/9; done' | grep -q '/\.mcp-sync\.lock$'
+}
+"$RUNTIME" run -d ${PLATFORM:+--platform "$PLATFORM"} --name "$lockname" $H --entrypoint sh "$IMAGE" -c \
+	'cd ~/.agentainer && flock .mcp-sync.lock sh -c "touch held; until [ -e release ]; do sleep 0.2; done"' >/dev/null
+wait_for 30 held || fail "the test holds the sync lock" "no held file"
+"$RUNTIME" run -d ${PLATFORM:+--platform "$PLATFORM"} --name "$syncname" $H --network none "$IMAGE" true >/dev/null
+if wait_for 60 sync_blocked; then pass "sync waits for another container's sync"; else fail "sync waits for another container's sync" "no flock process waiting on .mcp-sync.lock"; fi
+assert_eq "the waiting sync wrote nothing while the lock was held" "absent" \
+	"$("$RUNTIME" exec "$lockname" sh -c 'test -e ~/.agentainer/mcp-managed.json && echo present || echo absent' 2>&1)"
+"$RUNTIME" exec "$lockname" touch /home/agent/.agentainer/release
+assert_eq "the waiting sync finished after the release" "0" "$("$RUNTIME" wait "$syncname" 2>&1)"
+"$RUNTIME" rm -f "$lockname" "$syncname" >/dev/null 2>&1
 assert_contains "the waiting sync still ran" "claude: w" "$(run_in $H --network none -- agentainer-mcp list 2>/dev/null)"
 
 # A malformed file keeps the container up.

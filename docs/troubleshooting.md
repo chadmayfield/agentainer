@@ -16,7 +16,7 @@ The container was not created by `agentainer up`, so `update` does not know its 
 That is rootful Docker with a host UID other than 1000. Build an image with your UID, or use Podman or rootless Docker ([docs/running.md](running.md#file-ownership)).
 
 **An agent shows an old setting after an upgrade.**
-The entrypoint never overwrites files in your home volume, so new default settings in the image do not replace yours. Compare your files with the image's copies in `/etc/agentainer/home/` ([docs/running.md](running.md#upgrading)).
+The entrypoint adds the image's files only where your home volume has none, so new default settings in the image do not replace yours. Compare your files with the image's copies in `/etc/agentainer/home/` ([docs/running.md](running.md#upgrading)). A few files are exceptions, and the entrypoint changes only the part it manages in each: `~/.agentainer/AGENTS.md` while you have not edited it ([AGENTS.md](configuration.md#agentsmd)), the MCP servers that `agentainer-mcp sync` added ([MCP servers](configuration.md#mcp-servers)), the gh credential helper in `~/.gitconfig` when `GH_TOKEN` or `GITHUB_TOKEN` is set, the git identity when `GIT_AUTHOR_NAME` or `GIT_AUTHOR_EMAIL` is set and `~/.gitconfig` has none, and `~/.config/opencode/service.json` when it does not exist yet.
 
 **`claude doctor` warns that `~/.local/bin` is not in `PATH` and says to run `claude install`.**
 The image installs Claude Code at `/usr/local/bin/claude`, and a new image brings a new version. The warnings look for Anthropic's per-user install in `~/.local`, which the image does not use. Ignore them: `claude install` prints "Updates are disabled by your administrator" and changes nothing.

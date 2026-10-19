@@ -217,6 +217,36 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(bv.LookupFailed):
             bv.parse_agy(dict(good, sha512="ff"))
 
+    def test_agy_url_cannot_leave_the_bucket(self):
+        # curl collapses "." and ".." segments, so these would fetch from another bucket.
+        good = {"version": "1.3.2", "url": "https://storage.googleapis.com/antigravity-public/x/1.3.2/a.tar.gz",
+                "sha512": "f" * 128}
+        base = "https://storage.googleapis.com/antigravity-public/"
+        bad = [
+            base + "../attacker-bucket/cli_linux_x64.tar.gz",
+            base + "x/../../attacker-bucket/a.tar.gz",
+            base + "./a.tar.gz",
+            base + "x/./a.tar.gz",
+            base + "x/..",
+            base + "%2e%2e/attacker-bucket/a.tar.gz",
+            base + "%2E%2E/attacker-bucket/a.tar.gz",
+            base + "x%2f..%2fa.tar.gz",
+            base + "x//a.tar.gz",
+            base + "a.tar.gz?x=1",
+            base + "a.tar.gz#frag",
+            base,
+            "https://storage.googleapis.com/antigravity-publicx/a.tar.gz",
+            "https://user@storage.googleapis.com/antigravity-public/a.tar.gz",
+            "https://storage.googleapis.com:8443/antigravity-public/a.tar.gz",
+            "http://storage.googleapis.com/antigravity-public/a.tar.gz",
+        ]
+        for url in bad:
+            with self.subTest(url=url):
+                with self.assertRaises(bv.LookupFailed):
+                    bv.parse_agy(dict(good, url=url))
+                self.assertIsNotNone(bv.invalid("AGY_URL_AMD64", url))
+        self.assertIsNone(bv.invalid("AGY_URL_AMD64", good["url"]))
+
 
 class WriteTests(unittest.TestCase):
     def setUp(self):

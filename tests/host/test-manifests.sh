@@ -21,7 +21,10 @@ assert_eq "drops ALL" "ALL" "$(q "$sts.spec.template.spec.containers[0].security
 assert_eq "seccomp RuntimeDefault" "RuntimeDefault" "$(q "$sts.spec.template.spec.securityContext.seccompProfile.type")"
 assert_eq "SSH targetPort 2222" "2222" "$(q 'select(.kind=="Service" and .metadata.name=="containerssh").spec.ports[0].targetPort')"
 assert_eq "restricted namespace" "restricted" "$(q 'select(.kind=="Namespace" and .metadata.name=="agentainer").metadata.labels."pod-security.kubernetes.io/enforce"')"
-assert_eq "RBAC verbs are only create and get" "create get" "$(q 'select(.kind=="Role") | .rules[].verbs[]' | grep -v '^---' | sort -u | paste -sd ' ' -)"
+# ContainerSSH v0.6.0 reads the pod (Pods().Get) and runs exec with a POST SPDY request,
+# which RBAC authorizes as create on pods/exec.
+assert_eq "RBAC allows get on pods and create on pods/exec, nothing else" "pods=get pods/exec=create" \
+	"$(q 'select(.kind=="Role") | .rules[] | (.resources | join(",")) + "=" + (.verbs | join(","))' | grep -v '^---' | paste -sd ' ' -)"
 cfg=$(q 'select(.kind=="Deployment" and .metadata.name=="containerssh").spec.template.spec.volumes[] | select(.name=="config").configMap.name')
 case "$cfg" in
 containerssh-config-?*) pass "containerssh config name carries a content hash, so edits roll out" ;;
@@ -74,14 +77,23 @@ for d in containerssh agentainer-auth; do
 done
 svc='select(.kind=="Service" and .metadata.name=="containerssh")'
 assert_eq "containerssh Service keeps the client source IP" "Local" "$(q "$svc.spec.externalTrafficPolicy")"
+assert_eq "seed ConfigMap volume is optional" "agentainer-seed true" \
+	"$(q "$sts.spec.template.spec.volumes[] | select(.name==\"seed\").configMap | .name + \" \" + (.optional | tostring)")"
+assert_eq "seed volume is mounted read-only at /etc/agentainer/seed" "/etc/agentainer/seed true" \
+	"$(q "$sts.spec.template.spec.containers[0].volumeMounts[] | select(.name==\"seed\") | .mountPath + \" \" + (.readOnly | tostring)")"
+assert_contains "docs/kubernetes.md shows how to create the seed ConfigMap" \
+	"kubectl -n agentainer create configmap agentainer-seed" "$(cat docs/kubernetes.md)"
 assert_eq "PVCs are kept on delete and scale down" "Retain Retain" \
 	"$(q "$sts.spec.persistentVolumeClaimRetentionPolicy | .whenDeleted + \" \" + .whenScaled")"
 assert_eq "headless Service has no ports" "None 0" \
 	"$(q 'select(.kind=="Service" and .metadata.name=="agentainer").spec | .clusterIP + " " + ((.ports // []) | length | tostring)')"
 assert_eq "every object has part-of agentainer" "agentainer" \
 	"$(q '.metadata.labels."app.kubernetes.io/part-of"' | grep -v '^---' | sort -u | paste -sd ' ' -)"
-assert_eq "selectors do not carry part-of" "" \
-	"$(q '.spec.selector."app.kubernetes.io/part-of", .spec.selector.matchLabels."app.kubernetes.io/part-of", .spec.podSelector.matchLabels."app.kubernetes.io/part-of"' | grep -v -e '^---' -e '^null$' || true)"
+# One line per object: how many selectors it has and how many of them carry part-of.
+# The marker "selectors=1" proves yq ran and the paths reach real selectors.
+assert_absent "selectors do not carry part-of" \
+	"$(q '"selectors=" + ([.spec.selector, .spec.podSelector] | map(select(. != null)) | length | tostring) + " part-of=" + ([.spec.selector."app.kubernetes.io/part-of", .spec.selector.matchLabels."app.kubernetes.io/part-of", .spec.podSelector.matchLabels."app.kubernetes.io/part-of"] | map(select(. != null)) | length | tostring)')" \
+	"selectors=1 " part-of=1 part-of=2 part-of=3
 . ./versions.env
 assert_contains "containerssh digest matches versions.env" "$CONTAINERSSH_IMAGE" "$out"
 assert_contains "webhook python digest matches versions.env" "$WEBHOOK_PYTHON_IMAGE" "$out"

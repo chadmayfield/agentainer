@@ -9,6 +9,7 @@ Standard library only. Formats follow ContainerSSH v0.6.0 containerssh-authconfi
 import json
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # The key types sshd(8) of OpenSSH 10.4 lists under AUTHORIZED_KEYS FILE FORMAT. Certificate types
@@ -19,6 +20,13 @@ KEY_TYPES = frozenset((
     "ecdsa-sha2-nistp521", "sk-ssh-ed25519@openssh.com", "ssh-ed25519", "ssh-rsa",
 ))
 MAX_BODY = 64 * 1024
+# Connections handled at once. Each one holds a thread until it closes, so the cap
+# bounds memory under the Deployment's 128Mi limit when a client opens many idle
+# connections.
+MAX_WORKERS = 16
+_BUSY_BODY = b'{"message": "too busy"}'
+BUSY = (b"HTTP/1.0 503 Service Unavailable\r\nContent-Type: application/json\r\n"
+        b"Content-Length: %d\r\nConnection: close\r\n\r\n" % len(_BUSY_BODY) + _BUSY_BODY)
 
 
 class Settings:
@@ -69,7 +77,8 @@ def make_handler(s):
                 req = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(req, dict):
                     raise ValueError("not an object")
-            except ValueError:
+            except (ValueError, RecursionError):
+                # json.loads raises RecursionError for deeply nested input.
                 return self._reply(400, {"message": "invalid JSON"})
             out = echo(req)
             if self.path == "/pubkey":
@@ -101,8 +110,38 @@ def make_handler(s):
     return Handler
 
 
-def make_server(addr, settings):
-    return ThreadingHTTPServer(addr, make_handler(settings))
+class BoundedServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that runs at most max_workers handler threads. A connection
+    beyond that gets a 503 and is closed right away instead of starting a thread."""
+
+    def __init__(self, addr, handler, max_workers):
+        super().__init__(addr, handler)
+        self._slots = threading.BoundedSemaphore(max_workers)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.settimeout(1)
+                request.sendall(BUSY)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
+def make_server(addr, settings, max_workers=MAX_WORKERS):
+    return BoundedServer(addr, make_handler(settings), max_workers)
 
 
 def main():

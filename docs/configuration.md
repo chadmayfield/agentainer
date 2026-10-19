@@ -13,13 +13,13 @@ You keep one instruction file, `~/.agentainer/AGENTS.md`, and every agent reads 
 
 Claude Code is set to load both `CLAUDE.md` and `AGENTS.md` in a repo that has both ([instruction files setting](https://code.claude.com/docs/en/memory)). Each repo's own `AGENTS.md` still loads on top of yours. If a link path already holds a file of your own, the entrypoint leaves it and prints a warning.
 
-The first start copies the image's default. When a later image ships a different default:
+The first start copies the image's default. When an image's default differs from your file:
 
-- If you never edited the file (it still matches a default this home has seen), the entrypoint replaces it with the new default, keeps its file mode, and prints one line saying so.
-- If you edited it, the file is never touched. The entrypoint prints one notice, and `agentainer-agents diff` shows the difference.
+- The entrypoint replaces the file with the image's default only when all of these hold: you never edited the file (it still matches a default this home has seen), the image is a release, and that release is newer than every image that shipped the file's current content. It keeps the file mode and prints one line saying so. A release has a version of the form `YYYY.MM.DD` or `YYYY.MM.DD.N`, which the image sets in `AGENTAINER_IMAGE_VERSION`.
+- In every other case the file is not touched: you edited it, the image is older (for example another container on the same home volume runs an older image), or the image is a local build (`dev`). If the image's default is one this home has not seen before, the entrypoint prints one notice, and `agentainer-agents diff` shows the difference.
 - A symlinked `~/.agentainer/AGENTS.md`, for example from a dotfiles repo, is never replaced.
 
-`~/.agentainer/agents-default.sha256` lists every default the home has seen, so two images that share one home volume do not report each other's default.
+`~/.agentainer/agents-default.sha256` lists every default the home has seen, one line per default and image version: `<sha256> <version>`. A line with only a hash comes from an image that did not record its version and counts as older than any release. So an older image never rolls the file back, and two images that share one home volume do not report each other's default more than once.
 
 ## MCP servers
 
@@ -42,6 +42,8 @@ Define servers once in `~/.agentainer/mcp.json`, in the `mcpServers` format most
 | OpenCode | `mcp.servers` in `~/.config/opencode/opencode.json` |
 
 The entrypoint runs the sync when `mcp.json` changes, and `agentainer-mcp list` shows what it manages. It adds, updates and removes only the servers it added and never touches servers you added yourself. Deleting `mcp.json` removes the servers it added. Config files that are symlinks stay symlinks; the sync writes the file the link points to. When containers sharing a home volume start at once, their syncs run one at a time.
+
+Server names may use only letters, digits, `-` and `_`. Any other name stops the sync with an error such as `agentainer-mcp: server name 'my.server' may only use letters, digits, - and _; nothing changed`.
 
 A server entry has these keys:
 
@@ -66,7 +68,7 @@ In a hand check, Codex and Antigravity listed a synced server's tools, and `clau
 
 ## Tools that agents install
 
-`AGENTAINER_TOOLS` decides where `npm -g`, `cargo install`, `go install`, `uv tool`, `pipx` and `pip --user` put things:
+`AGENTAINER_TOOLS` decides where `npm -g`, `cargo install`, `go install`, `uv tool` and `pipx` put things:
 
 | Value | Location | Survives a new container |
 |---|---|---|
@@ -75,7 +77,7 @@ In a hand check, Codex and Antigravity listed a synced server's tools, and `clau
 
 Image tools come first on `PATH`, so an installed tool never hides an image tool. When the image changes and persisted tools exist, the entrypoint warns; `agentainer-tools reset` moves them to a dated backup. `agentainer-tools status` shows the mode and what is installed.
 
-Ubuntu's Python refuses `pip install` outside a virtual environment (PEP 668), so use `uv`, `pipx` or a venv.
+Ubuntu's Python refuses `pip install` outside a virtual environment, `pip install --user` included (PEP 668), so use `uv`, `pipx` or a venv. `PYTHONUSERBASE` points into the same tools root, but plain `pip` never installs there.
 
 The image has `ansible-core` (`ansible`, `ansible-playbook`, `ansible-galaxy` and the other commands) without the community collections. Install the ones you use with `ansible-galaxy collection install community.general`. They go to `~/.ansible/collections` on the home volume.
 
@@ -85,8 +87,14 @@ The image has `ansible-core` (`ansible`, `ansible-playbook`, `ansible-galaxy` an
 |---|---|
 | `openrouter-claude` | Runs `claude` against `https://openrouter.ai/api` with `OPENROUTER_API_KEY`, for that process only ([OpenRouter guide](https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration)). It also sets `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, which turns on the gateway model picker, unless you set it yourself. |
 | `openrouter-codex` | Runs `codex` with an `openrouter` provider and the model `~openai/gpt-sol-latest`. `-m` picks another model ([OpenRouter guide](https://openrouter.ai/docs/cookbook/coding-agents/codex-cli)). |
-| `opencode` | Built-in provider. Set `OPENROUTER_API_KEY` and use models such as `openrouter/<vendor>/<model>`. |
+| `opencode` | Built-in provider. Set `OPENROUTER_API_KEY` and use the full OpenRouter model ID after the `openrouter/` prefix, such as `openrouter/<vendor>/<model>` ([OpenCode providers](https://opencode.ai/v2/docs/providers)). |
 
 The key reaches OpenRouter as a bearer token and appears in no argument list, log or file. Antigravity has no OpenRouter support.
 
 Limits: Anthropic "doesn't support routing Claude Code to non-Claude models through any gateway" ([LLM gateway](https://code.claude.com/docs/en/llm-gateway)). Codex accepts only `wire_api = "responses"`, so the endpoint must serve the OpenAI Responses API ([Codex config reference](https://learn.chatgpt.com/docs/config-file/config-reference)).
+
+## Startup messages
+
+The entrypoint prints its messages on stderr, each starting with `agentainer:`. `AGENTAINER_QUIET=1` hides the line that lists which credential variables are set. Warnings and every other message still print.
+
+If you do not set `AGENTAINER_QUIET`, the entrypoint sets it to `1` for a one-shot command, such as `podman run --rm IMAGE claude --version`, and to `0` for the default command, `sleep infinity`. Set `AGENTAINER_QUIET=0` to see the line for a one-shot command, or `AGENTAINER_QUIET=1` to hide it for a long-running container.

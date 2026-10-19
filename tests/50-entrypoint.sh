@@ -6,7 +6,7 @@
 VOL="agentainer-test-home-$$"
 "$RUNTIME" volume create "$VOL" >/dev/null
 name="agentainer-test-$$"
-trap '"$RUNTIME" rm -f "$name" >/dev/null 2>&1; "$RUNTIME" volume rm -f "$VOL" >/dev/null' EXIT
+trap '"$RUNTIME" rm -f "$name" >/dev/null 2>&1; "$RUNTIME" volume rm -f "$VOL" >/dev/null; rm -rf "${SYNC:-}"' EXIT
 # dash skips the EXIT trap on a signal; exiting from the signal trap runs it.
 trap 'exit 130' INT TERM
 H="-v $VOL:/home/agent"
@@ -76,12 +76,21 @@ rm -rf "$SEED"
 assert_contains "required step failure stops startup" "required step" "$(run_in $H -e HOME=/nonexistent/x --entrypoint /usr/local/bin/agentainer-entrypoint -- true 2>&1)"
 assert_contains "unwritable home names the path and uid" "/nonexistent/x is not writable by uid 1000" \
 	"$(run_in $H -e HOME=/nonexistent/x --entrypoint /usr/local/bin/agentainer-entrypoint -- true 2>&1)"
+# A writable home with ~/.agentainer owned by another uid names that directory and its owner.
+"$RUNTIME" volume rm -f "$VOL" >/dev/null
+"$RUNTIME" volume create "$VOL" >/dev/null
+run_in $H --user root --entrypoint sh -- -c 'mkdir -p /home/agent/.agentainer && chown 0:0 /home/agent/.agentainer && chmod 755 /home/agent/.agentainer' >/dev/null
+out=$(run_in $H -- echo STARTED 2>&1)
+assert_contains "a .agentainer owned by another uid: names the path and both uids" \
+	"/home/agent/.agentainer is owned by uid 0 and not writable by uid 1000" "$out"
+assert_absent "a .agentainer owned by another uid: stops before the command" "$out" "required step" STARTED "in the way"
+run_in $H --user root --entrypoint sh -- -c 'rm -rf /home/agent/.agentainer' >/dev/null
 
 # Each container keeps its own tools mode, even on a shared home volume.
 "$RUNTIME" volume rm -f "$VOL" >/dev/null
 "$RUNTIME" volume create "$VOL" >/dev/null
 run_bg "$name" -v "$VOL:/home/agent" -e AGENTAINER_TOOLS=persist
-sleep 1
+wait_for 30 "$RUNTIME" exec "$name" test -L /var/lib/agentainer/active || fail "persist container linked its tools root"
 run_in $H -- true >/dev/null 2>&1
 assert_eq "persist container stays persist after an ephemeral start on the same volume" "/home/agent/.agentainer/tools" \
 	"$("$RUNTIME" exec "$name" readlink /var/lib/agentainer/active)"
@@ -125,6 +134,32 @@ assert_absent "setup-git is skipped when gh is the helper" \
 # ~/.gitconfig) does not count.
 assert_contains "setup-git runs when the helper names another gh" "setup-git" \
 	"$(run_in -e GH_TOKEN=x --entrypoint sh -- -c "$ghstub"'; git config --global --add credential.https://github.com.helper "!/opt/homebrew/bin/gh auth git-credential"; PATH=/tmp/f:$PATH agentainer-entrypoint echo STARTED >/dev/null 2>&1; cat /tmp/f/log 2>/dev/null')"
+
+# Containers that start at once on one fresh home volume take turns writing shared files:
+# no step fails, no link is reported as blocked, and ~/.gitconfig gets one helper section
+# per host. Each container waits for a "go" file in a shared host directory, so all four
+# run their startup steps at the same moment.
+"$RUNTIME" volume rm -f "$VOL" >/dev/null
+"$RUNTIME" volume create "$VOL" >/dev/null
+SYNC=$(mktemp -d)
+chmod 777 "$SYNC"
+for i in 1 2 3 4; do
+	run_in $H -v "$SYNC:/sync" --network none -e GH_TOKEN=x -e GIT_AUTHOR_NAME="Test User" -e GIT_AUTHOR_EMAIL=test@example.com \
+		--entrypoint sh -- -c 'touch "/sync/ready-$1"; while [ ! -e /sync/go ]; do sleep 0.05; done; exec agentainer-entrypoint echo STARTED' sh "$i" \
+		>"$SYNC/out-$i" 2>&1 &
+done
+if wait_for 120 sh -c '[ "$(find "$1" -name "ready-*" | wc -l)" -eq 4 ]' sh "$SYNC"; then
+	pass "simultaneous starts: all four containers are waiting"
+else
+	fail "simultaneous starts: all four containers are waiting"
+fi
+touch "$SYNC/go"
+wait
+out=$(cat "$SYNC"/out-*)
+assert_eq "simultaneous starts: all four ran" "4" "$(printf '%s\n' "$out" | grep -cx STARTED)"
+assert_absent "simultaneous starts: no failures" "$out" STARTED "failed" "in the way" "could not" "Error"
+assert_eq "simultaneous starts: one helper section per host, identity once" "1 1 Test User" \
+	"$(run_in $H --entrypoint sh -- -c 'printf "%s %s %s\n" "$(grep -cF "[credential \"https://github.com\"]" ~/.gitconfig)" "$(grep -cF "[credential \"https://gist.github.com\"]" ~/.gitconfig)" "$(git config --global --get-all user.name)"')"
 
 # Optional steps report a failure and the container still starts.
 assert_contains "a failing opencode setup step warns" "70-opencode.sh failed" \

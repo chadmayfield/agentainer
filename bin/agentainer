@@ -51,6 +51,7 @@ if [ -z "$R" ]; then
 	exit 1
 fi
 # create NAME SUDO DIR: run a new container from $IMAGE with $HOME_VOLUME and $ENV_FILE.
+# Exits before running anything when DIR or a home path cannot be mounted.
 create() {
 	name=$1
 	sudo=$2
@@ -72,13 +73,30 @@ create() {
 	if [ -f "$ENV_FILE" ]; then
 		envf=$(CDPATH='' cd -- "$(dirname -- "$ENV_FILE")" && pwd -P)/$(basename -- "$ENV_FILE")
 	fi
+	# A home with a '/' is a host directory, not a volume name. It is recorded as an
+	# absolute path too, so update mounts the same directory from any working directory.
+	home=$HOME_VOLUME
+	case "$home" in
+	*/*)
+		home=$(CDPATH='' cd -- "$HOME_VOLUME" 2>/dev/null && pwd -P) || {
+			echo "agentainer: no such directory: $HOME_VOLUME (AGENTAINER_HOME_VOLUME)" >&2
+			exit 1
+		}
+		case "$home" in
+		*:*)
+			echo "agentainer: $home contains ':', which podman and docker -v cannot mount; rename it or use a symlink without ':'" >&2
+			exit 1
+			;;
+		esac
+		;;
+	esac
 	# ping uses unprivileged ICMP sockets (the image removes its NET_RAW file capability).
 	# The range names the agent group only: with keep-id the GID map is not contiguous,
 	# and a wider range no longer contains the agent group after translation.
 	set -- "$R" run -d --name "$name" --hostname "$name" --label "$LABEL" \
 		--label "$OPT.dir=$dir" --label "$OPT.image=$IMAGE" --label "$OPT.sudo=$sudo" \
-		--label "$OPT.home=$HOME_VOLUME" --label "$OPT.env-file=$envf" \
-		-v "$HOME_VOLUME:/home/agent" -v "$dir:/workspace" -w /workspace \
+		--label "$OPT.home=$home" --label "$OPT.env-file=$envf" \
+		-v "$home:/home/agent" -v "$dir:/workspace" -w /workspace \
 		--sysctl "net.ipv4.ping_group_range=1000 1000"
 	if [ "$sudo" != 1 ]; then set -- "$@" --security-opt no-new-privileges=true; fi
 	case "$(basename "$R")" in
@@ -141,6 +159,14 @@ update)
 		echo "agentainer: $name was created for $dir, which no longer exists; nothing changed" >&2
 		exit 1
 	}
+	case "$HOME_VOLUME" in
+	*/*)
+		[ -d "$HOME_VOLUME" ] || {
+			echo "agentainer: $name was created with the home directory $HOME_VOLUME, which no longer exists; nothing changed" >&2
+			exit 1
+		}
+		;;
+	esac
 	# Without the env file the new container would start with no credentials.
 	if [ -n "$ENV_FILE" ] && [ ! -f "$ENV_FILE" ]; then
 		echo "agentainer: $name was created with the env file $ENV_FILE, which no longer exists; nothing changed" >&2

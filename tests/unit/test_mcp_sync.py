@@ -54,6 +54,24 @@ class SyncBase(unittest.TestCase):
     def sync(self):
         return mcp.main(["sync"], env=self.env)
 
+    def sync_err(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = self.sync()
+        return rc, err.getvalue()
+
+    def assert_added_elsewhere(self, name, agents):
+        """Positive check that sync ran: NAME reached each of AGENTS."""
+        manifest = json.loads(self.read(".agentainer", "mcp-managed.json") or "{}")
+        for agent in agents:
+            self.assertIn(name, manifest.get(agent, []), agent)
+        if "agy" in agents:
+            self.assertIn("agy mcp add %s " % name, self.calls())
+        if "codex" in agents:
+            self.assertIn("[mcp_servers.%s]" % name, self.read(".codex", "config.toml"))
+        if "opencode" in agents:
+            self.assertIn(name, self.opencode_servers())
+
     def read(self, *parts):
         path = os.path.join(self.home, *parts)
         if not os.path.exists(path):
@@ -111,8 +129,11 @@ class SyncTests(SyncBase):
     def test_agy_broken_config_is_left_alone(self):
         self.agy_config("{not json")
         self.write_mcp({"fs": {"command": "npx"}})
-        self.sync()
+        _, err = self.sync_err()
         self.assertNotIn("agy mcp add", self.calls())
+        self.assertIn("agy already has a server named fs", err)
+        self.assertIn("claude mcp add-json fs", self.calls())
+        self.assert_added_elsewhere("fs", ("claude", "codex", "opencode"))
 
     def test_removes_only_managed(self):
         self.write_mcp({"a": {"command": "x"}, "b": {"command": "y"}})
@@ -140,12 +161,17 @@ class SyncTests(SyncBase):
         os.makedirs(os.path.join(self.home, ".gemini", "config"))
         with open(os.path.join(self.home, ".gemini", "config", "mcp_config.json"), "w") as f:
             json.dump({"mcpServers": {"mine": {"command": "theirs"}}}, f)
-        self.write_mcp({"mine": {"command": "z"}})
-        self.sync()
+        self.write_mcp({"mine": {"command": "z"}, "other": {"command": "o"}})
+        _, err = self.sync_err()
         log = self.calls()
         self.assertNotIn("claude mcp add-json mine", log)
         self.assertNotIn("claude mcp remove mine", log)
-        self.assertNotIn("agy mcp add", log)
+        self.assertNotIn("agy mcp add mine", log)
+        for agent in ("claude", "codex", "opencode", "agy"):
+            self.assertIn("%s already has a server named mine" % agent, err)
+        # A server without a conflict still reaches every agent.
+        self.assertIn("claude mcp add-json other", log)
+        self.assert_added_elsewhere("other", ("claude", "codex", "opencode", "agy"))
         toml = self.read(".codex", "config.toml")
         self.assertIn('command = "theirs"', toml)
         self.assertNotIn('command = "z"', toml)
@@ -175,6 +201,11 @@ class SyncTests(SyncBase):
                         "web": {"url": "https://mcp.example.com/mcp",
                                 "headers": {"Authorization": "Bearer ${SECRET_TOKEN}"}}})
         self.sync()
+        # The servers were written, so the absence checks below look at real output.
+        self.assertIn("claude mcp add-json gh", self.calls())
+        self.assertIn("claude mcp add-json web", self.calls())
+        self.assertIn("[mcp_servers.gh]", self.read(".codex", "config.toml"))
+        self.assertEqual(sorted(self.opencode_servers()), ["gh", "web"])
         self.assertNotIn("s3cr3t-value", self.calls())
         self.assertNotIn("s3cr3t-value", self.read(".codex", "config.toml"))
         self.assertNotIn("s3cr3t-value", self.read(".config", "opencode", "opencode.json"))
@@ -241,11 +272,13 @@ class RobustnessTests(SyncBase):
                      '[mcp_servers."foo"]\ncommand = "theirs"\n'):
             with open(self.codex_path(), "w") as f:
                 f.write(text)
-            self.write_mcp({"foo": {"command": "ours"}})
-            self.sync()
+            self.write_mcp({"foo": {"command": "ours"}, "bar": {"command": "ok"}})
+            _, err = self.sync_err()
             toml = self.read(".codex", "config.toml")
             self.assertNotIn('"ours"', toml, text)
             self.assertIn('"theirs"', toml, text)
+            self.assertIn("codex already has a server named foo", err, text)
+            self.assertIn('[mcp_servers.bar]\ncommand = "ok"', toml, text)
 
     def test_non_bmp_characters_are_written_literally(self):
         self.write_mcp({"u": {"command": "srv", "args": ["\U0001F600", "a\x7fb"]}})
@@ -298,12 +331,6 @@ class RobustnessTests(SyncBase):
         with contextlib.redirect_stderr(err):
             self.sync()
         self.assertIn("only exact ${NAME}", err.getvalue())
-
-    def sync_err(self):
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            rc = self.sync()
-        return rc, err.getvalue()
 
     def test_codex_bearer_reference_on_other_header_is_left_out(self):
         # Codex env_http_headers sends the variable's value as the whole header, so
@@ -372,15 +399,20 @@ class RobustnessTests(SyncBase):
         with open(os.path.join(d, ".claude.json"), "w") as f:
             json.dump({"mcpServers": {"mine": {"command": "x"}}}, f)
         self.env["CLAUDE_CONFIG_DIR"] = d
-        self.write_mcp({"mine": {"command": "z"}})
-        self.sync()
+        self.write_mcp({"mine": {"command": "z"}, "other": {"command": "o"}})
+        _, err = self.sync_err()
         self.assertNotIn("claude mcp add-json mine", self.calls())
+        self.assertIn("claude already has a server named mine", err)
+        self.assertIn("claude mcp add-json other", self.calls())
+        self.assert_added_elsewhere("mine", ("agy", "codex", "opencode"))
 
     def test_unreadable_claude_json_counts_as_taken(self):
         self.claude_json("{broken")
         self.write_mcp({"k": {"command": "z"}})
-        self.sync()
+        _, err = self.sync_err()
         self.assertNotIn("claude mcp add-json k", self.calls())
+        self.assertIn("claude already has a server named k", err)
+        self.assert_added_elsewhere("k", ("agy", "codex", "opencode"))
 
 
 

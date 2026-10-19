@@ -32,9 +32,18 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_response(500); self.end_headers()
     def log_message(self, *a):
         pass
-http.server.HTTPServer(("127.0.0.1", 18080), H).serve_forever()
+srv = http.server.HTTPServer(("127.0.0.1", 18080), H)
+open("/tmp/ready", "w").close()
+srv.serve_forever()
 EOF
-	python3 /tmp/srv.py & sleep 1
+	# The server creates /tmp/ready after it binds and listens, so a request sent after
+	# that waits in the listen queue instead of being refused.
+	python3 /tmp/srv.py &
+	i=0
+	until [ -e /tmp/ready ] || [ "$i" -ge 100 ]; do
+		sleep 0.1
+		i=$((i + 1))
+	done
 	timeout 20 openrouter-codex -c "model_providers.openrouter.base_url=\"http://127.0.0.1:18080/v1\"" \
 		-c "model_providers.openrouter.request_max_retries=0" exec --skip-git-repo-check "hi" </dev/null >/dev/null 2>&1
 	sort -u /tmp/auth.txt 2>/dev/null')

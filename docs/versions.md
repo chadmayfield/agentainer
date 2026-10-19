@@ -17,7 +17,7 @@ Each tool is built in its own stage. In the layers the release build creates, an
 | Claude Code | `DISABLE_UPDATES=1` ([env vars](https://code.claude.com/docs/en/env-vars)) |
 | Codex | `/etc/codex/requirements.toml` ([managed configuration](https://learn.chatgpt.com/docs/enterprise/managed-configuration)) |
 | Antigravity | `AGY_CLI_DISABLE_AUTO_UPDATE=true` ([troubleshooting](https://antigravity.google/docs/cli/troubleshooting.md)) |
-| OpenCode | `"update": "disable"` in its config |
+| OpenCode | `"update": "disable"` in its global config, `~/.config/opencode/opencode.json` ([config](https://opencode.ai/v2/docs/config); OpenCode ignores the setting in project config) |
 
 New versions arrive only with a new image.
 
@@ -34,6 +34,14 @@ Releases are calendar versions, `YYYY.MM.DD`, with `.N` for a second release on 
 - tagged `latest`, the version and `sha-<commit>`;
 - signed with cosign keyless signing, the index and each architecture's image;
 - with an SBOM and provenance attestation, and zstd-compressed layers.
+
+A runtime needs zstd support to pull the image. These are the first versions with it:
+
+| Runtime | First version that pulls zstd layers |
+|---|---|
+| Docker Engine | 23.0.0 ("Add support for pulling `zstd` compressed layers", [Engine 23.0 release notes](https://docs.docker.com/engine/release-notes/23.0/), moby/moby#41759) |
+| containerd, including Kubernetes nodes that use it | 1.5.0 ("Add support for layers compressed with zstd", [containerd v1.5.0 release notes](https://github.com/containerd/containerd/releases/tag/v1.5.0)) |
+| Podman | Not verified. Podman's release notes do not name a version. containers/image added zstd in containers/image#639, and Podman 1.6.2 is the first release whose `go.mod` uses a containers/image version with that change. |
 
 The published image is a fresh build from the release commit with the same pinned inputs, not the exact image the pull request's tests ran on.
 

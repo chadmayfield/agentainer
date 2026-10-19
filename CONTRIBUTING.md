@@ -22,31 +22,33 @@ sh tests/lint.sh                            # shellcheck and shfmt, run from the
 python3 -m unittest discover -s tests/unit  # unit tests, no container needed
 sh tests/host/test-launcher.sh              # launcher tests, no container needed
 sh tests/host/test-build-script.sh          # scripts/build.sh tests, no container needed
+sh tests/host/test-fetch.sh                 # fetch.sh and Rust manifest check tests, no container needed
 sh tests/host/test-manifests.sh             # Kubernetes manifest tests (kubectl, and the image for yq)
+sh tests/host/test-build-uid.sh             # slow: builds a full image with --uid 1001 --gid 20
 ```
 
 With Docker, prefix the commands with `RUNTIME=docker`. `IMAGE=<name>` tests another image.
 
 ## CI
 
-[`.github/workflows/build.yml`](.github/workflows/build.yml) runs on every pull request and every push to `develop` and `main`:
+[`.github/workflows/build.yml`](.github/workflows/build.yml) runs on every pull request and every push to `develop` and `main`. A pull request also runs it again when you edit it, which includes changing its base branch:
 
-- lint and unit tests, actionlint;
-- an image build on amd64 and arm64, the container tests under Docker and rootless Podman, a check that the agents start on a CPU without AVX2, and trivy scans (a secret fails the build; vulnerabilities are reported).
+- the `lint-unit` job: actionlint, the Python unit tests, and the launcher, `scripts/build.sh` and `build/fetch.sh` tests;
+- the `image` job, on amd64 and arm64: the image build, shellcheck and shfmt (`tests/lint.sh` runs them from the image), the container tests under Docker and rootless Podman, the manifest tests, a check that the agents start on a CPU without AVX2, and trivy scans (a secret fails the build; vulnerabilities are reported).
 
-A pull request that changes only `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` or files under `docs/` skips the image job. The required check is `ci`, which passes only when every job passed or the image job was skipped for a docs-only change.
+The image job is skipped when every changed file is `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` or a file under `docs/` other than `docs/kubernetes.md` (the manifest tests check its install commands). For a pull request, the changed files are what the merge adds to the base branch. For a push to `develop`, they are the files changed since the previous tip. A push to `main` and a pull request whose base branch changed always build the image. A docs-only change gets no shell lint, because no shell file changed. The required check is `ci`, which passes only when every job passed or the image job was skipped for a docs-only change.
 
 ## Releases
 
 1. From an up-to-date `develop`, run `git flow release start <version>`. The version is the release date, `YYYY.MM.DD`, with `.N` for a second release that day.
 2. Push the branch and open a pull request from `release/<version>` to `main`.
-3. When `ci` passes, merge it with "Create a merge commit". The `version` job reads the version from the merge commit's subject (`Merge pull request #N from <owner>/release/<version>`).
-4. The workflow on `main` builds both architectures, pushes them, tags the index `latest`, `<version>` and `sha-<short>`, signs it and each architecture's image with cosign, and creates the tag `v<version>` and a GitHub release with the vulnerability summary.
+3. When `ci` passes, merge it with "Create a merge commit". The `version` job reads the version from the merge commit's subject, which must be exactly `Merge pull request #N from <owner>/release/<version>`, where `<owner>` is the repository owner and `<version>` is a real date. Any other push to `main` fails the `version` job and publishes nothing.
+4. The workflow on `main` builds both architectures and pushes them. The `release` job then tags the multi-architecture index only `sha-<short>`, checks its annotations, and signs it and each architecture's image with cosign. Only after that does it point `latest` and `<version>` at the signed digest. Its last step creates the tag `v<version>` and a GitHub release with the vulnerability summary.
 5. Open a pull request from `main` to `develop` to bring back any fixes made on the release branch.
 
 Do not run `git flow release finish`: it merges into `main` locally. A hotfix is a new release made the same way; a `hotfix/*` branch merged into `main` does not publish.
 
-Re-running a failed release is safe: the `version` job checks only for the git tag, which is created last.
+Re-running a failed release is safe. The `version` job checks only for the git tag, which is created last. A failure before signing leaves `latest` and `<version>` on the last signed release. A `publish` job that runs again replaces its `digest-<arch>` artifact, and the `release` job stops unless it finds exactly one digest for each architecture. A rebuilt image gets a new digest, so the new index does too, and `latest`, `<version>` and `sha-<short>` move to it once it is signed.
 
 ## The bump GitHub App
 

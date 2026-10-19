@@ -2,7 +2,8 @@
 # Installs one tool into its final path inside a build stage: install-tool.sh NAME.
 # Each Containerfile stage passes only that tool's pins from versions.env as build
 # arguments, so a bump of one tool rebuilds only its stage. Every download is checked
-# against a pin before it is used (fetch.sh).
+# against a pin before it is used (fetch.sh). rustup-init downloads the Rust components
+# itself; check_rust_manifest ties them to the pinned channel manifest.
 set -euo pipefail
 F=/usr/local/lib/agentainer-build/fetch.sh
 case "${TARGETARCH:?}" in
@@ -30,6 +31,54 @@ pin() {
 	local v="$1_$A"
 	printf '%s' "${!v}"
 }
+# check_rust_manifest PINNED SHA256 USED UPDATE_HASH: fails unless rustup installed from
+# the channel manifest PINNED, whose SHA-256 is SHA256. rustup checks each component
+# against the manifest it downloads itself, so this ties that manifest to the pin:
+# - USED is the copy rustup keeps in the toolchain (lib/rustlib/
+#   multirust-channel-manifest.toml). rustup writes it re-serialized, so its bytes differ
+#   from PINNED; every url, hash, xz_url and xz_hash in it must equal the same key in
+#   PINNED.
+# - UPDATE_HASH is RUSTUP_HOME/update-hashes/<toolchain>. rustup writes the first 20 hex
+#   digits of its manifest's SHA-256 there (UPDATE_HASH_LEN in src/dist/download.rs),
+#   so only that prefix can be compared with SHA256.
+check_rust_manifest() {
+	local stored
+	stored=$(cat "$4") || return 1
+	if [ "$stored" != "${2:0:20}" ]; then
+		echo "install-tool.sh: rustup used a manifest with hash $stored, pinned $2" >&2
+		return 1
+	fi
+	python3 - "$1" "$3" <<'EOF'
+import re
+import sys
+
+KEY = re.compile(r'^(url|hash|xz_url|xz_hash) = "([^"]*)"$')
+
+
+def entries(path):
+    out, table = {}, None
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("["):
+                table = line
+                continue
+            m = KEY.match(line)
+            if m and table:
+                out[(table, m.group(1))] = m.group(2)
+    return out
+
+
+pinned, used = entries(sys.argv[1]), entries(sys.argv[2])
+if not any(key in ("hash", "xz_hash") for _, key in used):
+    sys.exit("install-tool.sh: no component hashes in %s" % sys.argv[2])
+bad = sorted(k for k, v in used.items() if pinned.get(k) != v)
+for table, key in bad:
+    print("install-tool.sh: %s %s differs from the pinned manifest" % (table, key), file=sys.stderr)
+sys.exit(1 if bad else 0)
+EOF
+}
+
 W=$(mktemp -d)
 cd "$W"
 
@@ -45,12 +94,16 @@ rust)
 	# rustup-init from https://static.rust-lang.org/rustup/archive/
 	sh $F "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${TRIPLE}-unknown-linux-gnu/rustup-init" sha256 "$(pin RUSTUP_SHA256)" rustup-init
 	chmod +x rustup-init
-	# Checks that the manifest Rust publishes for this version matches versions.env.
-	# rustup-init downloads its own copy and checks each component against it; this
-	# check does not bind rustup to the file downloaded here.
+	# The channel manifest lists the SHA-256 of every component. rustup-init downloads
+	# its own copy and checks each component against it; check_rust_manifest then
+	# compares that copy with this pinned one.
 	sh $F "https://static.rust-lang.org/dist/channel-rust-${RUST_VERSION}.toml" sha256 "${RUST_MANIFEST_SHA256}" rust-manifest.toml
 	RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo ./rustup-init -y --no-modify-path \
 		--profile minimal --default-toolchain "${RUST_VERSION}" --component clippy,rustfmt
+	toolchain="${RUST_VERSION}-${TRIPLE}-unknown-linux-gnu"
+	check_rust_manifest rust-manifest.toml "${RUST_MANIFEST_SHA256}" \
+		"/opt/rustup/toolchains/${toolchain}/lib/rustlib/multirust-channel-manifest.toml" \
+		"/opt/rustup/update-hashes/${toolchain}"
 	rm -rf /opt/rustup/toolchains/*/share/doc
 	chmod -R a+rX /opt/rustup /opt/cargo
 	;;
@@ -133,6 +186,11 @@ opencode)
 	sh $F "https://registry.npmjs.org/@opencode/cli-${OC}/-/cli-${OC}-${OPENCODE_VERSION}.tgz" sri "$(pin OPENCODE_INTEGRITY)" opencode.tgz
 	tar -xzf opencode.tgz package/bin/opencode
 	install -m 0755 package/bin/opencode /usr/local/bin/opencode
+	;;
+check-rust-manifest)
+	# Runs the check alone, for tests: install-tool.sh check-rust-manifest PINNED SHA256 USED UPDATE_HASH
+	shift
+	check_rust_manifest "$@"
 	;;
 *)
 	echo "install-tool.sh: unknown tool $1" >&2

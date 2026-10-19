@@ -35,6 +35,14 @@ assert_contains "extra argument is rejected" "usage" "$(pod up "$T/my code" junk
 assert_contains "missing option value is rejected" "usage" "$(pod up --name 2>&1 || true)"
 has_line "--image is used" "example.com/other:1" "$(pod up --image example.com/other:1 "$T/my code")"
 has_line "home volume can be overridden" "abtest-home:/home/agent" "$(AGENTAINER_HOME_VOLUME=abtest-home pod up "$T/my code")"
+# A home given as a path is mounted and recorded as an absolute path, so update from
+# another directory mounts the same one.
+mkdir -p "$T/here/home"
+out=$(cd "$T/here" && AGENTAINER_HOME_VOLUME=./home pod up "$T/my code")
+has_line "a relative home path is mounted as an absolute path" "$T/here/home:/home/agent" "$out"
+has_line "a relative home path is recorded as an absolute path" "io.github.chadmayfield.agentainer.home=$T/here/home" "$out"
+assert_contains "a missing home path fails" "no such directory: ./nohome" "$(cd "$T/here" && AGENTAINER_HOME_VOLUME=./nohome pod up "$T/my code" 2>&1 || true)"
+assert_eq "a missing home path runs nothing" "" "$(cd "$T/here" && AGENTAINER_HOME_VOLUME=./nohome pod up "$T/my code" 2>/dev/null || true)"
 
 out=$(dock up --sudo --name proj "$T/my code")
 case "$out" in
@@ -52,12 +60,15 @@ envf="$T/env"
 chmod 600 "$envf"
 has_line "uses the env file when present" "$envf" "$(AGENTAINER_ENV_FILE=$envf pod up "$T/my code" 2>&1)"
 chmod 400 "$envf"
-assert_eq "mode 400 is accepted quietly" "none" "$(AGENTAINER_ENV_FILE=$envf pod up "$T/my code" 2>&1 | grep "should" || echo none)"
+# The image name is the last argument of the run command, so it proves the launcher got that far.
+assert_absent "mode 400 is accepted quietly" "$(AGENTAINER_ENV_FILE=$envf pod up "$T/my code" 2>&1)" \
+	ghcr.io/chadmayfield/agentainer:latest "should"
 chmod 644 "$envf"
 assert_contains "warns about a readable env file" "should not be readable by others" "$(AGENTAINER_ENV_FILE=$envf pod up "$T/my code" 2>&1)"
 ln -s "$envf" "$T/envlink"
 chmod 600 "$envf"
-assert_eq "a symlinked 600 env file is accepted quietly" "none" "$(AGENTAINER_ENV_FILE=$T/envlink pod up "$T/my code" 2>&1 | grep "should" || echo none)"
+assert_absent "a symlinked 600 env file is accepted quietly" "$(AGENTAINER_ENV_FILE=$T/envlink pod up "$T/my code" 2>&1)" \
+	ghcr.io/chadmayfield/agentainer:latest "should"
 
 assert_eq "attach uses tmux" "exec|-it|agentainer|tmux|new-session|-A|-s|main" "$(pod attach | paste -sd '|' -)"
 assert_eq "shell opens a bash login shell" "exec|-it|agentainer|bash|-l" "$(pod shell | paste -sd '|' -)"
@@ -132,8 +143,19 @@ assert_eq "update without labels changes nothing" "" "$(ins update old 2>/dev/nu
 printf '%s\n' "$p.dir=$T/gone" "$p.image=example.com/i:2" "$p.sudo=0" "$p.home=h" "$p.env-file=" >"$T/labels/gone"
 assert_contains "update with a missing DIR fails" "no longer exists" "$(ins update gone 2>&1 || true)"
 assert_eq "update with a missing DIR changes nothing" "" "$(ins update gone 2>/dev/null || true)"
-assert_contains "update of a missing container fails" "no such object" "$(ins update nosuch 2>&1 || true)"
-has_line "update inspects containers only" "--type container" "$(tr ' ' '\n' <"$T/labels.calls" | paste -sd ' ' - | grep -o -- '--type container' | head -1)"
+rc=0
+out=$(ins update nosuch 2>/dev/null) || rc=$?
+assert_eq "update of a missing container exits 1" "1" "$rc"
+assert_eq "update of a missing container runs nothing" "" "$out"
+# Every inspect call names --type container, so an image with the same name never answers.
+calls=$(grep -c . "$T/labels.calls")
+typed=$(grep -c -- ' --type container ' "$T/labels.calls")
+if [ "$calls" -gt 0 ] && [ "$calls" = "$typed" ]; then pass "update inspects containers only"; else fail "update inspects containers only" "$typed of $calls inspect calls have --type container"; fi
+printf '%s\n' "$p.dir=$T/my code" "$p.image=example.com/i:2" "$p.sudo=0" "$p.home=$T/here/home" "$p.env-file=" >"$T/labels/homedir"
+has_line "update keeps a home directory" "$T/here/home:/home/agent" "$(cd / && ins update homedir 2>/dev/null)"
+printf '%s\n' "$p.dir=$T/my code" "$p.image=example.com/i:2" "$p.sudo=0" "$p.home=$T/gone-home" "$p.env-file=" >"$T/labels/nohome"
+assert_contains "update with a missing home directory fails" "home directory $T/gone-home, which no longer exists" "$(ins update nohome 2>&1 || true)"
+assert_eq "update with a missing home directory changes nothing" "" "$(ins update nohome 2>/dev/null || true)"
 printf '%s\n' "$p.dir=$T/my code" "$p.image=example.com/i:2" "$p.sudo=0" "$p.home=h" "$p.env-file=$T/moved-env" >"$T/labels/noenv"
 assert_contains "update with a missing env file fails" "env file" "$(ins update noenv 2>&1 || true)"
 assert_eq "update with a missing env file changes nothing" "" "$(ins update noenv 2>/dev/null || true)"

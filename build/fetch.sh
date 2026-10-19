@@ -3,6 +3,13 @@
 # Usage: fetch.sh URL ALGO EXPECTED OUT
 set -eu
 url=$1 algo=$2 expected=$3 out=$4
+case "$algo" in
+sha256 | sha512 | sri) ;;
+*)
+	echo "fetch.sh: unknown algorithm $algo" >&2
+	exit 2
+	;;
+esac
 if [ -z "$expected" ]; then
 	echo "fetch.sh: no expected checksum for $url" >&2
 	exit 1
@@ -18,10 +25,6 @@ sha512) actual=$(sha512sum "$out" | cut -d' ' -f1) ;;
 sri)
 	actual=$(python3 -c 'import base64,hashlib,sys
 print("sha512-" + base64.b64encode(hashlib.sha512(open(sys.argv[1], "rb").read()).digest()).decode())' "$out")
-	;;
-*)
-	echo "fetch.sh: unknown algorithm $algo" >&2
-	exit 2
 	;;
 esac
 if [ "$actual" != "$expected" ]; then

@@ -10,7 +10,7 @@ This example has not been deployed to a cluster yet.
 
 ## Install
 
-Before you apply, set `loadBalancerSourceRanges` in [`containerssh/service.yaml`](../deploy/kubernetes/containerssh/service.yaml) to your client range, and pin the image in [`agentainer/kustomization.yaml`](../deploy/kubernetes/agentainer/kustomization.yaml) (`images`, `newTag`). The example follows `latest`.
+Before you apply, set `loadBalancerSourceRanges` in [`containerssh/service.yaml`](../deploy/kubernetes/containerssh/service.yaml) to your client range, block node ports with a firewall (see [SSH port access](#ssh-port-access)), and pin the image in [`agentainer/kustomization.yaml`](../deploy/kubernetes/agentainer/kustomization.yaml) (`images`, `newTag`). The example follows `latest`.
 
 ```sh
 kubectl apply -f deploy/kubernetes/agentainer/namespace.yaml \
@@ -43,10 +43,27 @@ ssh dev@<containerssh service address>
 - A cluster has no host folder. Clone repos into `/workspace`. **Work you have not pushed exists only on the workspace volume.**
 - sftp and the default `scp` do not work: since OpenSSH 9.0, `scp` uses the SFTP protocol, and the image has no `sftp-server`. `scp -O` (the legacy protocol) and `rsync -e ssh` should work, because ContainerSSH runs those as commands; this is not verified.
 - Port forwarding (`ssh -L`, `ssh -R`), socket forwarding and X11 forwarding are off: ContainerSSH disables them by default and the example keeps that.
-- The Service uses `externalTrafficPolicy: Local`, so ContainerSSH and `loadBalancerSourceRanges` see the client's real address. If you switch to the commented `NodePort` alternative, `loadBalancerSourceRanges` no longer applies, so restrict access with a firewall. Connect with `ssh -p <node port>` to the node that runs the ContainerSSH pod; other nodes do not forward the port.
 - The ContainerSSH-to-webhook traffic is plain HTTP inside the cluster. ContainerSSH's webhook client accepts `cacert`, `cert` and `key` settings for TLS (`config/http.go` in ContainerSSH v0.6.0).
 - Resource requests and limits on all three pods are example values.
 - To turn sudo on, follow the comment in [`agentainer/statefulset.yaml`](../deploy/kubernetes/agentainer/statefulset.yaml). The capability list there is untested, and the pod then needs the Baseline profile.
+
+## SSH port access
+
+- `loadBalancerSourceRanges` limits only traffic that arrives at the load balancer address. A `LoadBalancer` Service also opens a node port (from 30000-32767 by default) on every node, and kube-proxy does not apply the source ranges to it (`pkg/proxy/iptables/proxier.go` in Kubernetes v1.34.0). Anyone who can reach the node that runs the ContainerSSH pod can reach SSH through that port. Block the node port range from untrusted networks with a firewall in front of the nodes.
+- If your load balancer sends traffic straight to pods instead of through node ports, you can set `allocateLoadBalancerNodePorts: false` in the Service, and Kubernetes allocates no node port for it ([Service docs](https://kubernetes.io/docs/concepts/services-networking/service/#load-balancer-nodeport-allocation)). The example does not set it, because a load balancer that routes through node ports stops working without them. Check your provider's documentation before you set it.
+- The Service uses `externalTrafficPolicy: Local`, so ContainerSSH sees and logs the client's real address instead of a node address ([Preserving the client source IP](https://kubernetes.io/docs/tasks/access-application-cluster/create-external-load-balancer/#preserving-the-client-source-ip)). The load balancer sends traffic only to nodes that run the ContainerSSH pod.
+- To use the commented `NodePort` alternative, change `type` and delete the `loadBalancerSourceRanges` line. The API server rejects a `NodePort` Service that sets it. Restrict access to the node port with a firewall. Connect with `ssh -p <node port>` to the node that runs the ContainerSSH pod; other nodes do not forward the port.
+
+## Seeding a new home
+
+The StatefulSet mounts an optional ConfigMap named `agentainer-seed` at `/etc/agentainer/seed`. When the pod starts, the entrypoint copies `AGENTS.md` and `mcp.json` from it to `~/.agentainer/AGENTS.md` and `~/.agentainer/mcp.json`, but only when that file is missing in the home volume. It never replaces a file that exists, so edits made in the pod survive restarts, and a changed ConfigMap does not reach a home that already has the file. Without the ConfigMap the pod starts as usual and gets the image's default `AGENTS.md`.
+
+```sh
+kubectl -n agentainer create configmap agentainer-seed \
+  --from-file=AGENTS.md=./AGENTS.md --from-file=mcp.json=./mcp.json
+```
+
+Both keys are optional. [Configuration](configuration.md) describes both files; the entrypoint registers the servers in `mcp.json` with each agent. Create the ConfigMap before the first start of a new home volume, or delete the file in the pod and restart the pod to seed it again.
 
 ## Network policy
 

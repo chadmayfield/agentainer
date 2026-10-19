@@ -59,7 +59,7 @@ def load_desired(path, warn=None):
     if not isinstance(servers, dict):
         raise Invalid('%s must contain an object "mcpServers"' % path)
     for name, s in servers.items():
-        if not re.match(r"^[A-Za-z0-9_-]+$", name):
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
             raise Invalid("server name %r may only use letters, digits, - and _" % name)
         if not isinstance(s, dict) or ("command" in s) == ("url" in s):
             raise Invalid("server %r needs exactly one of command or url" % name)

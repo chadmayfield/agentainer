@@ -19,11 +19,15 @@ assert_contains "trivy version" "Version: $TRIVY_VERSION" "$(run_in -- trivy --v
 assert_contains "curlie version" "curlie $CURLIE_VERSION" "$(run_in -- curlie version 2>&1)"
 assert_contains "golangci-lint version" "version $GOLANGCI_LINT_VERSION " "$(run_in -- golangci-lint --version)"
 assert_contains "tea version" "$TEA_VERSION" "$(run_in -- tea --version)"
+# find prints END only when it exits 0, so a missing or unreadable path fails these checks
+# with find's error message in the output instead of passing on an empty result.
 assert_eq "everything under /opt and /usr/local is root-owned" "END" \
-	"$(run_in -- sh -c 'find /opt /usr/local -xdev ! -user root ! -type l; echo END')"
+	"$(run_in -- sh -c 'find /opt /usr/local -xdev ! -user root ! -type l 2>&1 && echo END')"
 assert_eq "nothing under /opt and /usr/local is world-writable" "END" \
-	"$(run_in -- sh -c 'find /opt /usr/local -xdev -perm -o+w ! -type l; echo END')"
-assert_eq "no Rust docs shipped" "END" "$(run_in -- sh -c 'find /opt/rustup/toolchains -path "*/share/doc" -prune; echo END')"
+	"$(run_in -- sh -c 'find /opt /usr/local -xdev -perm -o+w ! -type l 2>&1 && echo END')"
+# shellcheck disable=SC2016 # expands in the container
+assert_eq "no Rust docs shipped" "END" \
+	"$(run_in -- sh -c 'find "$RUSTUP_HOME/toolchains" -path "*/share/doc" -prune 2>&1 && echo END')"
 assert_eq "no build leftovers" "rc=2" "$(run_in -- sh -c 'ls /tmp/agentainer-build 2>/dev/null; echo rc=$?')"
 
 # Go's own test suite and API lists are not needed to build, vet or test code.

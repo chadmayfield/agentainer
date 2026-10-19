@@ -213,15 +213,26 @@ ENV RUSTUP_HOME=/opt/rustup \
 
 COPY versions.env /usr/local/share/agentainer/versions.env
 COPY build/write-versions-json.py /tmp/agentainer-build/
-COPY rootfs/ /
-# Commands keep their mode from git, which can be lost when the build context is
-# copied from an unpacked archive or a file system without modes.
-RUN ln -s /opt/codex/bin/codex /usr/local/bin/codex \
-	&& find /usr/local/bin -maxdepth 1 -type f \( -name 'agentainer-*' -o -name 'openrouter-*' \) -exec chmod 0755 {} + \
+# COPY keeps each file's mode from the build context, so a build host with umask 077
+# would make /etc 0700 and the seed files 0600. rootfs is staged first and every path
+# in it gets a fixed mode before it is copied to /: directories 0755, commands in
+# usr/local/bin 0755, other files 0644. The entrypoint sources its steps, so they do
+# not need the execute bit. Paths that rootfs does not contain keep their modes.
+COPY rootfs/ /tmp/agentainer-build/rootfs/
+RUN cd /tmp/agentainer-build/rootfs \
+	&& find . -type d -exec chmod 0755 {} + \
+	&& find . -type f -exec chmod 0644 {} + \
+	&& find usr/local/bin -type f -exec chmod 0755 {} + \
+	&& find . -mindepth 1 -maxdepth 1 -exec cp -a {} / \; \
+	&& cd / \
+	&& rm -rf /tmp/agentainer-build/rootfs \
+	&& ln -s /opt/codex/bin/codex /usr/local/bin/codex \
 	&& test -x /usr/local/bin/codex \
+	&& test -x /usr/local/bin/agentainer-entrypoint \
 	&& python3 /tmp/agentainer-build/write-versions-json.py
 
 ARG IMAGE_VERSION=dev
+ENV AGENTAINER_IMAGE_VERSION="${IMAGE_VERSION}"
 ARG VCS_REF=unknown
 ARG BUILD_DATE
 LABEL org.opencontainers.image.version="${IMAGE_VERSION}" \

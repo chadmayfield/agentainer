@@ -91,8 +91,10 @@ class WebhookTests(unittest.TestCase):
         c.endheaders()
         if body:
             c.send(body)
-        r = c.getresponse()
-        return r.status
+        try:
+            return c.getresponse().status
+        finally:
+            c.close()
 
     def test_negative_content_length_is_rejected(self):
         self.assertEqual(self.raw({"Content-Length": "-1"}), 400)
@@ -125,6 +127,63 @@ class WebhookTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             urllib.request.urlopen(req)
         self.assertEqual(cm.exception.code, 400)
+
+    def test_deeply_nested_json_is_400(self):
+        # json.loads raises RecursionError, not ValueError, for deep nesting. The body
+        # stays under MAX_BODY, so it reaches the parser.
+        for body in (b"[" * 60000, b'{"a":' * 12000):
+            with self.subTest(body=body[:5]):
+                self.assertLess(len(body), webhook.MAX_BODY)
+                self.assertEqual(self.raw({"Content-Length": str(len(body))}, body), 400)
+
+
+class ConcurrencyLimitTests(unittest.TestCase):
+    """The server handles at most max_workers connections at once and answers 503
+    beyond that, so many idle connections cannot exhaust the pod's memory."""
+
+    def setUp(self):
+        self.keys = tempfile.NamedTemporaryFile("w", delete=False)
+        self.keys.write(KEY + "\n")
+        self.keys.close()
+        settings = webhook.Settings(user="dev", keys_path=self.keys.name, pod="agentainer-0", namespace="agentainer")
+        self.server = webhook.make_server(("127.0.0.1", 0), settings, max_workers=2)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.idle = []
+
+    def tearDown(self):
+        for s in self.idle:
+            s.close()
+        self.server.shutdown()
+        self.server.server_close()
+        os.unlink(self.keys.name)
+
+    def status(self):
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            c.request("POST", "/password", body=b"{}")
+            return c.getresponse().status
+        except (ConnectionError, http.client.HTTPException):
+            return None
+        finally:
+            c.close()
+
+    def test_connections_beyond_the_limit_get_503(self):
+        import socket
+        import time
+        self.assertEqual(self.status(), 200)
+        for _ in range(2):
+            self.idle.append(socket.create_connection(("127.0.0.1", self.port), timeout=5))
+        time.sleep(0.3)  # let the server accept both idle connections
+        self.assertEqual(self.status(), 503)
+        for s in self.idle:
+            s.close()
+        self.idle = []
+        deadline = time.time() + 5
+        while self.status() != 200 and time.time() < deadline:
+            time.sleep(0.1)
+        self.assertEqual(self.status(), 200)
 
 
 if __name__ == "__main__":

@@ -12,12 +12,14 @@ import re
 import subprocess
 import tempfile
 import sys
+import urllib.parse
 import urllib.request
 
 ARCHES = {"AMD64": "amd64", "ARM64": "arm64"}
 AGY_MANIFEST = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_{arch}.json"
 AGY_KEYS = ("version", "url", "sha512")
-AGY_URL_PREFIX = "https://storage.googleapis.com/antigravity-public/"
+AGY_HOST = "storage.googleapis.com"
+AGY_BUCKET = "antigravity-public"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX128 = re.compile(r"^[0-9a-f]{128}$")
 
@@ -43,13 +45,36 @@ VALUE_PATTERNS = [
 ]
 
 
+def agy_url_problem(url):
+    """None when url names an object in the agy bucket, otherwise the reason.
+
+    curl merges "/../" and "/./" in a URL path (see --path-as-is in curl(1)), and a
+    server may decode percent escapes before it resolves the path, so a URL that
+    starts with the bucket path can still reach another bucket. Only plain,
+    non-empty segments with no escapes, query or fragment are accepted.
+    """
+    if any(c in url for c in "%?#\\"):
+        return "agy url has a percent escape, query, fragment or backslash: %s" % url
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "https" or parts.netloc != AGY_HOST:
+        return "agy url is not https://%s: %s" % (AGY_HOST, url)
+    segments = parts.path.split("/")
+    if segments[:2] != ["", AGY_BUCKET] or len(segments) < 3:
+        return "agy url is not in the %s bucket: %s" % (AGY_BUCKET, url)
+    if any(seg in ("", ".", "..") for seg in segments[2:]):
+        return "agy url has an empty, . or .. segment: %s" % url
+    return None
+
+
 def invalid(key, value):
     """None when value is safe to write for key, otherwise the reason."""
     for key_re, value_re in VALUE_PATTERNS:
         if re.fullmatch(key_re, key):
-            if re.fullmatch(value_re, value):
-                return None
-            return "%s=%r does not match %s" % (key, value, value_re)
+            if not re.fullmatch(value_re, value):
+                return "%s=%r does not match %s" % (key, value, value_re)
+            if key.startswith("AGY_URL_"):
+                return agy_url_problem(value)
+            return None
     return "%s is not a known pin" % key
 
 def parse_env(text):
@@ -182,8 +207,9 @@ def parse_agy(manifest):
         version, url, sha = (manifest[k] for k in AGY_KEYS)
     except KeyError as e:
         raise LookupFailed("agy manifest: missing %s" % e)
-    if not url.startswith(AGY_URL_PREFIX):
-        raise LookupFailed("agy manifest: unexpected download host in %s" % url)
+    problem = agy_url_problem(url)
+    if problem:
+        raise LookupFailed("agy manifest: %s" % problem)
     if not HEX128.match(sha):
         raise LookupFailed("agy manifest: malformed sha512")
     return version, url, sha

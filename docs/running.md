@@ -61,7 +61,11 @@ With sudo on, an agent can change anything in the container, including the agent
 
 ## Other options
 
-- SSH agent on a Linux host: add `-v "$SSH_AUTH_SOCK:/run/ssh-agent.sock" -e SSH_AUTH_SOCK=/run/ssh-agent.sock`. CI checks this on a Linux runner. On macOS the socket path depends on the runtime; this is not verified. For git, the default is `GH_TOKEN` ([docs/logins.md](logins.md)).
+- SSH agent on a Linux host: add `-v "$SSH_AUTH_SOCK:/run/ssh-agent.sock" -e SSH_AUTH_SOCK=/run/ssh-agent.sock`. `ssh-agent` refuses a client whose UID differs from its own unless the client is root (`uid mismatch` in [ssh-agent.c](https://github.com/openssh/openssh-portable/blob/master/ssh-agent.c)), so the container user must have the UID of the user who started the agent:
+  - Rootless Podman with keep-id, as the launcher runs it, maps your host UID to the container user ([podman-run](https://docs.podman.io/en/latest/markdown/podman-run.1.html)). Not verified with an SSH agent.
+  - Rootful Docker runs the container user as UID 1000. If your UID is different, build your own image with `--uid` as described in [File ownership](#file-ownership).
+
+  CI covers only rootful Docker on an Ubuntu runner. It starts `ssh-agent`, runs `chmod 755` on the socket's directory, and runs `ssh-add -l` as the image's entrypoint with `--user "$(id -u):$(id -g)"`, so the full entrypoint does not run in that check. On macOS the socket path depends on the runtime; this is not verified. For git, the default is `GH_TOKEN` ([docs/logins.md](logins.md)).
 - SELinux hosts may need `:z` on volume mounts. Not verified.
 
 ## Upgrading
@@ -72,9 +76,11 @@ bin/agentainer update
 
 `update` pulls the image the container was created from and recreates the container; the home volume stays. Without the launcher, pull first: a plain `run` does not pull a newer `latest` if an older one is already on your machine. For Kubernetes, see [docs/kubernetes.md](kubernetes.md#upgrading-and-removing).
 
-On the first start of the new image, the entrypoint adds files that are missing from your home volume and does not replace your files with the image's copies:
+On the first start of the new image, the entrypoint adds files that are missing from your home volume and does not replace your files with the image's copies. The exceptions are `~/.agentainer/AGENTS.md`, the MCP servers that `agentainer-mcp sync` added, `~/.gitconfig` and `~/.config/opencode/service.json`, as described below.
 
 - Logins, agent settings and history stay.
+- When `GH_TOKEN` or `GITHUB_TOKEN` is set, `gh auth setup-git` writes the GitHub credential helper to `~/.gitconfig`, unless this container's `gh` is already the helper. When `GIT_AUTHOR_NAME` or `GIT_AUTHOR_EMAIL` is set and `~/.gitconfig` has no `user.name` or `user.email`, the entrypoint writes that value ([docs/logins.md](logins.md#github-and-git)).
+- The OpenCode step runs `opencode service set disabled true` once per home volume, which writes `~/.config/opencode/service.json`.
 - New defaults in the image's seed files do not reach an existing home. The image's copies are in `/etc/agentainer/home/` (for example `.claude/settings.json` and `.codex/config.toml`) if you want to compare them with yours.
 - `~/.agentainer/AGENTS.md` follows the new default only if you never edited it ([docs/configuration.md](configuration.md#agentsmd)).
 - With `AGENTAINER_TOOLS=persist`, tools you installed stay on `PATH` after the image's own tools. The entrypoint warns on each start until you run `agentainer-tools reset`, which moves them to a dated backup.
