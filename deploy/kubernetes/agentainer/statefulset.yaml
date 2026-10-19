@@ -6,6 +6,10 @@ metadata:
 spec:
   serviceName: agentainer
   replicas: 1
+  # Keep the home and workspace volumes when the StatefulSet is deleted or scaled
+  # down. Retain is the default. The field is stable since Kubernetes 1.32
+  # (feature gate StatefulSetAutoDeletePVC).
+  persistentVolumeClaimRetentionPolicy: {whenDeleted: Retain, whenScaled: Retain}
   selector:
     matchLabels: {app: agentainer}
   template:
@@ -34,7 +38,7 @@ spec:
             capabilities: {drop: [ALL]}
             # To enable sudo, replace the two lines above with the block below. This moves
             # the pod to the Baseline profile; relabel the namespace to baseline as well.
-            # The capability list is checked in the maintainer's cluster test (plan Task 15).
+            # The capability list is not verified.
             # allowPrivilegeEscalation: true
             # capabilities: {drop: [ALL], add: [SETUID, SETGID, AUDIT_WRITE]}
           resources:  # example values
