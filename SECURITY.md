@@ -22,6 +22,6 @@ Only the latest release receives fixes. Releases are calendar versions (`YYYY.MM
 
 ## Known limits
 
-The README's Security section lists what the container does and does not isolate. The main points: every credential passed to the container is readable by every process in it, the agents can change the code you mount, and the ContainerSSH webhook uses plain HTTP inside the cluster unless you turn on TLS.
+[docs/security.md](docs/security.md) lists what the container does and does not isolate. The main points: every credential passed to the container is readable by every process in it, the agents can change the code you mount, and the ContainerSSH webhook uses plain HTTP inside the cluster unless you turn on TLS.
 
-Each release lists its trivy findings in the release notes and attaches the full reports (README, "Vulnerability reports").
+Each release lists its trivy findings in the release notes and attaches the full reports ([docs/security.md](docs/security.md#vulnerability-reports)).

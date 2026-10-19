@@ -131,7 +131,7 @@ update)
 	# Read every option first, so a failure leaves the old container in place.
 	img=$(label "$name" image) || exit 1
 	if [ -z "$img" ]; then
-		echo "agentainer: $name has no option labels (made before agentainer update existed); run 'agentainer down $name' and 'agentainer up' again" >&2
+		echo "agentainer: $name has no option labels, so it was not created by agentainer up; run 'agentainer down $name' and 'agentainer up' again" >&2
 		exit 1
 	fi
 	dir=$(label "$name" dir) && sudo=$(label "$name" sudo) &&
