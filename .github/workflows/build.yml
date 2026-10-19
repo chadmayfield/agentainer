@@ -396,9 +396,24 @@ jobs:
           img=ghcr.io/chadmayfield/agentainer
           refs=()
           for d in digests/*; do refs+=("$img@sha256:$(basename "$d")"); done
-          docker buildx imagetools create -t "$img:latest" -t "$img:$V" -t "$img:sha-${SHA::7}" "${refs[@]}"
+          # GHCR shows the description of a multi-arch image from the index annotations, not
+          # from image labels (GitHub docs, "Working with the Container registry"). No
+          # licenses annotation: the image bundles software under many licenses, so a single
+          # SPDX identifier would be wrong.
+          desc="Claude Code, Codex, Antigravity CLI and OpenCode in one container"
+          docker buildx imagetools create -t "$img:latest" -t "$img:$V" -t "$img:sha-${SHA::7}" \
+            --annotation "index:org.opencontainers.image.description=$desc" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/chadmayfield/agentainer" \
+            "${refs[@]}"
+          # buildx drops index annotations without an error when every source manifest has a
+          # Docker media type, so check that they arrived.
+          docker buildx imagetools inspect --raw "$img:$V" |
+            DESC="$desc" python3 -c 'import json,os,sys; a=json.load(sys.stdin).get("annotations",{}); sys.exit(a.get("org.opencontainers.image.description")!=os.environ["DESC"])'
           digest=$(docker buildx imagetools inspect "$img:$V" --format '{{json .Manifest}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["digest"])')
-          cosign sign --yes "$img@$digest"
+          # --recursive also signs each per-architecture manifest in the index. A runtime
+          # that pulls the tag resolves it to the manifest for its platform, and a policy
+          # that checks that digest finds no signature on it when only the index is signed.
+          cosign sign --yes --recursive "$img@$digest"
       - name: Git tag and GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
