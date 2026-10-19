@@ -30,6 +30,8 @@ cd "$W"
 # Go (https://go.dev/dl/)
 sh $F "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" sha256 "$(sha GO)" go.tgz
 tar -C /usr/local -xzf go.tgz
+# Go's own test suite and API lists: go build, vet, test and doc do not use them (29 MB).
+rm -rf /usr/local/go/test /usr/local/go/api
 
 # Rust through rustup-init (https://static.rust-lang.org/rustup/archive/)
 sh $F "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${TRIPLE}-unknown-linux-gnu/rustup-init" sha256 "$(sha RUSTUP)" rustup-init

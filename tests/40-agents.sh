@@ -41,4 +41,7 @@ assert_eq "version label is ours, not the base image's" "rc=0" \
 		echo rc=$?
 	)"
 
+# Codex's voice host needs a microphone, which a container does not have.
+assert_eq "no Codex voice resources" "none" "$(run_in -- sh -c 'ls -d /opt/codex/codex-resources/voice 2>/dev/null || echo none')"
+
 finish

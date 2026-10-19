@@ -1,6 +1,6 @@
 7zip
 age
-ansible
+ansible-core
 asciinema
 bash
 bat

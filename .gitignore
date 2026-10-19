@@ -2,3 +2,5 @@
 host.key
 env
 .DS_Store
+# The maintainer's private design notes; never commit them.
+docs/private/

@@ -45,6 +45,9 @@ chown -R root:root /opt/codex
 test -f /opt/codex/codex-package.json
 chmod 0755 /opt/codex/bin/codex /opt/codex/bin/codex-code-mode-host /opt/codex/codex-path/rg
 if [ -f /opt/codex/codex-resources/bwrap ]; then chmod 0755 /opt/codex/codex-resources/bwrap; fi
+# The voice host (77 MB) captures audio for dictation; a container has no microphone.
+# Codex starts and passes `codex doctor` without it.
+rm -rf /opt/codex/codex-resources/voice
 ln -sf bin/codex /opt/codex/codex
 ln -sf /opt/codex/bin/codex /usr/local/bin/codex
 

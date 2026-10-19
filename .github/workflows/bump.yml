@@ -7,7 +7,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  actions: write
 
 jobs:
   bump:
@@ -35,5 +34,6 @@ jobs:
           git push origin "$b"
           { echo "Automated weekly pin update. Review and merge by hand."; echo; echo '```'; cat changes.txt; echo '```'; } > body.md
           gh pr create --base develop --head "$b" --title "Weekly version bump $(date -u +%Y-%m-%d)" --body-file body.md
-          # A PR opened with GITHUB_TOKEN starts no pull_request workflow; a dispatch does run.
-          gh workflow run build.yml --ref "$b"
+          # On the first bump PR (#2), GitHub created the pull_request CI run but held it as
+          # "action_required" until a maintainer chose "Approve and run". A dispatched run did
+          # not count toward the PR's required checks, so none is started here.

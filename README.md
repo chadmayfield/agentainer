@@ -119,6 +119,8 @@ Keep secrets as `${NAME}` references to variables in your env file. No agent con
 
 Image tools come first on `PATH`, so a persisted tool never hides an image tool. When the image changes and persisted tools exist, the entrypoint warns. `agentainer-tools reset` renames the folder to a dated backup (`tests/50-entrypoint.sh`). Ubuntu's Python refuses `pip install` outside a venv (PEP 668), so use `uv`, `pipx` or a venv.
 
+The image has `ansible-core` (`ansible`, `ansible-playbook`, `ansible-galaxy` and the other commands) without the bundled community collections, which would add about 450 MB. Install the collections you use with `ansible-galaxy collection install community.general`. They go to `~/.ansible/collections` on the home volume, so they stay across new containers and upgrades.
+
 ## Kubernetes with ContainerSSH
 
 `deploy/kubernetes/` has an example you apply with `kubectl apply -k`. You reach the agent pod over SSH through [ContainerSSH](https://containerssh.io/v0.6/) v0.6.0, and each login lands in the same tmux session.
@@ -206,7 +208,7 @@ Some findings sit in upstream binaries that this repo cannot rebuild. A new upst
 
 - `versions.env` pins every input: the base image digest, the apt snapshot date, each agent and tool version, and the checksum of every download. The build checks each download against it. The one exception is the Rust toolchain: `rustup-init` downloads the components and checks each against the hashes in Rust's own channel manifest.
 - Agents do not update themselves: `DISABLE_UPDATES=1` for Claude Code ([env vars](https://code.claude.com/docs/en/env-vars)), `/etc/codex/requirements.toml` for Codex ([managed configuration](https://learn.chatgpt.com/docs/enterprise/managed-configuration)), `AGY_CLI_DISABLE_AUTO_UPDATE=true` for Antigravity ([troubleshooting](https://antigravity.google/docs/cli/troubleshooting.md)), and `"update": "disable"` for OpenCode (`tests/40-agents.sh`, `tests/60-agents-md.sh`).
-- A weekly workflow (`.github/workflows/bump.yml`) resolves new versions with `scripts/bump_versions.py` and opens a pull request against `develop`. A maintainer reviews and merges it by hand.
+- A weekly workflow (`.github/workflows/bump.yml`) resolves new versions with `scripts/bump_versions.py` and opens a pull request against `develop`. CI on that pull request starts when a maintainer chooses "Approve and run" on it; the maintainer then reviews and merges it by hand.
 - Releases are calendar versions (`YYYY.MM.DD`). Images are tagged `latest`, the version and `sha-<commit>`, signed with cosign keyless, and published with an SBOM and provenance to `ghcr.io/chadmayfield/agentainer`. A published image is a fresh build from the release commit with the same pinned inputs, not the exact image the pull request tests ran on.
 - `/etc/agentainer/versions.json` in the image lists every agent, tool and installed apt package version.
 

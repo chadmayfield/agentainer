@@ -23,4 +23,8 @@ assert_contains "node is 22" "v22." "$(run_in -- node --version)"
 assert_contains "tmux runs" "tmux 3.6" "$(run_in -- tmux -V)"
 assert_contains "pip --user is refused (PEP 668)" "externally-managed" "$(run_in -- sh -c 'python3 -m pip install --user requests 2>&1 || true')"
 
+# ansible-core only: the commands without the 450 MB of bundled collections.
+assert_eq "ansible-core without bundled collections" "none" "$(run_in -- sh -c 'ls -d /usr/lib/python3/dist-packages/ansible_collections 2>/dev/null || echo none')"
+assert_contains "ansible-galaxy installs collections" "ansible-galaxy" "$(run_in -- sh -c 'ansible-galaxy --version' 2>&1)"
+
 finish

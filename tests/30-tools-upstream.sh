@@ -26,4 +26,7 @@ assert_eq "nothing under /opt and /usr/local is world-writable" "END" \
 assert_eq "no Rust docs shipped" "END" "$(run_in -- sh -c 'find /opt/rustup/toolchains -path "*/share/doc" -prune; echo END')"
 assert_eq "no build leftovers" "rc=2" "$(run_in -- sh -c 'ls /tmp/agentainer-build 2>/dev/null; echo rc=$?')"
 
+# Go's own test suite and API lists are not needed to build, vet or test code.
+assert_eq "no Go test suite or API lists" "none" "$(run_in -- sh -c 'ls -d /usr/local/go/test /usr/local/go/api 2>/dev/null || echo none')"
+
 finish
