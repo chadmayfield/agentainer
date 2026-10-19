@@ -14,8 +14,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
-# Each timeout leaves room over the longest run seen so far, so a hung step fails the
-# job instead of holding a runner for the 6-hour default.
+# Each job has a timeout well above its normal run time, so a hung step fails the job
+# instead of holding a runner for the 6-hour default.
 jobs:
   changes:
     runs-on: ubuntu-26.04
@@ -35,8 +35,10 @@ jobs:
         run: |
           set -u
           # The image job is skipped only when every changed file is on this list. These
-          # files are not copied into the image. Do not add *.md: rootfs/etc/agentainer
-          # ships AGENTS.md and CLAUDE.md in the image.
+          # files are not copied into the image. Do not add *.md: the image ships
+          # rootfs/etc/agentainer/AGENTS.md and rootfs/etc/agentainer/home/.claude/CLAUDE.md.
+          # --no-renames lists both paths of a move, so moving a build file into docs/
+          # still counts as a code change.
           docs_only() {
             case "$1" in
             README.md | CONTRIBUTING.md | SECURITY.md | LICENSE | docs/*) return 0 ;;
@@ -54,7 +56,7 @@ jobs:
           # keeps image=true.
           if [ -n "$base" ] && [ "$base" != 0000000000000000000000000000000000000000 ] &&
             git fetch -q --depth=1 origin "$base" &&
-            files=$(git diff --name-only "$base" HEAD) && [ -n "$files" ]; then
+            files=$(git diff --no-renames --name-only "$base" HEAD) && [ -n "$files" ]; then
             printf 'Changed files:\n%s\n' "$files"
             image=false
             while IFS= read -r f; do
@@ -89,7 +91,7 @@ jobs:
           - {arch: amd64, runner: ubuntu-26.04}
           - {arch: arm64, runner: ubuntu-26.04-arm}
     runs-on: ${{ matrix.runner }}
-    # The longest run so far took 24 minutes (amd64); most take 15 to 18.
+    # A normal run takes 15 to 20 minutes.
     timeout-minutes: 45
     env:
       IMAGE: localhost/agentainer:dev
@@ -293,8 +295,8 @@ jobs:
           - {arch: amd64, runner: ubuntu-26.04}
           - {arch: arm64, runner: ubuntu-26.04-arm}
     runs-on: ${{ matrix.runner }}
-    # Not run yet. The build step takes 6 to 10 minutes in the image job, and this job
-    # adds the push of about 1 GB and a pull and scan of the pushed image.
+    # The build takes 6 to 10 minutes; this job adds a push of about 1 GB and a pull and
+    # scan of the pushed image.
     timeout-minutes: 60
     permissions:
       contents: read
