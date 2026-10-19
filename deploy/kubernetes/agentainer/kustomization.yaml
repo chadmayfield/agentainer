@@ -5,7 +5,7 @@ resources:
   - service.yaml
   - statefulset.yaml
   # - networkpolicy.yaml
-# Pin the image here: set newTag to a release (for example 1.0.0) or digest to an
+# Pin the image here: set newTag to a release (for example 2026.10.20) or digest to an
 # image digest. "latest" follows every release and pulls on each pod start.
 images:
   - name: ghcr.io/chadmayfield/agentainer

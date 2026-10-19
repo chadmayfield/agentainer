@@ -58,9 +58,9 @@ assert_eq "host key Secret item is host.key" "host.key host.key" "$(q "$hk | .it
 assert_eq "hostkeys path matches the host.key mount" \
 	"$(q "$dep.containers[0].volumeMounts[] | select(.name==\"hostkey\").mountPath")/host.key" \
 	"$(q "$csc | .ssh.hostkeys[0]")"
-# shellcheck disable=SC2016 # the README line contains a literal $keydir
-assert_contains "README creates the host key Secret from host.key" \
-	'create secret generic containerssh-hostkey --from-file="$keydir/host.key"' "$(cat README.md)"
+# shellcheck disable=SC2016 # the docs line contains a literal $keydir
+assert_contains "docs/kubernetes.md creates the host key Secret from host.key" \
+	'create secret generic containerssh-hostkey --from-file="$keydir/host.key"' "$(cat docs/kubernetes.md)"
 assert_eq "host key file mode 0400" "256" "$(q "$hk.defaultMode")"
 assert_eq "fsGroup lets user 1022 read the host key" "1022" "$(q "$dep.securityContext.fsGroup")"
 for d in containerssh agentainer-auth; do

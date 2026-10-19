@@ -48,8 +48,8 @@ Check each command's exit code directly. Piping into `tail` or `grep` hides a fa
 
 ## Pins and downloads
 
-- Every pinned version, digest and checksum lives in `versions.env`. Do not hardcode versions in the `Containerfile` or scripts. GitHub Actions are pinned to commit SHAs in the workflow files.
-- A new pin needs a resolver in `scripts/bump_versions.py` and a matching entry in its `VALUE_PATTERNS`; the weekly update refuses to write a value that matches no pattern.
+- Every pinned version, digest and checksum for the image lives in `versions.env`. Do not hardcode versions in the `Containerfile` or scripts. Exceptions: GitHub Actions and the actionlint image are pinned by SHA or digest in the workflow files, and the two image references in `deploy/kubernetes/*/deployment.yaml` repeat their `versions.env` pins (`bump_versions.py` rewrites them and `tests/host/test-manifests.sh` checks they match).
+- A new pin needs a resolver in `scripts/bump_versions.py`, and its key must match a pattern in `VALUE_PATTERNS` (most keys match by suffix, such as `_VERSION` or `_SHA256_ARM64`). The weekly update refuses to write a value that matches no pattern.
 - Check every download against the checksum the project publishes. When a project publishes none, record the SHA-256 you computed and say so in a comment.
 - Install upstream release binaries. Do not build a tool from source to pick up a newer Go, Rust or library version.
 
@@ -61,7 +61,7 @@ Check each command's exit code directly. Piping into `tail` or `grep` hides a fa
 ## Image and runtime
 
 - Image-owned files live outside `/home/agent`.
-- The entrypoint only adds missing files to the home volume and never overwrites a file the user owns. The one exception is `~/.agentainer/AGENTS.md` when the user never edited it: it follows a new image default.
+- The entrypoint never replaces a user's file with the image's copy; it only adds files that are missing. Exceptions, each limited to what it manages: `~/.agentainer/AGENTS.md` follows a new image default when the user never edited it; `agentainer-mcp sync` edits only the MCP servers it added; `gh auth setup-git` and the git identity step write `~/.gitconfig`.
 - Containers may share one home volume. Anything that writes to it must cope with another container doing the same at the same time (unique temp files, `flock`).
 - Shell scripts are POSIX sh unless they need bash, and must pass `shellcheck` and `shfmt`. `/bin/sh` in the image is dash.
 

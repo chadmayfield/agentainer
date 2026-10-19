@@ -6,7 +6,7 @@ sudo is off by default. Recreate the container with `bin/agentainer up --sudo`, 
 **`ping: socket: Operation not permitted`**
 The container was started without `--sysctl "net.ipv4.ping_group_range=1000 1000"`. The launcher and the Kubernetes example set it; add it to raw `run` commands.
 
-**`the container name "agentainer" is already in use`**
+**The container name `agentainer` is already in use**
 A container with that name exists. If it is running, `bin/agentainer attach` connects to it. If it is stopped, `bin/agentainer start` starts it, and `bin/agentainer down` removes it. The home volume stays either way.
 
 **`agentainer: ... no option labels`** when running `agentainer update`

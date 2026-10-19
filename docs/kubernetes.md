@@ -43,7 +43,7 @@ ssh dev@<containerssh service address>
 - A cluster has no host folder. Clone repos into `/workspace`. **Work you have not pushed exists only on the workspace volume.**
 - sftp and the default `scp` do not work: since OpenSSH 9.0, `scp` uses the SFTP protocol, and the image has no `sftp-server`. `scp -O` (the legacy protocol) and `rsync -e ssh` should work, because ContainerSSH runs those as commands; this is not verified.
 - Port forwarding (`ssh -L`, `ssh -R`), socket forwarding and X11 forwarding are off: ContainerSSH disables them by default and the example keeps that.
-- The Service uses `externalTrafficPolicy: Local`, so ContainerSSH and `loadBalancerSourceRanges` see the client's real address. If you switch to the commented `NodePort` alternative, connect to the node that runs the ContainerSSH pod; other nodes do not forward the port.
+- The Service uses `externalTrafficPolicy: Local`, so ContainerSSH and `loadBalancerSourceRanges` see the client's real address. If you switch to the commented `NodePort` alternative, `loadBalancerSourceRanges` no longer applies, so restrict access with a firewall. Connect with `ssh -p <node port>` to the node that runs the ContainerSSH pod; other nodes do not forward the port.
 - The ContainerSSH-to-webhook traffic is plain HTTP inside the cluster. ContainerSSH's webhook client accepts `cacert`, `cert` and `key` settings for TLS (`config/http.go` in ContainerSSH v0.6.0).
 - Resource requests and limits on all three pods are example values.
 - To turn sudo on, follow the comment in [`agentainer/statefulset.yaml`](../deploy/kubernetes/agentainer/statefulset.yaml). The capability list there is untested, and the pod then needs the Baseline profile.
@@ -54,7 +54,7 @@ ssh dev@<containerssh service address>
 
 ## Upgrading and removing
 
-To upgrade, change `newTag` in `agentainer/kustomization.yaml` and run `kubectl apply -k deploy/kubernetes`. The `home` and `workspace` volumes stay.
+To upgrade, change `newTag` in `agentainer/kustomization.yaml` and run `kubectl apply -k deploy/kubernetes`. With `newTag: latest` the manifest does not change, so restart the pod instead: `kubectl -n agentainer rollout restart statefulset agentainer`. The `home` and `workspace` volumes stay.
 
 The StatefulSet keeps the `home` and `workspace` PVCs when it is deleted or scaled down. **`kubectl delete -k deploy/kubernetes` also deletes the `agentainer` namespace, which deletes those PVCs and, with the usual `Delete` reclaim policy, the disks.** To keep your work, delete only the StatefulSet (`kubectl -n agentainer delete statefulset agentainer`), or set the volumes' reclaim policy to `Retain` first.
 

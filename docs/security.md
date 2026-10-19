@@ -30,7 +30,7 @@ Gemini CLI is not included. Google wrote: "On June 18, 2026, Gemini CLI and Gemi
 
 CI scans every image with trivy. A secret found in the image fails the build. Vulnerabilities are reported and do not fail it.
 
-- Pull requests and `develop`: the run's summary page shows counts by severity, how many have a fix, and every critical finding. The full trivy JSON is the `vulnerabilities-<arch>` artifact on that run.
+- Pull requests and `develop`: the run's summary page shows counts by severity, how many have a fix, and up to 50 critical findings. The full trivy JSON is the `vulnerabilities-<arch>` artifact on that run.
 - Releases: the scan runs on the images pushed to GHCR. The release notes start with the same summary, and `vulnerabilities-amd64.json` and `vulnerabilities-arm64.json` are attached to the release.
 - Kernel CVEs filed against `linux-libc-dev`, the kernel header package that C compilers need, are counted separately: the container runs on the host's kernel.
 

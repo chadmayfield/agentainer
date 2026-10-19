@@ -5,7 +5,7 @@ Agentainer is one container image with four AI coding agents and a shared set of
 - Agents: [Claude Code](https://code.claude.com/docs/en/setup), [Codex CLI](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/docs/cli/overview.md) (`agy`) and [OpenCode v2](https://opencode.ai/v2/docs).
 - Base: Ubuntu 26.04 LTS, pinned by digest, with apt packages from the [Ubuntu snapshot service](https://documentation.ubuntu.com/server/how-to/software/snapshot-service/) at a pinned date.
 - Tools: git, gh, Go, Rust, Python with uv and pipx, Node.js, ripgrep, jq, yq, shellcheck, trivy and more. `/etc/agentainer/versions.json` in the image lists every version.
-- Platforms: `linux/amd64` and `linux/arm64`. On amd64 the agents also run on CPUs without AVX2; CI checks this on every build.
+- Platforms: `linux/amd64` and `linux/arm64`. On amd64 the agents also start on CPUs without AVX2; CI checks this on every build.
 
 Agents see only what you mount and the credentials you pass in, and the same image and tools run everywhere.
 
@@ -13,7 +13,7 @@ Agents see only what you mount and the credentials you pass in, and the same ima
 
 You need Podman or Docker. The launcher [`bin/agentainer`](bin/agentainer) is a POSIX shell script.
 
-No image is published to `ghcr.io/chadmayfield/agentainer` until the first release. Until then, build it with `scripts/build.sh` and set `AGENTAINER_IMAGE=localhost/agentainer:dev`.
+No image is published to `ghcr.io/chadmayfield/agentainer` until the first release. Until then, build it with `scripts/build.sh`, then `export AGENTAINER_IMAGE=localhost/agentainer:dev` or pass `--image localhost/agentainer:dev` to `up`.
 
 ```sh
 mkdir -p ~/.config/agentainer

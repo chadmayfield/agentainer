@@ -39,7 +39,7 @@ A pull request that changes only `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, 
 
 1. From an up-to-date `develop`, run `git flow release start <version>`. The version is the release date, `YYYY.MM.DD`, with `.N` for a second release that day.
 2. Push the branch and open a pull request from `release/<version>` to `main`.
-3. When `ci` passes, merge it with "Create a merge commit". The publish job reads the version from the merge commit's subject (`Merge pull request #N from <owner>/release/<version>`).
+3. When `ci` passes, merge it with "Create a merge commit". The `version` job reads the version from the merge commit's subject (`Merge pull request #N from <owner>/release/<version>`).
 4. The workflow on `main` builds both architectures, pushes them, tags the index `latest`, `<version>` and `sha-<short>`, signs it and each architecture's image with cosign, and creates the tag `v<version>` and a GitHub release with the vulnerability summary.
 5. Open a pull request from `main` to `develop` to bring back any fixes made on the release branch.
 

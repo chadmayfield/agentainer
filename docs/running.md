@@ -57,7 +57,7 @@ With sudo on, an agent can change anything in the container, including the agent
 ## File ownership
 
 - Rootless Podman with keep-id: files in `/workspace` belong to your host user.
-- Rootful Docker on Linux: files written to `/workspace` belong to UID 1000 on the host. If your UID is different, build your own image with `scripts/build.sh --uid "$(id -u)" --gid "$(id -g)"`, or use Podman or rootless Docker. With a GID other than 1000, also change the `ping_group_range` value to `"<gid> <gid>"`, or `ping` fails.
+- Rootful Docker on Linux: files written to `/workspace` belong to UID 1000 on the host. If your UID is different, build your own image with `scripts/build.sh --uid "$(id -u)" --gid "$(id -g)"`, or use Podman or rootless Docker. With a GID other than 1000, also change the `ping_group_range` value to `"<gid> <gid>"` in your `run` command, or `ping` fails; the launcher always passes `1000 1000`.
 
 ## Other options
 
@@ -72,7 +72,7 @@ bin/agentainer update
 
 `update` pulls the image the container was created from and recreates the container; the home volume stays. Without the launcher, pull first: a plain `run` does not pull a newer `latest` if an older one is already on your machine. For Kubernetes, see [docs/kubernetes.md](kubernetes.md#upgrading-and-removing).
 
-On the first start of the new image, the entrypoint only adds files that are missing from your home volume and never overwrites one:
+On the first start of the new image, the entrypoint adds files that are missing from your home volume and does not replace your files with the image's copies:
 
 - Logins, agent settings and history stay.
 - New defaults in the image's seed files do not reach an existing home. The image's copies are in `/etc/agentainer/home/` (for example `.claude/settings.json` and `.codex/config.toml`) if you want to compare them with yours.

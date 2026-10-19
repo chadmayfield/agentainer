@@ -58,6 +58,8 @@ Limits per agent:
 - Keep secrets as `${NAME}` references to variables in your env file; no agent config receives the value. Literal values reach `claude` and `agy` on their command line, where `ps` can show them for a moment.
 - Antigravity has no documented syntax for variable references. For `agy`, the sync leaves out `env` entries that are `${NAME}` references (the server inherits the container's environment instead) and does not write headers that contain `${NAME}`, such as `Authorization: Bearer ${TOKEN}`. It prints a warning for each; add those headers in Antigravity by hand.
 - Codex sends a `${NAME}` header variable as the whole header value. `Authorization: Bearer ${NAME}` works. For any other header written as `Bearer ${NAME}`, the sync leaves it out for Codex with a warning: store `Bearer <token>` in the variable and write the header value as `${NAME}`.
+- Codex passes a server only the variables named in its config, under their own names. An `env` entry such as `API_KEY=${OTHER}` cannot rename a variable for Codex, so the sync leaves it out with a warning; give the variable the name the server expects.
+- If `~/.config/opencode/opencode.jsonc` exists, the OpenCode sync stops with an error, because it edits only `opencode.json`.
 - Re-syncing replaces the servers it manages, so settings you change inside an agent for one of them may not survive.
 
 In a hand check, Codex and Antigravity listed a synced server's tools, and `claude mcp list` reported the server as connected. OpenCode is not verified: `opencode mcp list` prints "No MCP servers configured" even for a server that `opencode mcp add` wrote itself.
