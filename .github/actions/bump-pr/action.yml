@@ -1,0 +1,52 @@
+name: Open the version bump pull request
+description: >
+  Applies the pin changes from the bump workflow's resolve job to the checked-out
+  develop commit, pushes them to a new bump/<date>-<run> branch and opens a pull
+  request against develop. The checkout must store a token that can push.
+inputs:
+  token:
+    description: Token for gh, with Contents and Pull requests write on the repository.
+    required: true
+  app-slug:
+    description: Slug of the GitHub App that owns the token. Empty for GITHUB_TOKEN.
+    required: false
+    default: ""
+  patch:
+    description: Base64 of the git diff the resolver produced.
+    required: true
+  changes:
+    description: Base64 of the resolver's output, quoted in the pull request body.
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        APP_SLUG: ${{ inputs.app-slug }}
+        PATCH: ${{ inputs.patch }}
+        CHANGES: ${{ inputs.changes }}
+        RUN: ${{ github.run_number }}
+      run: |
+        set -u
+        printf '%s' "$PATCH" | base64 -d >"$RUNNER_TEMP/bump.patch"
+        printf '%s' "$CHANGES" | base64 -d >"$RUNNER_TEMP/changes.txt"
+        git apply --index "$RUNNER_TEMP/bump.patch"
+        b="bump/$(date -u +%Y-%m-%d)-$RUN"
+        if [ -n "$APP_SLUG" ]; then
+          # The App's bot user, as the create-github-app-token README sets it up.
+          id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${id}+${APP_SLUG}[bot]@users.noreply.github.com"
+        else
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        fi
+        git switch -c "$b"
+        git commit -m "chore: version bump"
+        git push origin "$b"
+        { echo "Automated pin update. Review and merge by hand."; echo; echo '```'; cat "$RUNNER_TEMP/changes.txt"; echo '```'; } >"$RUNNER_TEMP/body.md"
+        gh pr create --base develop --head "$b" --title "Version bump $(date -u +%Y-%m-%d)" --body-file "$RUNNER_TEMP/body.md"
+        if [ -z "$APP_SLUG" ]; then
+          echo "::notice::Opened with GITHUB_TOKEN: approve the CI run on the pull request with \"Approve workflows to run\"."
+        fi

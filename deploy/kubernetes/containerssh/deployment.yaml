@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: containerssh, namespace: containerssh}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: containerssh}}
+  template:
+    metadata: {labels: {app: containerssh}}
+    spec:
+      serviceAccountName: containerssh
+      nodeSelector: {kubernetes.io/arch: amd64}  # the published image is amd64 only
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1022  # the image's own user (image config User 1022:1022)
+        runAsGroup: 1022
+        fsGroup: 1022  # the kubelet gives this group read access to the host key
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: containerssh
+          image: docker.io/containerssh/containerssh:v0.6@sha256:7adf5995d6d43ecc95fe8225ee87e14d0f1996a03a890b3824d07f5c6a572d07
+          ports: [{containerPort: 2222, name: ssh}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:  # example values
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/containerssh/config.yaml, subPath: config.yaml, readOnly: true}
+            - {name: hostkey, mountPath: /etc/containerssh/hostkey, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: containerssh-config}
+        - name: hostkey
+          secret:
+            secretName: containerssh-hostkey
+            items: [{key: host.key, path: host.key}]  # the key name from --from-file=.../host.key
+            # Owner read only. With fsGroup set, the kubelet adds group read (0440).
+            defaultMode: 0400

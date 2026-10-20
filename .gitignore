@@ -1,0 +1,6 @@
+# Secret files a user may create inside a checkout (the SSH host key, the env file).
+host.key
+env
+.DS_Store
+# The maintainer's private design notes; never commit them.
+docs/private/

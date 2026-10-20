@@ -1,0 +1,43 @@
+#!/bin/sh
+# Agentainer startup. Runs each step in /usr/local/lib/agentainer/entrypoint.d in order,
+# then runs the container command. Steps below 50 are required; the rest only warn.
+set -u
+STEPS=/usr/local/lib/agentainer/entrypoint.d
+
+log() { printf 'agentainer: %s\n' "$*" >&2; }
+warn() { printf 'agentainer: warning: %s\n' "$*" >&2; }
+
+# seed_file SRC DEST: copy SRC to DEST only if DEST does not exist.
+seed_file() {
+	[ -e "$2" ] || [ -L "$2" ] && return 0
+	mkdir -p "$(dirname "$2")" && cp "$1" "$2"
+}
+
+# A one-shot command (anything but the default "sleep infinity") keeps informational
+# startup lines out of its output unless AGENTAINER_QUIET is set explicitly.
+if [ -z "${AGENTAINER_QUIET:-}" ]; then
+	if [ "$#" -gt 0 ] && [ "$*" != "sleep infinity" ]; then AGENTAINER_QUIET=1; else AGENTAINER_QUIET=0; fi
+fi
+
+# Each step runs in a subshell with set -e. This relies on /bin/sh being dash, which
+# applies set -e inside sourced files, functions and pipelines here; bash does not when
+# the subshell is an if condition. Steps that must fail also use explicit "return 1".
+for step in "$STEPS"/[0-9][0-9]-*.sh; do
+	[ -e "$step" ] || continue
+	n=$(basename "$step" | cut -c1-2)
+	# shellcheck source=/dev/null
+	if (
+		set -e
+		. "$step"
+	); then
+		:
+	elif [ "$n" -lt 50 ]; then
+		log "required step $(basename "$step") failed; stopping"
+		exit 1
+	else
+		warn "$(basename "$step") failed"
+	fi
+done
+
+[ "$#" -gt 0 ] || set -- sleep infinity
+exec "$@"

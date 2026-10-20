@@ -1,0 +1,32 @@
+#!/bin/sh
+# agentainer-tools status|reset: show or reset the tools that agents installed.
+set -eu
+# shellcheck source=rootfs/usr/local/lib/agentainer/tools-layout.sh
+. /usr/local/lib/agentainer/tools-layout.sh
+active=/var/lib/agentainer/active
+case "${1:-status}" in
+status)
+	printf 'mode: %s\nroot: %s\n' "${AGENTAINER_TOOLS:-ephemeral}" "$(readlink "$active" 2>/dev/null || echo none)"
+	ls "$active/bin" "$active/npm/bin" 2>/dev/null || true
+	;;
+reset)
+	mkdir -p "$HOME/.agentainer"
+	exec 9>"$HOME/.agentainer/.tools-reset.lock"
+	flock -w 30 9
+	dir="$HOME/.agentainer/tools"
+	if [ -d "$dir" ]; then
+		# Reserve a unique destination, including across container PID namespaces.
+		dest=$(mktemp -d "$dir.$(date -u +%Y%m%dT%H%M%SZ).XXXXXX.bak")
+		mv -T "$dir" "$dest"
+		tools_mkdirs "$dir"
+		rm -f "$HOME/.agentainer/tools-image-version"
+		echo "moved $dir to $dest"
+	else
+		echo "no persisted tools"
+	fi
+	;;
+*)
+	echo "usage: agentainer-tools status|reset" >&2
+	exit 2
+	;;
+esac

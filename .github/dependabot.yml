@@ -1,0 +1,15 @@
+# Updates the SHA pins of the actions in .github/workflows and the version comment on
+# the same line. Options: GitHub docs, "Dependabot options reference".
+# The actionlint image digest in build.yml is a docker run argument, which Dependabot
+# does not read, so it is updated by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    # Dependabot waits 3 days after a release by default. 7 days gives a bad release
+    # time to be found and pulled before a pull request picks it up.
+    cooldown:
+      default-days: 7

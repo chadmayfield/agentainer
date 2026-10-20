@@ -1,0 +1,20 @@
+#!/bin/sh
+# Runs Codex through OpenRouter for this process only.
+# Provider keys: https://learn.chatgpt.com/docs/config-file/config-reference
+# Values: https://openrouter.ai/docs/cookbook/coding-agents/codex-cli
+set -eu
+if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+	echo "openrouter-codex: set OPENROUTER_API_KEY first" >&2
+	exit 2
+fi
+# The default model is the OpenRouter id from OpenRouter's Codex guide; Codex's own
+# default is an OpenAI id OpenRouter does not serve. A user's -m or -c model=... wins.
+# shellcheck disable=SC2016 # $OPENROUTER_API_KEY must reach Codex's auth command unexpanded
+exec codex \
+	-c 'model="~openai/gpt-sol-latest"' \
+	-c 'model_provider="openrouter"' \
+	-c 'model_providers.openrouter.name="openrouter"' \
+	-c 'model_providers.openrouter.base_url="https://openrouter.ai/api/v1"' \
+	-c 'model_providers.openrouter.auth.command="sh"' \
+	-c 'model_providers.openrouter.auth.args=["-c","printf %s \"$OPENROUTER_API_KEY\""]' \
+	"$@"

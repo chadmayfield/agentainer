@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: agentainer-auth, namespace: containerssh}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: agentainer-auth}}
+  template:
+    metadata: {labels: {app: agentainer-auth}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: webhook
+          image: docker.io/library/python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
+          command: [python3, /app/webhook.py]
+          env:
+            - {name: AGENTAINER_USER, value: dev}  # the SSH username you will log in with
+          ports: [{containerPort: 8080}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:  # example values
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 128Mi}
+          volumeMounts:
+            - {name: app, mountPath: /app, readOnly: true}
+            - {name: keys, mountPath: /etc/agentainer-auth, readOnly: true}
+      volumes:
+        - name: app
+          configMap: {name: agentainer-auth-webhook}
+        - name: keys
+          secret: {secretName: agentainer-authorized-keys}

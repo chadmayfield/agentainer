@@ -1,0 +1,525 @@
+name: build
+on:
+  pull_request:
+    # The default types plus edited. Changing a pull request's base branch sends only an
+    # "edited" event, and CI must run again for the new base (the image job may be needed
+    # for main but not for develop). A title or body edit also runs CI: a skipped "ci" job
+    # reports "Success" (GitHub docs, troubleshooting-required-status-checks), so skipping
+    # every job on an edit could hide a failed run.
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [develop, main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the run for its previous commit. Every other event
+# gets a group of its own (the run ID), so pushes to develop and main always run to the end.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+# Each job has a timeout well above its normal run time, so a hung step fails the job
+# instead of holding a runner for the 6-hour default.
+jobs:
+  changes:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      image: ${{ steps.diff.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # For a pull request, HEAD is GitHub's test merge commit; depth 2 brings its parents.
+          fetch-depth: 2
+      - id: diff
+        name: Decide whether the change needs an image build
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          # changes.base is set only on an "edited" event that changed the base branch
+          # (GitHub docs, webhook-events-and-payloads, pull_request edited).
+          BASE_CHANGED: ${{ github.event.changes.base != null }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -u
+          # The image job is skipped only when every changed file is on this list. These
+          # files are not copied into the image. Do not add *.md: the image ships
+          # rootfs/etc/agentainer/AGENTS.md and rootfs/etc/agentainer/home/.claude/CLAUDE.md.
+          # --no-renames lists both paths of a move, so moving a build file into docs/
+          # still counts as a code change.
+          docs_only() {
+            case "$1" in
+            # tests/host/test-manifests.sh checks the install commands in this file.
+            docs/kubernetes.md) return 1 ;;
+            README.md | CONTRIBUTING.md | SECURITY.md | LICENSE | docs/*) return 0 ;;
+            *) return 1 ;;
+            esac
+          }
+          image=true
+          base=
+          case "$EVENT" in
+          pull_request)
+            # The test merge commit's parents are the base branch tip and the pull request
+            # head, so diffing against the first parent lists exactly what the merge adds.
+            # A new base branch always builds: retargeting is rare, and a pull request
+            # moved to main is a release.
+            if [ "$BASE_CHANGED" = true ]; then
+              echo "The base branch changed."
+            elif [ "$(git rev-parse -q --verify 'HEAD^2')" = "$PR_HEAD" ]; then
+              base=$(git rev-parse 'HEAD^1')
+            fi
+            ;;
+          push)
+            # Main and tag pushes always build. An empty or all-zero
+            # "before" (a new branch) has nothing to compare with.
+            if [ "$REF" = refs/heads/develop ] && [ -n "$BEFORE" ] &&
+              [ "$BEFORE" != 0000000000000000000000000000000000000000 ] &&
+              git fetch -q --depth=1 origin "$BEFORE"; then
+              base=$BEFORE
+            fi
+            ;;
+          esac
+          # No base (another event, a HEAD that is not the expected merge commit, a failed
+          # fetch) or an empty diff keeps image=true.
+          if [ -n "$base" ] &&
+            files=$(git diff --no-renames --name-only "$base" HEAD) && [ -n "$files" ]; then
+            printf 'Changed files:\n%s\n' "$files"
+            image=false
+            while IFS= read -r f; do
+              if ! docs_only "$f"; then image=true; break; fi
+            done <<<"$files"
+          fi
+          echo "image=$image" | tee -a "$GITHUB_OUTPUT"
+
+  lint-unit:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: actionlint
+        env:
+          # rhysd/actionlint 1.7.12 from Docker Hub, pinned to the digest of its multi-arch index.
+          ACTIONLINT_IMAGE: docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo "$ACTIONLINT_IMAGE" -color=false
+      - name: Python unit tests
+        run: python3 -m unittest discover -s tests/unit -v
+      - name: Launcher tests
+        run: sh tests/host/test-launcher.sh
+      - name: Build script tests
+        run: sh tests/host/test-build-script.sh
+      - name: Fetch tests
+        run: sh tests/host/test-fetch.sh
+
+  image:
+    name: image (${{ matrix.arch }})
+    needs: [changes, lint-unit]
+    if: needs.changes.outputs.image == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-26.04}
+          - {arch: arm64, runner: ubuntu-26.04-arm}
+    runs-on: ${{ matrix.runner }}
+    # A normal run takes 15 to 20 minutes.
+    timeout-minutes: 60
+    env:
+      IMAGE: localhost/agentainer:dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Build
+        run: RUNTIME=docker sh scripts/build.sh --tag "$IMAGE"
+      - name: Build report (versions, changed pins, size)
+        shell: bash  # -o pipefail: a failing command before | tee must fail the step
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -eu
+          docker run --rm --entrypoint cat "$IMAGE" /etc/agentainer/versions.json >versions.json
+          python3 scripts/build_report.py versions versions.json >>"$GITHUB_STEP_SUMMARY"
+          # Compare with the commit before a push, or with the target branch of a PR or dispatch.
+          if [ -n "${BEFORE:-}" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
+            ref=$BEFORE
+          else
+            ref=${GITHUB_BASE_REF:-develop}
+          fi
+          if git fetch -q --depth=1 origin "$ref"; then
+            git show FETCH_HEAD:versions.env >base-versions.env 2>/dev/null || : >base-versions.env
+          else
+            : >base-versions.env
+          fi
+          python3 scripts/build_report.py pins base-versions.env versions.env >>"$GITHUB_STEP_SUMMARY"
+          docker history --human=false --no-trunc --format '{{.Size}}	{{.CreatedBy}}' "$IMAGE" |
+            python3 scripts/build_report.py layers "$(docker image inspect "$IMAGE" --format '{{.Size}}')" >>"$GITHUB_STEP_SUMMARY"
+      - name: Lint shell
+        run: RUNTIME=docker sh tests/lint.sh
+      - name: Container tests with Docker
+        shell: bash  # -o pipefail: a failing command before | tee must fail the step
+        run: |
+          rc=0
+          RUNTIME=docker sh tests/run.sh 2>&1 | tee tests-docker.log || rc=$?
+          python3 scripts/build_report.py tests Docker tests-docker.log >>"$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+      - name: Real launcher lifecycle with Docker
+        run: RUNTIME=docker sh tests/host/test-launcher-integration.sh
+      - name: Custom UID and existing GID build
+        run: RUNTIME=docker sh tests/host/test-build-uid.sh
+      - name: Manifest tests
+        run: RUNTIME=docker sh tests/host/test-manifests.sh
+      - name: Linux host checks with Docker
+        run: |
+          set -eu
+          # sudo blocked by no-new-privileges=true, allowed without it
+          if docker run --rm --security-opt no-new-privileges=true "$IMAGE" sudo -n true; then
+            echo "FAIL: sudo worked with no-new-privileges"; exit 1; fi
+          docker run --rm "$IMAGE" sudo -n true
+          # rootful Docker writes as UID 1000 (a documented limitation, see docs/running.md)
+          mkdir -p ws && sudo chmod 777 ws && docker run --rm -v "$PWD/ws:/workspace" "$IMAGE" touch /workspace/d
+          echo "docker-created file owner: $(stat -c %u ws/d) (runner uid $(id -u))" | tee -a "$GITHUB_STEP_SUMMARY"
+          # SSH agent forwarding on a Linux host. ssh-agent refuses a peer
+          # with a different UID (openssh-portable ssh-agent.c, "uid mismatch"), so the
+          # client runs as the runner's UID, as it does for a host user with UID 1000.
+          eval "$(ssh-agent -s)" && ssh-keygen -q -t ed25519 -N '' -f k && ssh-add k
+          chmod 755 "$(dirname "$SSH_AUTH_SOCK")"
+          docker run --rm --user "$(id -u):$(id -g)" --entrypoint ssh-add \
+            -v "$SSH_AUTH_SOCK:/run/ssh-agent.sock" -e SSH_AUTH_SOCK=/run/ssh-agent.sock "$IMAGE" -l | grep -q ED25519
+      - name: Agents on a CPU without AVX2
+        if: matrix.arch == 'amd64'
+        shell: bash  # -o pipefail: a failing agent must fail the step through tee
+        run: |
+          set -eu
+          # qemu-user's qemu-x86_64 is statically linked, so it runs inside the image.
+          # SandyBridge has AVX but not AVX2; Haswell adds AVX2.
+          sudo apt-get install -y -qq qemu-user >/dev/null
+          docker run --rm -v /usr/bin/qemu-x86_64:/usr/local/bin/qemu-x86_64:ro --entrypoint bash "$IMAGE" -c '
+            set -u
+            cd /tmp
+            printf "%s\n" "#include <immintrin.h>" \
+              "int main(void) { volatile __m256i a = _mm256_set1_epi32(1);" \
+              "  __m256i b = _mm256_add_epi32(a, a); return _mm256_extract_epi32(b, 0) == 2 ? 0 : 1; }" >avx2.c
+            gcc -O0 -mavx2 -o avx2 avx2.c
+            # Control: the AVX2 program must fail on SandyBridge and run on Haswell,
+            # or this check proves nothing.
+            if qemu-x86_64 -cpu SandyBridge ./avx2 2>/dev/null; then echo "control: AVX2 ran on SandyBridge" >&2; exit 1; fi
+            qemu-x86_64 -cpu Haswell ./avx2 || { echo "control: AVX2 failed on Haswell" >&2; exit 1; }
+            failed=0
+            echo "| Agent | --version on SandyBridge (no AVX2) |"
+            echo "|---|---|"
+            for c in claude codex agy opencode; do
+              bin=$(readlink -f "$(command -v "$c")")
+              if out=$(qemu-x86_64 -cpu SandyBridge "$bin" --version 2>&1 </dev/null); then r="runs: $(printf "%s" "$out" | head -1)"
+              else r="fails (exit $?): $(printf "%s" "$out" | tail -1)"; failed=1; fi
+              echo "| $c | $r |"
+            done
+            # The README says every agent starts without AVX2; a bump that breaks it fails here.
+            exit "$failed"' | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Secret scan (blocks) and vulnerability scan (report only)
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker builder prune -af
+          docker save -o image.tar "$IMAGE"
+          # docker save writes mode 0600; the scan runs as the image user (UID 1000).
+          chmod 644 image.tar
+          df -h /
+          mounts=(-v "$PWD/image.tar:/scan/image.tar:ro")
+          extra=()
+          if [ -f trivy-secret.yaml ]; then
+            mounts+=(-v "$PWD/trivy-secret.yaml:/scan/trivy-secret.yaml:ro")
+            extra=(--secret-config /scan/trivy-secret.yaml)
+          fi
+          docker run --rm "${mounts[@]}" --entrypoint trivy "$IMAGE" \
+            image --input /scan/image.tar --scanners secret --exit-code 1 "${extra[@]}"
+          # The full report is an artifact: the job summary is limited to 1 MiB.
+          mkdir -p report && chmod 777 report
+          docker run --rm "${mounts[@]}" -v "$PWD/report:/report" --entrypoint trivy "$IMAGE" \
+            image --input /scan/image.tar --scanners vuln --exit-code 0 --format json --output /report/vulnerabilities.json
+          python3 scripts/vuln_summary.py "$ARCH=report/vulnerabilities.json" >>"$GITHUB_STEP_SUMMARY"
+          echo "Full report: the vulnerabilities-$ARCH artifact." >>"$GITHUB_STEP_SUMMARY"
+      - name: Upload the vulnerability report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: vulnerabilities-${{ matrix.arch }}
+          path: report/vulnerabilities.json
+          if-no-files-found: ignore
+          overwrite: true  # a re-run of a failed job uploads under the same name
+      - name: Move the image from Docker to Podman
+        run: |
+          docker rmi "$IMAGE"
+          podman load -i image.tar && rm image.tar
+          df -h /
+      - name: Linux host checks with rootless Podman
+        run: |
+          set -eu
+          podman run --rm --userns=keep-id:uid=1000,gid=1000 --security-opt no-new-privileges "$IMAGE" sh -c '! sudo -n true'
+          # bind-mount ownership: rootless Podman keeps the runner user's UID
+          mkdir -p wsp && podman run --rm --userns=keep-id:uid=1000,gid=1000 -v "$PWD/wsp:/workspace" "$IMAGE" touch /workspace/p
+          test "$(stat -c %u wsp/p)" = "$(id -u)"
+      - name: Real launcher lifecycle with rootless Podman
+        run: RUNTIME=podman sh tests/host/test-launcher-integration.sh
+      - name: Container tests with Podman
+        shell: bash  # -o pipefail: a failing command before | tee must fail the step
+        run: |
+          rc=0
+          RUNTIME=podman sh tests/run.sh 2>&1 | tee tests-podman.log || rc=$?
+          python3 scripts/build_report.py tests Podman tests-podman.log >>"$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+  layer-repro:
+    name: layer-repro (${{ matrix.arch }})
+    needs: [changes, lint-unit]
+    if: needs.changes.outputs.image == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-26.04}
+          - {arch: arm64, runner: ubuntu-26.04-arm}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - id: pins
+        run: echo "buildkit=$(sed -n 's/^BUILDKIT_IMAGE=//p' versions.env)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+        with:
+          driver-opts: image=${{ steps.pins.outputs.buildkit }}
+      - name: Compare every tool layer across two clean builds
+        run: python3 tests/host/test-layer-repro.py
+
+  # The one check that branch protection requires. A matrix job skipped by its "if"
+  # reports a single skipped check instead of "image (amd64)" and "image (arm64)", so
+  # those names would stay pending on a docs-only pull request. A job skipped because a
+  # job it needs failed also counts as passed, so this job runs with always() and fails
+  # unless every job it needs succeeded, or the image job was skipped on purpose.
+  ci:
+    if: always()
+    needs: [changes, lint-unit, image, layer-repro]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the results of the jobs it needs
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          LINT_UNIT: ${{ needs.lint-unit.result }}
+          IMAGE: ${{ needs.image.result }}
+          IMAGE_NEEDED: ${{ needs.changes.outputs.image }}
+          LAYER_REPRO: ${{ needs.layer-repro.result }}
+        run: |
+          echo "changes=$CHANGES lint-unit=$LINT_UNIT image=$IMAGE (needed: $IMAGE_NEEDED)"
+          for r in "$CHANGES" "$LINT_UNIT"; do
+            [ "$r" = success ] || { echo "::error::A required job did not succeed." >&2; exit 1; }
+          done
+          case "$LAYER_REPRO" in
+          success) ;;
+          skipped) [ "$IMAGE_NEEDED" = false ] || exit 1 ;;
+          *) echo "::error::Layer comparison did not succeed." >&2; exit 1 ;;
+          esac
+          case "$IMAGE" in
+          success) ;;
+          skipped) [ "$IMAGE_NEEDED" = false ] || { echo "::error::The image job was skipped but the change needs it." >&2; exit 1; } ;;
+          *) echo "::error::The image job ended with \"$IMAGE\"." >&2; exit 1 ;;
+          esac
+
+  version:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: ci
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      prerelease: ${{ steps.ver.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: {fetch-depth: 0}
+      - id: ver
+        name: Version from the merged release branch
+        shell: bash
+        env:
+          SHA: ${{ github.sha }}
+          OWNER: ${{ github.repository_owner }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SIGNING_FINGERPRINT: ${{ vars.RELEASE_SIGNING_FINGERPRINT }}
+          RELEASE_SIGNER: ${{ vars.RELEASE_SIGNER || github.repository_owner }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -u
+          # Verify the signed tag before any job receives publication permissions.
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          v=$(python3 scripts/check_release_tag.py) || exit 1
+          parser=rootfs/usr/local/lib/agentainer/release_version.py
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$(python3 "$parser" prerelease "$v")" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: version
+    if: needs.version.outputs.version != ''
+    strategy:
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-26.04}
+          - {arch: arm64, runner: ubuntu-26.04-arm}
+    runs-on: ${{ matrix.runner }}
+    # The build takes 6 to 10 minutes; this job adds a push of about 1 GB and a pull and
+    # scan of the pushed image.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - id: pins
+        name: Build arguments, as scripts/build.sh passes them
+        # Each pin a Containerfile stage declares with ARG becomes a build argument, plus
+        # SOURCE_DATE_EPOCH, which BuildKit reads to fix file times (rewrite-timestamp).
+        run: |
+          {
+            echo "args<<PINS_EOF"
+            names=$( (sed -n 's/^ARG \([A-Z0-9_]*\).*/\1/p' Containerfile; echo SOURCE_DATE_EPOCH) | sort -u)
+            grep -v -e '^#' -e '^$' versions.env | while IFS= read -r line; do
+              if printf '%s\n' "$names" | grep -qx "${line%%=*}"; then printf '%s\n' "$line"; fi
+            done
+            echo "PINS_EOF"
+            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "buildkit=$(sed -n 's/^BUILDKIT_IMAGE=//p' versions.env)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+        with:
+          driver-opts: image=${{ steps.pins.outputs.buildkit }}  # pinned in versions.env
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: Containerfile
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            ${{ steps.pins.outputs.args }}
+            IMAGE_VERSION=${{ needs.version.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.pins.outputs.date }}
+          sbom: true
+          provenance: mode=min,version=v0.2
+          # zstd makes this image's download about 20% smaller than gzip. BuildKit maps levels 9
+          # to 22 to its "Best" setting (about zstd 11; Docker build exporters docs).
+          outputs: type=image,name=ghcr.io/chadmayfield/agentainer,push-by-digest=true,name-canonical=true,push=true,compression=zstd,compression-level=9,force-compression=true,rewrite-timestamp=true
+      # One file per architecture, named after it, holds the digest, so the release job
+      # can check that it got exactly one digest for each.
+      - name: Record the digest
+        run: mkdir -p digests && printf '%s\n' "$DIGEST" >"digests/$ARCH"
+        env:
+          ARCH: ${{ matrix.arch }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+      # Artifact names are unique within a run. overwrite replaces the artifact a failed
+      # attempt left behind, so a re-run uploads the digest it just pushed.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/${{ matrix.arch }}
+          if-no-files-found: error
+          overwrite: true
+      - name: Scan the pushed image for vulnerabilities
+        env:
+          ARCH: ${{ matrix.arch }}
+          REF: ghcr.io/chadmayfield/agentainer@${{ steps.build.outputs.digest }}
+        run: |
+          set -eu
+          docker pull "$REF"
+          docker save -o image.tar "$REF"
+          chmod 644 image.tar  # docker save writes 0600; trivy runs as UID 1000
+          mkdir -p report && chmod 777 report
+          docker run --rm -v "$PWD/image.tar:/scan/image.tar:ro" -v "$PWD/report:/report" --entrypoint trivy "$REF" \
+            image --input /scan/image.tar --scanners vuln --exit-code 0 --format json \
+            --output "/report/vulnerabilities-$ARCH.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: release-vulnerabilities-${{ matrix.arch }}
+          path: report/vulnerabilities-${{ matrix.arch }}.json
+          overwrite: true
+
+  release:
+    needs: [version, publish]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    concurrency: release
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: {fetch-depth: 0}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with: {pattern: digest-*, merge-multiple: true, path: digests}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with: {pattern: release-vulnerabilities-*, merge-multiple: true, path: report}
+      - id: pins
+        run: echo "buildkit=$(sed -n 's/^BUILDKIT_IMAGE=//p' versions.env)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+        with:
+          driver-opts: image=${{ steps.pins.outputs.buildkit }}  # pinned in versions.env
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+      - id: prepare-index
+        name: Assemble and sign the index
+        shell: bash
+        env:
+          SHA: ${{ github.sha }}
+        run: bash scripts/release-image.sh prepare
+      - name: Attest the signed index
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.prepare-index.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - id: publish-tags
+        name: Verify provenance and startup before publishing tags
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.version.outputs.version }}
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+          OWNER: ${{ github.repository_owner }}
+          REPOSITORY: ${{ github.repository }}
+          SIGNED_DIGEST: ${{ steps.prepare-index.outputs.digest }}
+        run: bash scripts/release-image.sh promote
+      - name: Git tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          MAKE_LATEST: ${{ steps.publish-tags.outputs.latest }}
+          V: ${{ needs.version.outputs.version }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          # The summary goes above the generated notes ("--notes" is prepended, gh release create --help).
+          notes=$(python3 scripts/vuln_summary.py amd64=report/vulnerabilities-amd64.json arm64=report/vulnerabilities-arm64.json)
+          notes="$notes
+
+          Full trivy reports for each architecture are attached as vulnerabilities-<arch>.json."
+          case "$PRERELEASE:$MAKE_LATEST" in
+          true:false | false:true | false:false) ;;
+          *) echo "::error::Invalid prerelease/latest decision." >&2; exit 1 ;;
+          esac
+          flags=(--latest="$MAKE_LATEST")
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "v$V" "${flags[@]}" --verify-tag --title "v$V" --generate-notes --notes "$notes" \
+            report/vulnerabilities-amd64.json report/vulnerabilities-arm64.json

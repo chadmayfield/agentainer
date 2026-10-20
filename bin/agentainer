@@ -1,0 +1,184 @@
+#!/bin/sh
+# agentainer: start and attach to an Agentainer container with Podman or Docker.
+set -eu
+IMAGE=${AGENTAINER_IMAGE:-ghcr.io/chadmayfield/agentainer:latest}
+ENV_FILE=${AGENTAINER_ENV_FILE:-$HOME/.config/agentainer/env}
+HOME_VOLUME=${AGENTAINER_HOME_VOLUME:-agentainer-home}
+LABEL=io.github.chadmayfield.agentainer=1
+# up stores its options in labels with this prefix, so update can recreate the container.
+OPT=io.github.chadmayfield.agentainer
+
+usage() {
+	cat >&2 <<'EOF'
+usage: agentainer up [--name N] [--sudo] [--image I] [--] [DIR]
+       agentainer attach [N] | shell [N] | start [N] | update [N] | down [N] | status
+If a container already exists, use "agentainer down N" first (your home volume is kept).
+update pulls the image and recreates N with the options and DIR of its "up".
+EOF
+	exit 2
+}
+
+runtime() {
+	if [ -n "${AGENTAINER_RUNTIME:-}" ]; then
+		echo "$AGENTAINER_RUNTIME"
+	elif command -v podman >/dev/null 2>&1; then
+		echo podman
+	elif command -v docker >/dev/null 2>&1; then
+		echo docker
+	fi
+}
+
+# Prints the command to stderr (one argument per word, quoted), then runs it.
+run() {
+	{
+		printf '+'
+		for a; do printf " '%s'" "$a"; done
+		printf '\n'
+	} >&2
+	[ "${AGENTAINER_DRY_RUN:-0}" = 1 ] || "$@"
+}
+
+cmd=${1:-}
+[ -n "$cmd" ] || usage
+shift
+case "$cmd" in
+up | attach | shell | start | update | down | status) ;;
+*) usage ;;
+esac
+R=$(runtime)
+if [ -z "$R" ]; then
+	echo "agentainer: neither podman nor docker found" >&2
+	exit 1
+fi
+# create NAME SUDO DIR: run a new container from $IMAGE with $HOME_VOLUME and $ENV_FILE.
+# Exits before running anything when DIR or a home path cannot be mounted.
+create() {
+	name=$1
+	sudo=$2
+	# An absolute path, so the runtime bind-mounts it instead of creating a named volume.
+	# CDPATH is cleared so "code" means ./code, and cd prints nothing.
+	dir=$(CDPATH='' cd -- "$3" 2>/dev/null && pwd -P) || {
+		echo "agentainer: no such directory: $3" >&2
+		exit 1
+	}
+	# -v splits its value at ':' (SRC:DEST[:OPTIONS]), so such a path cannot be mounted.
+	case "$dir" in
+	*:*)
+		echo "agentainer: $dir contains ':', which podman and docker -v cannot mount; rename the directory to remove ':'" >&2
+		exit 1
+		;;
+	esac
+	# The env file is recorded as an absolute path, so update finds it from any directory.
+	envf=""
+	if [ -f "$ENV_FILE" ]; then
+		envf=$(CDPATH='' cd -- "$(dirname -- "$ENV_FILE")" && pwd -P)/$(basename -- "$ENV_FILE")
+	fi
+	# A home with a '/' is a host directory, not a volume name. It is recorded as an
+	# absolute path too, so update mounts the same directory from any working directory.
+	home=$HOME_VOLUME
+	case "$home" in
+	*/*)
+		home=$(CDPATH='' cd -- "$HOME_VOLUME" 2>/dev/null && pwd -P) || {
+			echo "agentainer: no such directory: $HOME_VOLUME (AGENTAINER_HOME_VOLUME)" >&2
+			exit 1
+		}
+		case "$home" in
+		*:*)
+			echo "agentainer: $home contains ':', which podman and docker -v cannot mount; rename the directory to remove ':'" >&2
+			exit 1
+			;;
+		esac
+		;;
+	esac
+	# ping uses unprivileged ICMP sockets (the image removes its NET_RAW file capability).
+	# The range names the agent group only: with keep-id the GID map is not contiguous,
+	# and a wider range no longer contains the agent group after translation.
+	set -- "$R" run -d --name "$name" --hostname "$name" --label "$LABEL" \
+		--label "$OPT.dir=$dir" --label "$OPT.image=$IMAGE" --label "$OPT.sudo=$sudo" \
+		--label "$OPT.home=$home" --label "$OPT.env-file=$envf" \
+		-v "$home:/home/agent" -v "$dir:/workspace" -w /workspace \
+		--sysctl "net.ipv4.ping_group_range=1000 1000"
+	if [ "$sudo" != 1 ]; then set -- "$@" --security-opt no-new-privileges=true; fi
+	case "$(basename "$R")" in
+	podman) set -- "$@" --userns=keep-id:uid=1000,gid=1000 ;;
+	esac
+	if [ -n "$envf" ]; then
+		# Following symlinks, any group or other permission bit is too open.
+		if [ -n "$(find -L "$envf" -prune -perm -g+r 2>/dev/null)$(find -L "$envf" -prune -perm -o+r 2>/dev/null)" ]; then
+			echo "agentainer: warning: $envf should not be readable by others (chmod 600 it)" >&2
+		fi
+		set -- "$@" --env-file "$envf"
+	fi
+	run "$@" "$IMAGE"
+}
+
+# label NAME KEY: print the value of label $OPT.KEY on container NAME.
+label() {
+	"$R" inspect --type container --format "{{index .Config.Labels \"$OPT.$2\"}}" -- "$1"
+}
+
+case "$cmd" in
+up)
+	name=agentainer
+	sudo=0
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--name | --image)
+			[ "$#" -ge 2 ] || usage
+			if [ "$1" = --name ]; then name=$2; else IMAGE=$2; fi
+			shift 2
+			;;
+		--sudo)
+			sudo=1
+			shift
+			;;
+		--)
+			shift
+			break
+			;;
+		-*) usage ;;
+		*) break ;;
+		esac
+	done
+	[ "$#" -le 1 ] || usage
+	create "$name" "$sudo" "${1:-$PWD}"
+	;;
+update)
+	[ "$#" -le 1 ] || usage
+	name=${1:-agentainer}
+	# Read every option first, so a failure leaves the old container in place.
+	img=$(label "$name" image) || exit 1
+	if [ -z "$img" ]; then
+		echo "agentainer: $name has no option labels, so it was not created by agentainer up; run 'agentainer down $name' and 'agentainer up' again" >&2
+		exit 1
+	fi
+	dir=$(label "$name" dir) && sudo=$(label "$name" sudo) &&
+		HOME_VOLUME=$(label "$name" home) && ENV_FILE=$(label "$name" env-file) || exit 1
+	IMAGE=$img
+	[ -d "$dir" ] || {
+		echo "agentainer: $name was created for $dir, which no longer exists; nothing changed" >&2
+		exit 1
+	}
+	case "$HOME_VOLUME" in
+	*/*)
+		[ -d "$HOME_VOLUME" ] || {
+			echo "agentainer: $name was created with the home directory $HOME_VOLUME, which no longer exists; nothing changed" >&2
+			exit 1
+		}
+		;;
+	esac
+	# Without the env file the new container would start with no credentials.
+	if [ -n "$ENV_FILE" ] && [ ! -f "$ENV_FILE" ]; then
+		echo "agentainer: $name was created with the env file $ENV_FILE, which no longer exists; nothing changed" >&2
+		exit 1
+	fi
+	run "$R" pull "$IMAGE"
+	run "$R" rm -f "$name"
+	create "$name" "$sudo" "$dir"
+	;;
+start) run "$R" start "${1:-agentainer}" ;;
+attach) run "$R" exec -it "${1:-agentainer}" tmux new-session -A -s main ;;
+shell) run "$R" exec -it "${1:-agentainer}" bash -l ;;
+down) run "$R" rm -f "${1:-agentainer}" ;;
+status) run "$R" ps -a --filter "label=$LABEL" ;;
+esac

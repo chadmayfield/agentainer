@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: agentainer
+  namespace: agentainer
+spec:
+  serviceName: agentainer
+  replicas: 1
+  # Keep the home and workspace volumes when the StatefulSet is deleted or scaled
+  # down. Retain is the default. The field is stable since Kubernetes 1.32
+  # (feature gate StatefulSetAutoDeletePVC).
+  persistentVolumeClaimRetentionPolicy: {whenDeleted: Retain, whenScaled: Retain}
+  selector:
+    matchLabels: {app: agentainer}
+  template:
+    metadata:
+      labels: {app: agentainer}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+        # Safe sysctl (Kubernetes 1.18+, allowed by Pod Security Standards): lets ping
+        # work without NET_RAW, which the image removed from ping.
+        sysctls:
+          - {name: net.ipv4.ping_group_range, value: "1000 1000"}  # the agent group; a wider range breaks under keep-id user namespaces
+      containers:
+        - name: agentainer
+          image: ghcr.io/chadmayfield/agentainer:latest
+          envFrom:
+            - secretRef: {name: agentainer-credentials, optional: true}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            # To enable sudo, replace the two lines above with the block below. This moves
+            # the pod to the Baseline profile; relabel the namespace to baseline as well.
+            # The capability list is untested.
+            # allowPrivilegeEscalation: true
+            # capabilities: {drop: [ALL], add: [SETUID, SETGID, AUDIT_WRITE]}
+          resources:  # example values
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "4", memory: 8Gi}
+          volumeMounts:
+            - {name: home, mountPath: /home/agent}
+            - {name: workspace, mountPath: /workspace}
+            - {name: seed, mountPath: /etc/agentainer/seed, readOnly: true}
+      volumes:
+        - name: seed
+          configMap: {name: agentainer-seed, optional: true}
+  volumeClaimTemplates:
+    - metadata: {name: home}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 20Gi}}
+    - metadata: {name: workspace}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 50Gi}}

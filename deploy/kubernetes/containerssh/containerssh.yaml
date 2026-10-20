@@ -1,0 +1,28 @@
+# ContainerSSH v0.6.0 configuration. kustomize turns this file into the
+# containerssh-config ConfigMap with a content hash in its name, so an edit
+# rolls the Deployment (a subPath mount never sees ConfigMap updates).
+# The short ".svc" names resolve through the pod's DNS search list on any cluster domain.
+ssh:
+  hostkeys:
+    - /etc/containerssh/hostkey/host.key
+  # Sends an SSH keepalive request every 30 seconds, so load balancer and NAT idle
+  # timers do not drop a quiet session. ContainerSSH closes the connection after
+  # clientAliveCountMax (default 3) failed sends. The value is a Go duration string.
+  clientAliveInterval: 30s
+auth:
+  password:
+    method: ""
+  publicKey:
+    method: webhook
+    webhook:
+      url: http://agentainer-auth.containerssh.svc:8080
+# Pod settings come from the config webhook, never from this global file
+# (ContainerSSH persistent-mode docs: a pod named here would be shared by all users).
+configserver:
+  url: http://agentainer-auth.containerssh.svc:8080/config
+backend: kubernetes
+kubernetes:
+  connection:
+    host: kubernetes.default.svc
+    cacertFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token

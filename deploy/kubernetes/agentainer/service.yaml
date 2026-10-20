@@ -1,0 +1,9 @@
+# The headless Service a StatefulSet's serviceName refers to. It serves no ports;
+# it only gives the pod a stable name. A headless Service may omit ports
+# (ValidateService in kubernetes/kubernetes pkg/apis/core/validation).
+apiVersion: v1
+kind: Service
+metadata: {name: agentainer, namespace: agentainer}
+spec:
+  clusterIP: None
+  selector: {app: agentainer}
