@@ -43,6 +43,10 @@ docker buildx imagetools inspect --raw "$img@$digest" |
 # that pulls the tag resolves it to the manifest for its platform, and a policy
 # that checks that digest finds no signature on it when only the index is signed.
 cosign sign --yes --recursive "$img@$digest"
+# Verify the signed digest, attestations and native startup before moving public tags.
+python3 "$script_dir/../tests/host/test-published-image.py" "$img" "$digest" \
+	"https://github.com/$REPOSITORY/.github/workflows/build.yml@refs/heads/main" \
+	https://token.actions.githubusercontent.com
 # With one index as its only source and no annotations, imagetools create pushes
 # the source's bytes unchanged (buildx util/imagetools/create.go, combine), so the
 # public tags point at the digest just signed. --dry-run prints those bytes plus a

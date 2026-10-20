@@ -94,3 +94,15 @@ class PublishedImageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.verify()
         self.assertFalse(any(c[0] == "cosign" for c in self.calls))
+
+    def test_digest_input_does_not_resolve_a_mutable_tag(self):
+        with mock.patch.object(published, "run", side_effect=self.stub_run):
+            self.assertEqual(published.verify(self.image, self.root, self.identity, self.issuer),
+                             self.image + "@" + self.root)
+        self.assertFalse(any("--format" in c for c in self.calls))
+
+    def test_malformed_digest_input_fails_before_registry_calls(self):
+        with mock.patch.object(published, "run", side_effect=self.stub_run):
+            with self.assertRaises(ValueError):
+                published.verify(self.image, "sha256:bad", self.identity, self.issuer)
+        self.assertEqual(self.calls, [])

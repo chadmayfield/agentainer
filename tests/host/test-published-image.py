@@ -22,9 +22,12 @@ def digest(value):
 
 
 def verify(image, tag, identity, issuer):
-    descriptor = json.loads(run(["docker", "buildx", "imagetools", "inspect", image + ":" + tag,
-                                 "--format", "{{json .Manifest}}"] ))
-    ref = image + "@" + digest(descriptor["digest"])
+    if tag.startswith("sha256:"):
+        ref = image + "@" + digest(tag)
+    else:
+        descriptor = json.loads(run(["docker", "buildx", "imagetools", "inspect", image + ":" + tag,
+                                     "--format", "{{json .Manifest}}"] ))
+        ref = image + "@" + digest(descriptor["digest"])
     index = json.loads(run(["docker", "buildx", "imagetools", "inspect", "--raw", ref]))
 
     def signature(target):
@@ -58,7 +61,7 @@ def verify(image, tag, identity, issuer):
 
 def main():
     if len(sys.argv) != 5:
-        raise SystemExit("usage: test-published-image.py IMAGE TAG CERTIFICATE_IDENTITY OIDC_ISSUER")
+        raise SystemExit("usage: test-published-image.py IMAGE TAG_OR_DIGEST CERTIFICATE_IDENTITY OIDC_ISSUER")
     ref = verify(*sys.argv[1:])
     # Pin the pull and smoke test to the verified index, not a mutable public tag.
     subprocess.run(["docker", "pull", ref], check=True)

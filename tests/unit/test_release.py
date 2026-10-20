@@ -2,8 +2,10 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -31,12 +33,15 @@ class ReleaseTests(unittest.TestCase):
             digest = "sha256:" + hashlib.sha256(manifest.encode()).hexdigest()
             bindir = t / "bin"
             bindir.mkdir()
-            stub = """#!/usr/bin/env python3
-import json,os,sys
+            stub = "#!" + sys.executable + "\n" + """import json,os,sys
 cmd = os.path.basename(sys.argv[0])
 a = sys.argv[1:]
 with open(os.environ['CX_LOG'], 'a') as f:
     f.write(json.dumps([cmd] + a) + '\\n')
+if cmd == 'python3':
+    if a[0].endswith('/tests/host/test-published-image.py'):
+        sys.exit(int(os.environ.get('CX_VERIFY_RC', '0')))
+    os.execv(os.environ['CX_REAL_PYTHON'], ['python3'] + a)
 if cmd == 'cosign':
     sys.exit(int(os.environ.get('CX_SIGN_RC', '0')))
 if cmd == 'git':
@@ -60,13 +65,13 @@ elif 'inspect' in a:
 elif '--dry-run' in a:
     print('{}' if os.environ.get('CX_BAD_DRY') else os.environ['CX_MANIFEST'])
 """
-            for cmd in ("docker", "cosign", "git"):
+            for cmd in ("docker", "cosign", "git", "python3"):
                 path = bindir / cmd
                 path.write_text(stub)
                 path.chmod(0o755)
             script = ROOT / "scripts/release-image.sh"
-            env = dict(os.environ, V=candidate, SHA="b" * 40, OWNER="example", CX_LOG=str(t / "log"),
-                       PATH=str(bindir) + ":" + os.environ["PATH"], CX_MANIFEST=manifest, CX_DIGEST=digest,
+            env = dict(os.environ, V=candidate, SHA="b" * 40, OWNER="example", REPOSITORY="example/agentainer", CX_LOG=str(t / "log"),
+                       CX_REAL_PYTHON=sys.executable, PATH=str(bindir) + ":" + os.environ["PATH"], CX_MANIFEST=manifest, CX_DIGEST=digest,
                        CX_HISTORY="\n".join("Merge pull request #1 from example/release/" + v for v in versions),
                        **extra)
             result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
@@ -175,3 +180,32 @@ elif '--dry-run' in a:
         self.assertIn("@sha256:", calls[signing][-1])
         self.assertLess(signing, dry_run)
         self.assertLess(dry_run, retag)
+
+    def test_failed_live_verification_cannot_move_public_tags(self):
+        r, tags = self.run_release("2026.10.19", ["2026.10.19"], CX_VERIFY_RC="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(tags, [IMAGE + ":sha-" + "b" * 7])
+        self.assertTrue(any(c[0] == "python3" and c[1].endswith("/test-published-image.py")
+                            for c in self.last_calls))
+
+    def test_live_verification_uses_signed_digest_before_public_tags(self):
+        r, _ = self.run_release("2026.10.19", ["2026.10.19"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        calls = self.last_calls
+        signing = next(i for i, c in enumerate(calls) if c[0] == "cosign")
+        verification = next(i for i, c in enumerate(calls)
+                            if c[0] == "python3" and c[1].endswith("/test-published-image.py"))
+        retag = next(i for i, c in enumerate(calls) if IMAGE + ":latest" in c and "create" in c)
+        self.assertEqual(calls[verification][2], IMAGE)
+        self.assertEqual(IMAGE + "@" + calls[verification][3], calls[signing][-1])
+        self.assertEqual(calls[verification][4:], [
+            "https://github.com/example/agentainer/.github/workflows/build.yml@refs/heads/main",
+            "https://token.actions.githubusercontent.com"])
+        self.assertLess(signing, verification)
+        self.assertLess(verification, retag)
+
+    def test_release_version_waits_for_aggregate_ci(self):
+        workflow = (ROOT / ".github/workflows/build.yml").read_text()
+        version = workflow.split("\n  version:\n", 1)[1].split("\n  publish:\n", 1)[0]
+        needs = re.search(r"^    needs: (.+)$", version, re.M).group(1)
+        self.assertIn("ci", re.findall(r"[a-z][a-z-]*", needs))
