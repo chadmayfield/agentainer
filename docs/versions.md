@@ -35,11 +35,11 @@ Releases use [Semantic Versioning](https://semver.org/). Stable versions have th
 
 Versions below `1.0.0` are initial development, without a stable compatibility promise. Agentainer's public interfaces are its launcher commands, documented environment variables, configuration paths and persistent-home upgrade behavior. Bundled tool versions remain separate in `versions.env`.
 
-Each release publishes `ghcr.io/chadmayfield/agentainer` for amd64 and arm64:
+A release requires a maintainer-signed annotated `v<version>` tag on the matching release merge in `main`. The tag signature must match the repository variable `RELEASE_SIGNING_FINGERPRINT`. A branch merge alone does not publish ([release procedure](../CONTRIBUTING.md#releases)). Each release publishes `ghcr.io/chadmayfield/agentainer` for amd64 and arm64:
 
 - tagged with the version and `sha-<commit>`, with `latest` reserved for stable releases;
 - signed with cosign keyless signing, the index and each architecture's image;
-- with an SBOM and provenance attestation, and zstd-compressed layers.
+- with an SBOM and BuildKit provenance for each architecture, a signed GitHub provenance attestation for the multi-architecture index, and zstd-compressed layers.
 
 A runtime needs zstd support to pull the image. These are the first versions with it:
 
@@ -62,6 +62,13 @@ These commands require that version to have completed its release workflow. A me
 
 The published image is a fresh build from the release commit with the same pinned inputs, not the exact image the pull request's tests ran on.
 
-Release publishing waits for the aggregate CI check, including both architecture builds and clean-layer comparisons. The release script runs [`tests/host/test-published-image.py`](../tests/host/test-published-image.py) against the signed index digest before moving the version or `latest` tags and before creating the GitHub release. A verification failure leaves those public tags unchanged. It verifies the index and both platform signatures with the exact build workflow identity and GitHub OIDC issuer ([Sigstore CI verification](https://docs.sigstore.dev/quickstart/quickstart-ci/)). It checks for SBOM and provenance attestation descriptors bound to each platform manifest ([Docker attestation storage](https://docs.docker.com/build/metadata/attestations/attestation-storage/)), then pulls and starts the native platform using the verified index digest. Descriptor checks do not validate every field inside the attestation payloads.
+Release publishing waits for aggregate CI and signed-tag verification. The release workflow signs the multi-architecture index and platform manifests, then uses [`actions/attest`](https://github.com/actions/attest) to attest the index digest. The attestation is stored in GitHub and pushed to GHCR. It links the index to the source commit and release tag without a long-lived signing key in CI.
 
-This verifier runs against published artifacts during a release. A pull request exercises its success and failure cases with fixtures; live registry and keyless verification remain not verified until that release job runs.
+Before moving version or `latest` tags, [`tests/host/test-published-image.py`](../tests/host/test-published-image.py) verifies:
+
+- Index and platform signatures against the exact workflow identity for the release tag and GitHub OIDC issuer ([Sigstore CI verification](https://docs.sigstore.dev/quickstart/quickstart-ci/)).
+- GitHub provenance against the repository, source commit, tag ref and workflow identity, rejecting self-hosted runners ([GitHub verification flags](https://cli.github.com/manual/gh_attestation_verify)).
+- Both platforms' BuildKit provenance payloads against the expected source repository and commit. A dirty or different revision fails ([BuildKit provenance fields](https://docs.docker.com/build/metadata/attestations/slsa-provenance/)).
+- SBOM and provenance descriptors bound to each platform manifest, followed by a pull and native startup by the verified index digest ([attestation storage](https://docs.docker.com/build/metadata/attestations/attestation-storage/)).
+
+These checks enforce the named fields; they do not establish a SLSA level or validate every SBOM package entry. Fixtures exercise rejection cases in pull requests. Live signing, attestation storage and registry verification remain not verified until a release completes.

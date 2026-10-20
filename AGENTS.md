@@ -89,6 +89,8 @@ Check each command's exit code directly. Piping into `tail` or `grep` hides a fa
 
   If your maker documents no address, ask the maintainer before you commit.
 
+- Sign maintainer-authored local commits and release tags with the configured signing key. Never disable signing to bypass a failure. Repo-local signing settings are not shared with contributors or CI.
+- A release requires a signed annotated tag on the matching release merge in `main`. CI verifies it against `RELEASE_SIGNING_FINGERPRINT`; never put a private key in CI or the image.
 - Do not force-push, rewrite published history, or delete branches without explicit instruction.
 
 ## Working on the host

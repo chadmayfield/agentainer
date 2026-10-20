@@ -15,7 +15,7 @@ spec.loader.exec_module(published)
 class PublishedImageTests(unittest.TestCase):
     def setUp(self):
         self.image = "registry.example.com/agentainer"
-        self.identity = "https://github.com/example/repo/.github/workflows/build.yml@refs/heads/main"
+        self.identity = "https://github.com/example/repo/.github/workflows/build.yml@refs/tags/v0.1.0-dev.20261019.1"
         self.issuer = "https://token.actions.githubusercontent.com"
         self.root = "sha256:" + "0" * 64
         self.children = ["sha256:" + x * 64 for x in ("1", "2")]
@@ -30,15 +30,25 @@ class PublishedImageTests(unittest.TestCase):
             self.documents[self.image + "@" + att] = {"layers": [
                 {"mediaType": "application/vnd.in-toto+json", "annotations": {"in-toto.io/predicate-type": predicate}}
                 for predicate in ("https://spdx.dev/Document", "https://slsa.dev/provenance/v1")]}
+        self.sha = "a" * 40
+        self.provenance = {"linux/" + arch: {"SLSA": {
+            "buildType": "https://mobyproject.org/buildkit@v1",
+            "metadata": {"https://mobyproject.org/buildkit@v1#metadata": {
+                "vcs": {"source": "https://github.com/example/repo", "revision": self.sha}}}}}
+            for arch in ("amd64", "arm64")}
         self.calls = []
         self.bad_signature = None
 
     def stub_run(self, argv):
         self.calls.append(argv)
+        if argv[0] == "gh":
+            return "verified"
         if argv[0] == "cosign":
             if argv[2] == self.bad_signature:
                 raise subprocess.CalledProcessError(1, argv)
             return "[]"
+        if "{{json .Provenance}}" in argv:
+            return json.dumps(self.provenance)
         if "--format" in argv:
             return json.dumps({"digest": self.root})
         ref = argv[-1]
@@ -46,7 +56,7 @@ class PublishedImageTests(unittest.TestCase):
 
     def verify(self):
         with mock.patch.object(published, "run", side_effect=self.stub_run):
-            return published.verify(self.image, "sha-test", self.identity, self.issuer)
+            return published.verify(self.image, "sha-test", self.identity, self.issuer, "example/repo", self.sha, "refs/tags/v0.1.0-dev.20261019.1")
 
     def test_checks_index_and_both_platforms_with_exact_workflow_identity(self):
         self.assertEqual(self.verify(), self.image + "@" + self.root)
@@ -97,12 +107,52 @@ class PublishedImageTests(unittest.TestCase):
 
     def test_digest_input_does_not_resolve_a_mutable_tag(self):
         with mock.patch.object(published, "run", side_effect=self.stub_run):
-            self.assertEqual(published.verify(self.image, self.root, self.identity, self.issuer),
+            self.assertEqual(published.verify(self.image, self.root, self.identity, self.issuer, "example/repo", self.sha, "refs/tags/v0.1.0-dev.20261019.1"),
                              self.image + "@" + self.root)
-        self.assertFalse(any("--format" in c for c in self.calls))
+        self.assertFalse(any("{{json .Manifest}}" in c for c in self.calls))
 
     def test_malformed_digest_input_fails_before_registry_calls(self):
         with mock.patch.object(published, "run", side_effect=self.stub_run):
             with self.assertRaises(ValueError):
-                published.verify(self.image, "sha256:bad", self.identity, self.issuer)
+                published.verify(self.image, "sha256:bad", self.identity, self.issuer, "example/repo", self.sha, "refs/tags/v0.1.0-dev.20261019.1")
         self.assertEqual(self.calls, [])
+
+    def test_wrong_source_repository_is_rejected(self):
+        for item in self.provenance.values():
+            item["SLSA"]["metadata"]["https://mobyproject.org/buildkit@v1#metadata"]["vcs"]["source"] = "https://github.com/other/repo"
+        with self.assertRaises(ValueError):
+            self.verify()
+
+    def test_missing_provenance_payload_is_rejected(self):
+        self.provenance = {}
+        with self.assertRaises(ValueError):
+            self.verify()
+
+    def test_wrong_or_dirty_commit_on_either_platform_is_rejected(self):
+        for platform in self.provenance:
+            for commit in ("b" * 40, self.sha + "-dirty", ""):
+                with self.subTest(platform=platform, commit=commit):
+                    vcs = self.provenance[platform]["SLSA"]["metadata"]["https://mobyproject.org/buildkit@v1#metadata"]["vcs"]
+                    vcs["revision"] = commit
+                    with self.assertRaises(ValueError):
+                        self.verify()
+                    vcs["revision"] = self.sha
+
+    def test_github_verification_enforces_source_commit_ref_and_workflow(self):
+        self.verify()
+        command = next(c for c in self.calls if c[0] == "gh")
+        self.assertEqual(command[3], "oci://" + self.image + "@" + self.root)
+        for flag, value in [("--repo", "example/repo"), ("--source-digest", self.sha),
+                            ("--source-ref", "refs/tags/v0.1.0-dev.20261019.1"), ("--cert-identity", self.identity)]:
+            self.assertEqual(command[command.index(flag) + 1], value)
+
+    def test_failed_github_attestation_stops_before_platform_verification(self):
+        def failed(argv):
+            if argv[0] == "gh":
+                raise subprocess.CalledProcessError(1, argv)
+            return self.stub_run(argv)
+        with mock.patch.object(published, "run", side_effect=failed):
+            with self.assertRaises(subprocess.CalledProcessError):
+                published.verify(self.image, self.root, self.identity, self.issuer,
+                                 "example/repo", self.sha, "refs/tags/v0.1.0-dev.20261019.1")
+        self.assertEqual(len([c for c in self.calls if c[0] == "cosign"]), 1)
