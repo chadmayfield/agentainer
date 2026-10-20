@@ -20,6 +20,7 @@ class ReleaseTests(unittest.TestCase):
             (t / "digests").mkdir()
             for arch in ("amd64", "arm64"):
                 (t / "digests" / arch).write_text("sha256:" + "a" * 64 + "\n")
+            phase = extra.pop("CX_PHASE", "all")
             artifact_case = extra.pop("CX_ARTIFACT_CASE", "")
             if artifact_case == "missing":
                 (t / "digests/arm64").unlink()
@@ -70,11 +71,12 @@ elif '--dry-run' in a:
                 path.write_text(stub)
                 path.chmod(0o755)
             script = ROOT / "scripts/release-image.sh"
-            env = dict(os.environ, V=candidate, SHA="b" * 40, OWNER="example", REPOSITORY="example/agentainer", CX_LOG=str(t / "log"),
+            env = dict(os.environ, V=candidate, SHA="b" * 40, OWNER="example", REPOSITORY="example/agentainer", REF="refs/tags/v" + candidate, CX_LOG=str(t / "log"),
                        GITHUB_OUTPUT=str(t / "output"), CX_REAL_PYTHON=sys.executable, PATH=str(bindir) + ":" + os.environ["PATH"], CX_MANIFEST=manifest, CX_DIGEST=digest,
                        CX_HISTORY="\n".join("Merge pull request #1 from example/release/" + v for v in versions),
                        **extra)
-            result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+            env.setdefault("SIGNED_DIGEST", digest)
+            result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script), phase],
                                     cwd=t, env=env, capture_output=True, text=True)
             calls = [json.loads(s) for s in (t / "log").read_text().splitlines()] if (t / "log").exists() else []
             self.last_calls = calls
@@ -200,8 +202,8 @@ elif '--dry-run' in a:
         self.assertEqual(calls[verification][2], IMAGE)
         self.assertEqual(IMAGE + "@" + calls[verification][3], calls[signing][-1])
         self.assertEqual(calls[verification][4:], [
-            "https://github.com/example/agentainer/.github/workflows/build.yml@refs/heads/main",
-            "https://token.actions.githubusercontent.com"])
+            "https://github.com/example/agentainer/.github/workflows/build.yml@refs/tags/v0.1.0",
+            "https://token.actions.githubusercontent.com", "example/agentainer", "b" * 40, "refs/tags/v0.1.0"])
         self.assertLess(signing, verification)
         self.assertLess(verification, retag)
 
@@ -217,9 +219,33 @@ elif '--dry-run' in a:
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(IMAGE + ":" + version, tags)
         self.assertNotIn(IMAGE + ":latest", tags)
-        self.assertEqual(self.release_output, "latest=false\n")
+        self.assertIn("latest=false\n", self.release_output)
 
     def test_future_prerelease_does_not_block_latest_stable(self):
         r, tags = self.run_release("0.1.0", ["0.2.0-dev.20261020.1", "0.1.0"])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(IMAGE + ":latest", tags)
+
+    def test_prepare_only_signs_commit_tag_and_emits_digest(self):
+        r, tags = self.run_release("0.1.0", ["0.1.0"], CX_PHASE="prepare")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(tags, [IMAGE + ":sha-" + "b" * 7])
+        self.assertIn("digest=sha256:", self.release_output)
+        self.assertNotIn("latest=", self.release_output)
+        self.assertFalse(any(c[0] == "python3" and c[1].endswith("test-published-image.py") for c in self.last_calls))
+
+    def test_promote_verifies_supplied_digest_without_rebuilding_or_signing(self):
+        r, tags = self.run_release("0.1.0", ["0.1.0"], CX_PHASE="promote")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(tags, [IMAGE + ":0.1.0", IMAGE + ":latest"])
+        self.assertFalse(any(c[0] == "cosign" for c in self.last_calls))
+        verification = next(i for i,c in enumerate(self.last_calls) if c[0] == "python3" and c[1].endswith("test-published-image.py"))
+        retag = next(i for i,c in enumerate(self.last_calls) if IMAGE + ":latest" in c and "create" in c)
+        self.assertLess(verification, retag)
+
+    def test_promote_failure_keeps_public_tags_unchanged(self):
+        for extra in ({"CX_VERIFY_RC": "1"}, {"SIGNED_DIGEST": "not-a-digest"}):
+            with self.subTest(extra=extra):
+                r, tags = self.run_release("0.1.0", ["0.1.0"], CX_PHASE="promote", **extra)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertEqual(tags, [])

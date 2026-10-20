@@ -19,44 +19,39 @@ def run_block(start, end=None):
 
 
 class WorkflowVersionTests(unittest.TestCase):
-    def select(self, subject, existing=False):
+    def select(self, value, rejected=False):
         with tempfile.TemporaryDirectory(prefix="cx-workflow-version-") as d:
             root = Path(d)
             git = root / "git"
-            git.write_text("#!" + sys.executable + "\n" + '''import os,sys
-if sys.argv[1] == 'log':
-    print(os.environ['CX_SUBJECT'])
-else:
-    sys.exit(int(os.environ['CX_TAG_STATUS']))
-''')
+            git.write_text("#!/bin/sh\nexit 0\n")
             git.chmod(0o755)
+            python = root / "python3"
+            python.write_text("#!" + sys.executable + "\n" + '''import os,sys
+if sys.argv[1].endswith('/check_release_tag.py'):
+    if os.environ['CX_REJECTED'] == 'true': sys.exit(1)
+    print(os.environ['CX_VERSION'])
+else:
+    os.execv(os.environ['CX_REAL_PYTHON'], [os.environ['CX_REAL_PYTHON']] + sys.argv[1:])
+''')
+            python.chmod(0o755)
             output = root / "output"
             script = run_block("      - id: ver\n", "\n  publish:")
             result = subprocess.run(["bash", "-eo", "pipefail", "-c", script], cwd=ROOT,
                                     env=dict(os.environ, PATH=str(root) + ":" + os.environ["PATH"],
-                                             CX_SUBJECT=subject, CX_TAG_STATUS="0" if existing else "1",
-                                             OWNER="example", SHA="a" * 40, GITHUB_OUTPUT=str(output)),
-                                    capture_output=True, text=True)
+                                             CX_VERSION=value, CX_REJECTED=str(rejected).lower(),
+                                             CX_REAL_PYTHON=sys.executable, OWNER="example", SHA="a" * 40,
+                                             GITHUB_OUTPUT=str(output)), capture_output=True, text=True)
             return result, output.read_text() if output.exists() else ""
 
-    def test_requested_prerelease_and_stable_outputs(self):
+    def test_verified_prerelease_and_stable_outputs(self):
         for value, prerelease in [("0.1.0-dev.20261019.1", "true"), ("0.1.0", "false")]:
             with self.subTest(value=value):
-                result, output = self.select("Merge pull request #1 from example/release/" + value)
+                result, output = self.select(value)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(output, "version=%s\nprerelease=%s\n" % (value, prerelease))
 
-    def test_wrong_owner_hotfix_malformed_date_and_existing_tag_fail_closed(self):
-        subjects = ["Merge pull request #1 from other/release/0.1.0",
-                    "Merge pull request #1 from example/hotfix/0.1.0",
-                    "Merge pull request #1 from example/release/0.1.0-dev.20260230.1",
-                    "Merge pull request #1 from example/release/0.1.0\nINJECTED=true"]
-        for subject in subjects:
-            with self.subTest(subject=subject):
-                result, output = self.select(subject)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(output, "")
-        result, output = self.select("Merge pull request #1 from example/release/0.1.0", existing=True)
+    def test_failed_tag_guard_writes_no_version_outputs(self):
+        result, output = self.select("0.1.0", rejected=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(output, "")
 
@@ -98,3 +93,24 @@ else:
             result, args = self.create(prerelease, latest)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(args, [])
+
+    def test_publishing_requires_a_tag_push_and_signed_tag_guard(self):
+        workflow = (ROOT / ".github/workflows/build.yml").read_text()
+        self.assertIn('tags: ["v*"]', workflow)
+        version_job = workflow.split("\n  version:\n", 1)[1].split("\n  publish:\n", 1)[0]
+        self.assertIn("refs/tags/v", version_job)
+        self.assertIn("scripts/check_release_tag.py", version_job)
+
+    def test_attestation_sits_between_signing_and_promotion(self):
+        workflow = (ROOT / ".github/workflows/build.yml").read_text()
+        start = workflow.index("run: bash scripts/release-image.sh prepare")
+        attest = workflow.index("uses: actions/attest@", start)
+        promote = workflow.index("run: bash scripts/release-image.sh promote", attest)
+        self.assertLess(start, attest)
+        self.assertLess(attest, promote)
+        block = workflow[attest:promote]
+        self.assertIn("subject-digest: ${{ steps.prepare-index.outputs.digest }}", block)
+        self.assertNotIn("if: always()", block)
+        self.assertNotIn("continue-on-error", block)
+        self.assertIn("--verify-tag", workflow)
+        self.assertNotIn('--target "$SHA"', workflow)

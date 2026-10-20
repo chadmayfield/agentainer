@@ -33,7 +33,7 @@ With Docker, prefix the commands with `RUNTIME=docker`. `IMAGE=<name>` tests ano
 
 ## CI
 
-[`.github/workflows/build.yml`](.github/workflows/build.yml) runs on every pull request and every push to `develop` and `main`. A pull request also runs it again when you edit it, which includes changing its base branch:
+[`.github/workflows/build.yml`](.github/workflows/build.yml) runs on every pull request, every push to `develop` and `main`, and every `v*` tag push. A pull request also runs it again when you edit it, which includes changing its base branch:
 
 - the `lint-unit` job: actionlint, the Python unit tests, and the launcher, `scripts/build.sh` and `build/fetch.sh` tests;
 - the `image` job, on amd64 and arm64: the image build, shellcheck and shfmt (`tests/lint.sh` runs them from the image), the container tests and real launcher lifecycle under Docker and rootless Podman, a custom UID/GID build, the manifest tests, a check that the agents start on a CPU without AVX2, and trivy scans (a secret fails the build; vulnerabilities are reported).
@@ -42,17 +42,34 @@ The `layer-repro` job runs on amd64 and arm64 and uses the pinned BuildKit image
 
 The image and layer comparison jobs are skipped when every changed file is `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` or a file under `docs/` other than `docs/kubernetes.md` (the manifest tests check its install commands). For a pull request, the changed files are what the merge adds to the base branch. For a push to `develop`, they are the files changed since the previous tip. A push to `main` and a pull request whose base branch changed always build the image. A docs-only change gets no shell lint, because no shell file changed. The required check is `ci`, which passes only when every job passed or the image job was skipped for a docs-only change.
 
+## Signing local commits
+
+Configure signing once in your checkout, with your own full GPG fingerprint and a key whose UID uses your GitHub noreply address:
+
+```sh
+git config --local user.signingkey YOUR_FULL_GPG_FINGERPRINT
+git config --local gpg.format openpgp
+git config --local commit.gpgsign true
+git config --local tag.gpgsign true
+```
+
+These settings stay in `.git/config`, apply to this local clone and its worktrees, and are not shared with contributors or other clones. Register the public key on your GitHub account so GitHub can verify signatures. Keep the private key on your signing host. A signing failure stops the commit; fix access to the key instead of disabling signing. Verify a new commit with `git verify-commit HEAD` ([Git configuration](https://git-scm.com/docs/git-config), [commit verification](https://git-scm.com/docs/git-verify-commit)). GitHub-generated merge commits and automated bump commits use their own identities.
+
 ## Releases
 
-1. From an up-to-date `develop`, run `git flow release start <version>`. Use a SemVer version, such as `0.1.0`, or a development prerelease, such as `0.1.0-dev.20261019.1` ([version policy](docs/versions.md#releases)).
+1. From an up-to-date `develop` whose CI passed, run `git flow release start <version>`. Use SemVer, such as `0.1.0`, or a dated development prerelease, such as `0.1.0-dev.20261019.1` ([version policy](docs/versions.md#releases)).
 2. Push the branch and open a pull request from `release/<version>` to `main`.
-3. When `ci` passes, merge it with "Create a merge commit". The `version` job reads the version from the merge commit's subject, which must be exactly `Merge pull request #N from <owner>/release/<version>`, where `<owner>` is the repository owner and `<version>` passes the shared SemVer parser. Any other push to `main` fails the `version` job and publishes nothing.
-4. The workflow on `main` waits for aggregate CI, then builds and pushes both architectures. The `release` job tags the multi-architecture index only `sha-<short>`, checks its annotations, and signs it and each architecture's image with cosign. Before moving the version or `latest` tags, it verifies the signed digest's signatures, SBOM and provenance descriptors and native startup. While holding the release lock, it refreshes `main` and compares SemVer versions from its first-parent release merges. Invalid historical release subjects are ignored; the candidate must be valid and present in history. Only the highest stable version can move `latest`; prereleases and older stable releases get only their own version tags. A failed history refresh stops publication. The last step creates `v<version>` and a GitHub release with the same latest decision. Prereleases are marked with `--prerelease` and `--latest=false` ([GitHub CLI flags](https://cli.github.com/manual/gh_release_create)).
-5. Open a pull request from `main` to `develop` to bring back any fixes made on the release branch.
+3. When `ci` passes, merge with "Create a merge commit". The subject must be exactly `Merge pull request #N from <owner>/release/<version>`. A push to `main` tests the merge but does not publish.
+4. Fetch the merged commit, create a signed annotated tag `v<version>` on that exact merge commit with `git tag -s v<version> <merge-commit> -m "Release v<version>"`, verify it with `git verify-tag v<version>`, then push only that tag with `git push origin refs/tags/v<version>` ([signed tags](https://git-scm.com/docs/git-tag)). Do not tag the release branch's pre-merge tip.
+5. The tag push runs CI. After aggregate CI passes, `scripts/check_release_tag.py` requires a two-parent release merge on main's first-parent history, a matching tag version and target, and a valid GPG signature by the trusted primary key. It retrieves the owner's public key from GitHub and verifies in a temporary keyring. Set the repository Actions variable `RELEASE_SIGNING_FINGERPRINT` to that full uppercase fingerprint. The signing key must be registered on the repository owner's GitHub account, or on the account named by the optional `RELEASE_SIGNER` Actions variable for an organization-owned repository ([public GPG keys API](https://docs.github.com/en/rest/users/gpg-keys)). A missing key setting, unsigned tag or existing GitHub release stops publishing.
+6. The publish jobs build and push both architectures. The release job assembles an index with only `sha-<short>`, signs it and the platform manifests with cosign, then creates a GitHub provenance attestation for the index. The attestation is stored in GitHub and GHCR. Verification must pass before version or `latest` tags move: exact workflow identity, source commit and tag ref for GitHub provenance; expected repository and commit in each platform's BuildKit provenance; signatures, SBOM descriptors and native startup. The highest stable version alone can move `latest`. Prereleases remain explicitly excluded from latest. The GitHub release uses `--verify-tag`, preserving the maintainer-signed tag.
+7. Open a pull request from `main` to `develop` to bring back fixes made on the release branch.
 
-Do not run `git flow release finish`: it merges into `main` locally. A hotfix is a new release made the same way; a `hotfix/*` branch merged into `main` does not publish.
+Do not run `git flow release finish`: it merges into `main` locally. A hotfix is a new release made the same way. A `hotfix/*` merge does not authorize publication.
 
-Re-running a failed release is safe. The `version` job checks only for the git tag, which is created last. A failure before live verification and the retag dry run pass leaves `latest` and `<version>` unchanged. A `publish` job that runs again replaces its `digest-<arch>` artifact, and the `release` job stops unless it finds exactly one digest for each architecture. A rebuilt image gets a new digest, so the new index does too. The version tag moves to it after signing and verification; `latest` moves only when that version is stable and still the highest stable release merged into `main`.
+Re-run a failed tag workflow without replacing the signed tag. A failure before verification and the retag dry run pass leaves the version and `latest` tags unchanged. A rebuilt image gets a new digest; it must be signed, attested and verified again before promotion. Once the GitHub release exists, its version cannot be republished. Use a new version for further changes.
+
+CI holds no maintainer private signing key. It uses GitHub OIDC for image signatures and attestations. Live registry verification is not verified until the first release completes ([attestation verification flags](https://cli.github.com/manual/gh_attestation_verify)).
 
 ## The bump GitHub App
 

@@ -9,6 +9,7 @@ on:
     types: [opened, synchronize, reopened, edited]
   push:
     branches: [develop, main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -74,9 +75,9 @@ jobs:
             fi
             ;;
           push)
-            # A push to main is a release and always builds. An empty or all-zero
+            # Main and tag pushes always build. An empty or all-zero
             # "before" (a new branch) has nothing to compare with.
-            if [ "$REF" != refs/heads/main ] && [ -n "$BEFORE" ] &&
+            if [ "$REF" = refs/heads/develop ] && [ -n "$BEFORE" ] &&
               [ "$BEFORE" != 0000000000000000000000000000000000000000 ] &&
               git fetch -q --depth=1 origin "$BEFORE"; then
               base=$BEFORE
@@ -328,7 +329,7 @@ jobs:
           esac
 
   version:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: ci
     runs-on: ubuntu-26.04
     timeout-minutes: 5
@@ -344,13 +345,16 @@ jobs:
         env:
           SHA: ${{ github.sha }}
           OWNER: ${{ github.repository_owner }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SIGNING_FINGERPRINT: ${{ vars.RELEASE_SIGNING_FINGERPRINT }}
+          RELEASE_SIGNER: ${{ vars.RELEASE_SIGNER || github.repository_owner }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -u
-          # Only a release PR merge from this owner can select a version.
-          subject=$(git log -1 --format=%s "$SHA")
+          # Verify the signed tag before any job receives publication permissions.
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          v=$(python3 scripts/check_release_tag.py) || exit 1
           parser=rootfs/usr/local/lib/agentainer/release_version.py
-          v=$(printf '%s\n' "$subject" | python3 "$parser" from-merge "$OWNER") || exit 1
-          if git rev-parse "v$v" >/dev/null 2>&1; then echo "Tag v$v already exists" >&2; exit 1; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "prerelease=$(python3 "$parser" prerelease "$v")" >> "$GITHUB_OUTPUT"
 
@@ -406,7 +410,7 @@ jobs:
             VCS_REF=${{ github.sha }}
             BUILD_DATE=${{ steps.pins.outputs.date }}
           sbom: true
-          provenance: true
+          provenance: mode=min,version=v0.2
           # zstd makes this image's download about 20% smaller than gzip. BuildKit maps levels 9
           # to 22 to its "Best" setting (about zstd 11; Docker build exporters docs).
           outputs: type=image,name=ghcr.io/chadmayfield/agentainer,push-by-digest=true,name-canonical=true,push=true,compression=zstd,compression-level=9,force-compression=true,rewrite-timestamp=true
@@ -453,6 +457,7 @@ jobs:
       contents: write
       packages: write
       id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with: {fetch-depth: 0}
@@ -471,16 +476,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
-      - id: publish-tags
-        name: Merge manifest, sign, verify and publish tags
+      - id: prepare-index
+        name: Assemble and sign the index
         shell: bash
         env:
+          SHA: ${{ github.sha }}
+        run: bash scripts/release-image.sh prepare
+      - name: Attest the signed index
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.prepare-index.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - id: publish-tags
+        name: Verify provenance and startup before publishing tags
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
           V: ${{ needs.version.outputs.version }}
           SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
           OWNER: ${{ github.repository_owner }}
           REPOSITORY: ${{ github.repository }}
-        run: |
-          bash scripts/release-image.sh
+          SIGNED_DIGEST: ${{ steps.prepare-index.outputs.digest }}
+        run: bash scripts/release-image.sh promote
       - name: Git tag and GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -501,5 +521,5 @@ jobs:
           esac
           flags=(--latest="$MAKE_LATEST")
           if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
-          gh release create "v$V" "${flags[@]}" --target "$SHA" --title "v$V" --generate-notes --notes "$notes" \
+          gh release create "v$V" "${flags[@]}" --verify-tag --title "v$V" --generate-notes --notes "$notes" \
             report/vulnerabilities-amd64.json report/vulnerabilities-arm64.json
