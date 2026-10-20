@@ -1,36 +1,25 @@
 #!/usr/bin/env python3
 """Print whether VERSION may move latest, using main's first-parent subjects on stdin."""
-import datetime
-import re
+from pathlib import Path
 import sys
 
-VERSION = r"([0-9]{4})\.([0-9]{2})\.([0-9]{2})(?:\.([1-9][0-9]*))?"
-
-
-def version_key(value):
-    m = re.fullmatch(VERSION, value)
-    if not m:
-        raise ValueError("invalid release version %r" % value)
-    year, month, day = map(int, m.group(1, 2, 3))
-    datetime.date(year, month, day)
-    return year, month, day, int(m.group(4) or 0)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "rootfs/usr/local/lib/agentainer"))
+from release_version import from_merge, version_key
 
 
 def may_move_latest(candidate, owner, subjects):
     requested = version_key(candidate)
-    pattern = re.compile(r"^Merge pull request #[0-9]+ from " + re.escape(owner) + r"/release/(.+)$")
     releases = []
     for subject in subjects:
-        m = pattern.fullmatch(subject.rstrip("\n"))
-        if m:
-            try:
-                releases.append(version_key(m.group(1)))
-            except ValueError:
-                # A merge rejected by the version job is not a published calendar release.
-                continue
+        try:
+            releases.append(version_key(from_merge(subject, owner)))
+        except ValueError:
+            # Rejected merge subjects are not releases.
+            continue
     if requested not in releases:
         raise ValueError("release %s is not in main's release history" % candidate)
-    return requested == max(releases)
+    stable = [key for key in releases if key[3] == 1]
+    return requested[3] == 1 and requested == max(stable)
 
 
 def main(argv=None):

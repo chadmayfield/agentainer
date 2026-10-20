@@ -75,6 +75,8 @@ exec /bin/cp "$@"
             for name in ("10-dirs.sh", "20-seed.sh", "30-agents-md.sh"):
                 text = (steps / name).read_text().replace("/etc/agentainer", str(root))
                 text = text.replace("/etc/skel", str(root / "skel"))
+                text = text.replace("/usr/local/lib/agentainer/release_version.py",
+                                    str(ROOT / "rootfs/usr/local/lib/agentainer/release_version.py"))
                 (staged / name).write_text(text)
             target = root / "entrypoint"
             target.write_text(entrypoint.replace("STEPS=/usr/local/lib/agentainer/entrypoint.d",
@@ -82,10 +84,10 @@ exec /bin/cp "$@"
             entries[image] = target
         env = {"PATH": str(bindir) + ":" + os.environ["PATH"]}
         older = self.start(["sh", str(entries["older"]), "echo", "STARTED"],
-                           AGENTAINER_IMAGE_VERSION="2026.01.01", **env)
+                           AGENTAINER_IMAGE_VERSION="0.1.0", **env)
         self.wait_file("copy-paused")
         newer = self.start(["sh", str(entries["newer"]), "echo", "STARTED"],
-                           AGENTAINER_IMAGE_VERSION="2026.02.01", **env)
+                           AGENTAINER_IMAGE_VERSION="0.2.0", **env)
         try:
             newer.communicate(timeout=0.5)
             blocked = False
@@ -98,8 +100,8 @@ exec /bin/cp "$@"
         self.assertTrue(blocked, "newer startup passed a seed copy still in progress")
         self.assertEqual((self.home / ".agentainer/AGENTS.md").read_text(), "newer default\n")
         ledger = (self.home / ".agentainer/agents-default.sha256").read_text()
-        self.assertIn("2026.01.01", ledger)
-        self.assertIn("2026.02.01", ledger)
+        self.assertIn("0.1.0", ledger)
+        self.assertIn("0.2.0", ledger)
 
     def test_direct_and_startup_sync_preserve_managed_ownership(self):
         bindir = self.base / "bin"

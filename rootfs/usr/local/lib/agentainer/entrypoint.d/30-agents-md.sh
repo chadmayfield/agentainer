@@ -33,23 +33,8 @@ done
 # agents-default.sha256 lists every image default this home has seen, one per line as
 # "<sha256> <image version>". Lines with only a hash come from images that did not record
 # a version; their version counts as unknown, older than any release.
-# An unedited file follows the image's default only when this image is a release
-# (YYYY.MM.DD or YYYY.MM.DD.N) newer than every image that shipped the file's current
-# content, so an older image on a shared home volume never rolls the file back.
-
-# awk function key(VERSION): a 14-digit string that orders release versions, or 14 zeros
-# for any other version. Equal-length strings compare like the numbers they spell.
-KEY='function key(v, p) {
-	if (v !~ /^[0-9][0-9][0-9][0-9]\.[0-9][0-9]\.[0-9][0-9](\.[0-9]+)?$/) return "00000000000000"
-	split(v, p, ".")
-	return sprintf("%04d%02d%02d%06d", p[1], p[2], p[3], p[4])
-}'
-# newest_key HASH FILE: the highest key recorded for HASH in FILE.
-newest_key() {
-	awk -v h="$1" "$KEY"'
-		$1 == h && key($2) > best { best = key($2) }
-		END { print (best == "" ? "00000000000000" : best) }' "$2"
-}
+# Compare SemVer against every recorded version for the current content. Prereleases
+# may advance prerelease defaults, but never replace a stable release's default.
 
 new=$(sha256sum /etc/agentainer/AGENTS.md | cut -d' ' -f1)
 ver=${AGENTAINER_IMAGE_VERSION:-}
@@ -61,8 +46,7 @@ if [ -f "$f" ]; then
 	if [ -f "$canon" ] && [ ! -L "$canon" ]; then mine=$(sha256sum "$canon" | cut -d' ' -f1); fi
 	if [ "$mine" = "$new" ]; then
 		:
-	elif [ -n "$mine" ] && awk -v h="$mine" '$1 == h { found = 1 } END { exit !found }' "$f" &&
-		[ "$(awk -v v="$ver" "$KEY"' BEGIN { print key(v) }')" -gt "$(newest_key "$mine" "$f")" ]; then
+	elif [ -n "$mine" ] && python3 /usr/local/lib/agentainer/release_version.py newer-default "$ver" "$mine" "$f"; then
 		# The file still matches an earlier, older image default, so the user never edited
 		# it. A unique temp file keeps the swap atomic; the file keeps its mode.
 		tmp=$(mktemp "$HOME/.agentainer/.AGENTS.md.XXXXXX")

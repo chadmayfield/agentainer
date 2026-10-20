@@ -15,6 +15,8 @@ You need Podman or Docker. The launcher [`bin/agentainer`](bin/agentainer) is a 
 
 No image is published to `ghcr.io/chadmayfield/agentainer` until the first release. Until then, build it with `scripts/build.sh`, then `export AGENTAINER_IMAGE=localhost/agentainer:dev` or pass `--image localhost/agentainer:dev` to `up`.
 
+Development prereleases have explicit version tags, such as `0.1.0-dev.20261019.1`. Set `AGENTAINER_IMAGE` to that full registry reference after it is published ([release versions](docs/versions.md#releases)). The launcher defaults to `latest`, which is published only for stable versions.
+
 ```sh
 mkdir -p ~/.config/agentainer
 cp env.example ~/.config/agentainer/env

@@ -31,9 +31,13 @@ The workflow opens the pull request with a GitHub App token when the repository 
 
 ## Releases
 
-Releases are calendar versions, `YYYY.MM.DD`, with `.N` for a second release on the same day. Each release publishes `ghcr.io/chadmayfield/agentainer` for amd64 and arm64:
+Releases use [Semantic Versioning](https://semver.org/). Stable versions have the form `MAJOR.MINOR.PATCH`, such as `0.1.0`. Development prereleases use the next intended version followed by `-dev.YYYYMMDD.N`, such as `0.1.0-dev.20261019.1`. The date must exist and the build number starts at 1. Increment it for another build that day. The parser also accepts other SemVer prerelease identifiers, such as `0.1.0-rc.1`. Container tags exclude SemVer build metadata (`+...`) and are limited to 128 characters ([distribution tag format](https://github.com/distribution/reference/blob/main/regexp.go)).
 
-- tagged `latest`, the version and `sha-<commit>`;
+Versions below `1.0.0` are initial development, without a stable compatibility promise. Agentainer's public interfaces are its launcher commands, documented environment variables, configuration paths and persistent-home upgrade behavior. Bundled tool versions remain separate in `versions.env`.
+
+Each release publishes `ghcr.io/chadmayfield/agentainer` for amd64 and arm64:
+
+- tagged with the version and `sha-<commit>`, with `latest` reserved for stable releases;
 - signed with cosign keyless signing, the index and each architecture's image;
 - with an SBOM and provenance attestation, and zstd-compressed layers.
 
@@ -45,7 +49,16 @@ A runtime needs zstd support to pull the image. These are the first versions wit
 | containerd, including Kubernetes nodes that use it | 1.5.0 ("Add support for layers compressed with zstd", [containerd v1.5.0 release notes](https://github.com/containerd/containerd/releases/tag/v1.5.0)) |
 | Podman | Not verified. Podman's release notes do not name a version. containers/image added zstd in containers/image#639, and Podman 1.6.2 is the first release whose `go.mod` uses a containers/image version with that change. |
 
-The release job refreshes `main` while holding its release lock. Only the highest calendar version in main's first-parent release merges can move `latest`. A delayed older build or retry publishes its own version tag and leaves `latest` alone. The comparison includes numeric same-day suffixes, so `.10` follows `.2` ([release script](../scripts/release-image.sh), [version comparison](../scripts/release_order.py)).
+The release job refreshes `main` while holding its release lock. Only the highest stable SemVer in main's first-parent release merges can move `latest`. Prereleases never move it, even when they target a higher version. A delayed older stable build or retry publishes its own version tag and leaves `latest` alone. Ordering is numeric, so `0.1.10` follows `0.1.2`, and `0.1.0-dev.20261019.10` follows `0.1.0-dev.20261019.2`. A version without a prerelease suffix follows every prerelease of that same version ([release script](../scripts/release-image.sh), [version comparison](../scripts/release_order.py)).
+
+GitHub releases use the same latest decision. Versions with a prerelease suffix are marked as prereleases and explicitly excluded from latest ([GitHub CLI release flags](https://cli.github.com/manual/gh_release_create)). Before the first stable release, pull an explicit prerelease tag; `latest` does not exist yet.
+
+```sh
+podman pull ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261019.1
+AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261019.1 bin/agentainer up
+```
+
+These commands require that version to have completed its release workflow. A merge to `develop` runs CI and does not publish an image.
 
 The published image is a fresh build from the release commit with the same pinned inputs, not the exact image the pull request's tests ran on.
 
