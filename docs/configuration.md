@@ -36,12 +36,14 @@ Define servers once in `~/.agentainer/mcp.json`, in the `mcpServers` format most
 
 | Agent | Where |
 |---|---|
-| Claude Code | `claude mcp add-json --scope user` |
+| Claude Code | `mcpServers` in `~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json` |
 | Codex | A marked block in `~/.codex/config.toml` |
-| Antigravity | `agy mcp add` |
+| Antigravity | `mcpServers` in `~/.gemini/config/mcp_config.json` |
 | OpenCode | `mcp.servers` in `~/.config/opencode/opencode.json` |
 
-The entrypoint runs the sync when `mcp.json` changes, and `agentainer-mcp list` shows what it manages. It adds, updates and removes only the servers it added and never touches servers you added yourself. Deleting `mcp.json` removes the servers it added. Config files that are symlinks stay symlinks; the sync writes the file the link points to. Direct syncs and startup syncs share one lock, so they run one at a time on a shared home volume. Startup uses `agentainer-mcp sync --if-changed`, which checks and records the input hash under that same lock; a direct `agentainer-mcp sync` runs even when the input has not changed.
+The JSON paths and formats match output from `claude mcp add-json --scope user` and `agy mcp add`, checked in the image. Claude documents its [user scope](https://code.claude.com/docs/en/mcp).
+
+The entrypoint runs the sync when `mcp.json` changes, and `agentainer-mcp list` shows what it manages. It adds, updates and removes only the servers it added and never touches servers you added yourself. Deleting `mcp.json` removes the servers it added. Config files that are symlinks stay symlinks; the sync writes the file the link points to. Direct syncs and startup syncs share one lock, so they run one at a time on a shared home volume. Startup uses `agentainer-mcp sync --if-changed`, which checks and records the input hash under that same lock; a direct `agentainer-mcp sync` runs even when the input has not changed. Failed writes leave no success stamp and retry on the next start. A journal records config hashes and managed names before each write, so a restart can recover ownership after an interrupted sync. If the config changed independently during that interruption, sync stops for inspection rather than claiming ownership.
 
 Server names may use only letters, digits, `-` and `_`. Any other name stops the sync with an error such as `agentainer-mcp: server name 'my.server' may only use letters, digits, - and _; nothing changed`.
 
@@ -57,7 +59,7 @@ Any other `type` stops the sync with an error and changes nothing. Other keys, s
 Limits per agent:
 
 - SSE servers reach Claude Code as SSE. Codex supports only streamable HTTP and Antigravity only `stdio` and `http`, so both leave an SSE server out with a warning. OpenCode gets it as a remote server, with a warning that this is not verified.
-- Keep secrets as `${NAME}` references to variables in your env file; no agent config receives the value. Literal values reach `claude` and `agy` on their command line, where `ps` can show them for a moment.
+- Keep secrets as `${NAME}` references to variables in your env file; no agent config receives the value. The sync writes literal values directly into agent config files and never passes server configuration to a child process. New config files have mode `0600`; existing files keep their permissions.
 - Antigravity has no documented syntax for variable references. For `agy`, the sync leaves out `env` entries that are `${NAME}` references (the server inherits the container's environment instead) and does not write headers that contain `${NAME}`, such as `Authorization: Bearer ${TOKEN}`. It prints a warning for each; add those headers in Antigravity by hand.
 - Codex sends a `${NAME}` header variable as the whole header value. `Authorization: Bearer ${NAME}` works. For any other header written as `Bearer ${NAME}`, the sync leaves it out for Codex with a warning: store `Bearer <token>` in the variable and write the header value as `${NAME}`.
 - Codex passes a server only the variables named in its config, under their own names. An `env` entry such as `API_KEY=${OTHER}` cannot rename a variable for Codex, so the sync leaves it out with a warning; give the variable the name the server expects.
@@ -75,7 +77,7 @@ In a hand check, Codex and Antigravity listed a synced server's tools, and `clau
 | `ephemeral` (default) | `/var/lib/agentainer/tools` | No |
 | `persist` | `~/.agentainer/tools` | Yes |
 
-Image tools come first on `PATH`, so an installed tool never hides an image tool. When the image changes and persisted tools exist, the entrypoint warns; `agentainer-tools reset` moves them to a dated backup. `agentainer-tools status` shows the mode and what is installed.
+Image tools come first on `PATH`, so an installed tool never hides an image tool. When the image changes and persisted tools exist, the entrypoint warns; `agentainer-tools reset` moves them to a dated backup. Resets share a lock and reserve unique backup paths across containers. `agentainer-tools status` shows the mode and what is installed.
 
 Ubuntu's Python refuses `pip install` outside a virtual environment, `pip install --user` included (PEP 668), so use `uv`, `pipx` or a venv. `PYTHONUSERBASE` points into the same tools root, but plain `pip` never installs there.
 

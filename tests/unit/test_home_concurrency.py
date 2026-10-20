@@ -107,15 +107,7 @@ exec /bin/cp "$@"
         (self.home / ".agentainer/mcp.json").write_text(
             '{"mcpServers":{"shared":{"command":"example"}}}')
         claude = bindir / "claude"
-        claude.write_text("#!%s\n" % sys.executable + """import json,os,pathlib,sys,time
-h = pathlib.Path(os.environ['HOME'])
-t = pathlib.Path(os.environ['CX_TMP'])
-if sys.argv[2] == 'add-json':
-    (h / '.claude.json').write_text(json.dumps({'mcpServers': {sys.argv[3]: {'command': 'example'}}}))
-    (t / 'added').touch()
-    while not (t / 'releaseA').exists():
-        time.sleep(0.01)
-""")
+        claude.write_text("#!/bin/sh\nexit 0\n")
         claude.chmod(0o755)
         codex = bindir / "codex"
         codex.write_text("#!/bin/sh\nexit 0\n")
@@ -127,6 +119,16 @@ spec = importlib.util.spec_from_loader('mcp', loader)
 m = importlib.util.module_from_spec(spec)
 loader.exec_module(m)
 args = ['sync']
+if os.environ['CX_WORKER'] == 'A':
+    write = m.write_atomic
+    def paused(path, text):
+        write(path, text)
+        if path == str(pathlib.Path(os.environ['HOME']) / '.claude.json'):
+            t = pathlib.Path(os.environ['CX_TMP'])
+            (t / 'added').touch()
+            while not (t / 'releaseA').exists():
+                time.sleep(0.01)
+    m.write_atomic = paused
 if os.environ['CX_WORKER'] == 'B':
     args += ['--if-changed']
     original = m.sync_codex
@@ -153,3 +155,83 @@ raise SystemExit(m.main(args))
         manifest = json.loads((self.home / ".agentainer/mcp-managed.json").read_text())
         self.assertEqual(manifest["claude"], ["shared"])
         self.assertIn("shared", json.loads((self.home / ".claude.json").read_text())["mcpServers"])
+
+    @unittest.skipUnless(shutil.which("flock"), "entrypoint requires Linux flock")
+    def test_concurrent_config_seeding_waits_for_the_first_copy(self):
+        root = self.base / "image"
+        (root / "home").mkdir(parents=True)
+        (root / "home/.profile").write_text("image profile\n")
+        steps = root / "steps"
+        steps.mkdir()
+        for name in ("10-dirs.sh", "20-seed.sh"):
+            text = (ROOT / "rootfs/usr/local/lib/agentainer/entrypoint.d" / name).read_text()
+            (steps / name).write_text(text.replace("/etc/agentainer", str(root))
+                                          .replace("/etc/skel", str(root / "skel")))
+        entrypoint = root / "entrypoint"
+        text = (ROOT / "rootfs/usr/local/bin/agentainer-entrypoint").read_text()
+        entrypoint.write_text(text.replace("STEPS=/usr/local/lib/agentainer/entrypoint.d",
+                                          'STEPS="%s"' % steps))
+        bindir = self.base / "bin"
+        bindir.mkdir()
+        cp = bindir / "cp"
+        cp.write_text('''#!/bin/sh
+if [ "$CX_WORKER" = A ]; then
+    touch "$CX_TMP/copy-paused"
+    while [ ! -e "$CX_TMP/release-copy" ]; do sleep 0.01; done
+else
+    touch "$CX_TMP/B-copied"
+fi
+exec /bin/cp "$@"
+''')
+        cp.chmod(0o755)
+        env = {"PATH": str(bindir) + ":" + os.environ["PATH"]}
+        a = self.start(["sh", str(entrypoint), "echo", "STARTED"], CX_WORKER="A", **env)
+        self.wait_file("copy-paused")
+        b = self.start(["sh", str(entrypoint), "echo", "STARTED"], CX_WORKER="B", **env)
+        time.sleep(0.3)
+        waited = b.poll() is None and not (self.base / "B-copied").exists()
+        (self.base / "release-copy").touch()
+        self.complete(a)
+        self.complete(b)
+        self.assertTrue(waited, "the second seed copied a destination still being created")
+        self.assertEqual((self.home / ".profile").read_text(), "image profile\n")
+
+    def test_killed_sync_recovers_ownership_on_restart(self):
+        bindir = self.base / "bin"
+        bindir.mkdir()
+        cli = bindir / "claude"
+        cli.write_text("#!/bin/sh\nexit 0\n")
+        cli.chmod(0o755)
+        desired = self.home / ".agentainer/mcp.json"
+        desired.write_text('{"mcpServers":{"orphan":{"command":"example"}}}')
+        worker = self.base / "interrupted.py"
+        worker.write_text('''import importlib.machinery,importlib.util,os,pathlib,time
+loader = importlib.machinery.SourceFileLoader('mcp', os.environ['CX_SOURCE'])
+spec = importlib.util.spec_from_loader('mcp', loader)
+m = importlib.util.module_from_spec(spec)
+loader.exec_module(m)
+write = m.write_atomic
+def paused(path, text):
+    write(path, text)
+    if path == str(pathlib.Path(os.environ['HOME']) / '.claude.json'):
+        (pathlib.Path(os.environ['CX_TMP']) / 'config-renamed').touch()
+        while True:
+            time.sleep(0.1)
+m.write_atomic = paused
+raise SystemExit(m.main(['sync']))
+''')
+        env = {"PATH": str(bindir), "CX_SOURCE": str(ROOT / "rootfs/usr/local/bin/agentainer-mcp")}
+        killed = self.start([sys.executable, "-B", str(worker)], **env)
+        self.wait_file("config-renamed")
+        killed.kill()
+        killed.communicate(timeout=5)
+        self.assertEqual(killed.returncode, -9)
+        self.assertIn("orphan", json.loads((self.home / ".claude.json").read_text())["mcpServers"])
+        self.assertTrue((self.home / ".agentainer/mcp-pending-claude.json").is_file())
+        desired.write_text('{"mcpServers":{}}')
+        restarted = self.start([sys.executable, "-B", env["CX_SOURCE"], "sync", "--if-changed"], **env)
+        self.complete(restarted)
+        self.assertEqual(json.loads((self.home / ".claude.json").read_text())["mcpServers"], {})
+        manifest = json.loads((self.home / ".agentainer/mcp-managed.json").read_text())
+        self.assertEqual(manifest["claude"], [])
+        self.assertFalse((self.home / ".agentainer/mcp-pending-claude.json").exists())

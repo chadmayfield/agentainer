@@ -1,5 +1,8 @@
 # Step 2: seed files that are missing. Never overwrite. A path the user already uses
 # for something else is reported and skipped.
+# Serialize missing-file checks and copies on a shared home.
+exec 9>"$HOME/.agentainer/.seed.lock"
+flock -w 30 9
 try_seed() {
 	seed_file "$1" "$2" 2>/dev/null || warn "could not seed $2 (something else is in the way); skipping"
 }

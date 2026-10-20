@@ -103,3 +103,19 @@ elif '--dry-run' in a:
         self.assertNotEqual(r.returncode, 0)
         self.assertNotIn(IMAGE + ":latest", tags)
         self.assertNotIn(IMAGE + ":2026.10.19", tags)
+
+    def test_invalid_historical_release_names_do_not_block_a_valid_release(self):
+        for old in ("2026.02.30", "1.0.0", "2026.13.01", "2026.10.19.0"):
+            with self.subTest(old=old):
+                r, tags = self.run_release("2026.10.19", ["2026.10.19", old])
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn(IMAGE + ":2026.10.19", tags)
+                self.assertIn(IMAGE + ":latest", tags)
+
+    def test_invalid_candidate_still_cannot_publish_public_tags(self):
+        for candidate in ("2026.02.30", "1.0.0"):
+            with self.subTest(candidate=candidate):
+                r, tags = self.run_release(candidate, [candidate])
+                self.assertNotEqual(r.returncode, 0)
+                self.assertNotIn(IMAGE + ":" + candidate, tags)
+                self.assertNotIn(IMAGE + ":latest", tags)

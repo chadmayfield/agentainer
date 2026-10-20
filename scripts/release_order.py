@@ -23,7 +23,11 @@ def may_move_latest(candidate, owner, subjects):
     for subject in subjects:
         m = pattern.fullmatch(subject.rstrip("\n"))
         if m:
-            releases.append(version_key(m.group(1)))
+            try:
+                releases.append(version_key(m.group(1)))
+            except ValueError:
+                # A merge rejected by the version job is not a published calendar release.
+                continue
     if requested not in releases:
         raise ValueError("release %s is not in main's release history" % candidate)
     return requested == max(releases)
