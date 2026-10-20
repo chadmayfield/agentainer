@@ -14,7 +14,7 @@ Include what you found, how to reproduce it, and the image tag or digest you use
 - The Kubernetes example in `deploy/kubernetes/`, including the auth webhook.
 - The CI workflows in `.github/workflows/`.
 
-A vulnerability in an agent or tool that the image installs (Claude Code, Codex, Antigravity CLI, OpenCode, Go, gh and the others) belongs to that project. Report it there. Once the project ships a fix, the weekly version bump brings it into the image.
+A vulnerability in an agent or tool that the image installs (Claude Code, Codex, Antigravity CLI, OpenCode, Go, gh and the others) belongs to that project. Report it there. Once the project ships a fix, a scheduled or manually triggered version bump brings it into the image.
 
 ## Supported versions
 

@@ -34,4 +34,4 @@ CI scans every image with trivy. A secret found in the image fails the build. Vu
 - Releases: the scan runs on the images pushed to GHCR. The release notes start with the same summary, and `vulnerabilities-amd64.json` and `vulnerabilities-arm64.json` are attached to the release.
 - Kernel CVEs filed against `linux-libc-dev`, the kernel header package that C compilers need, are counted separately: the container runs on the host's kernel.
 
-Many findings sit in upstream binaries that this repo installs as released. They are fixed by upstream releases, which reach the image through the weekly version update ([docs/versions.md](versions.md)). [AGENTS.md](../AGENTS.md#vulnerabilities-in-bundled-tools) describes how a tool that stops shipping fixes is handled.
+Many findings sit in upstream binaries that this repo installs as released. They are fixed by upstream releases, which reach the image through the scheduled version update ([docs/versions.md](versions.md)). [AGENTS.md](../AGENTS.md#vulnerabilities-in-bundled-tools) describes how a tool that stops shipping fixes is handled.

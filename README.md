@@ -34,7 +34,7 @@ Start an agent in a tmux window (`claude`, `codex`, `agy` or `opencode`). Close 
 | The shared `AGENTS.md`, MCP servers, tools that agents install, OpenRouter | [docs/configuration.md](docs/configuration.md) |
 | Kubernetes with ContainerSSH | [docs/kubernetes.md](docs/kubernetes.md) |
 | What the container isolates, and vulnerability reports | [docs/security.md](docs/security.md) |
-| Pinned versions, weekly updates, releases and signatures | [docs/versions.md](docs/versions.md) |
+| Pinned versions, scheduled updates, releases and signatures | [docs/versions.md](docs/versions.md) |
 | Error messages and their fixes | [docs/troubleshooting.md](docs/troubleshooting.md) |
 
 To report a vulnerability, follow [SECURITY.md](SECURITY.md). To contribute, read [CONTRIBUTING.md](CONTRIBUTING.md).

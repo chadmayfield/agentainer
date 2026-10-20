@@ -1,4 +1,4 @@
-name: Open the weekly bump pull request
+name: Open the version bump pull request
 description: >
   Applies the pin changes from the bump workflow's resolve job to the checked-out
   develop commit, pushes them to a new bump/<date>-<run> branch and opens a pull
@@ -43,10 +43,10 @@ runs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
         fi
         git switch -c "$b"
-        git commit -m "chore: weekly version bump"
+        git commit -m "chore: version bump"
         git push origin "$b"
-        { echo "Automated weekly pin update. Review and merge by hand."; echo; echo '```'; cat "$RUNNER_TEMP/changes.txt"; echo '```'; } >"$RUNNER_TEMP/body.md"
-        gh pr create --base develop --head "$b" --title "Weekly version bump $(date -u +%Y-%m-%d)" --body-file "$RUNNER_TEMP/body.md"
+        { echo "Automated pin update. Review and merge by hand."; echo; echo '```'; cat "$RUNNER_TEMP/changes.txt"; echo '```'; } >"$RUNNER_TEMP/body.md"
+        gh pr create --base develop --head "$b" --title "Version bump $(date -u +%Y-%m-%d)" --body-file "$RUNNER_TEMP/body.md"
         if [ -z "$APP_SLUG" ]; then
           echo "::notice::Opened with GITHUB_TOKEN: approve the CI run on the pull request with \"Approve workflows to run\"."
         fi

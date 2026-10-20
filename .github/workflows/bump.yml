@@ -1,7 +1,7 @@
 name: bump
 on:
   schedule:
-    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
+    - cron: "0 6 1,15 * *"  # 1st and 15th of each month, 06:00 UTC
   workflow_dispatch:
 
 # Each job sets what its GITHUB_TOKEN may do. Only pr-token, the fallback without the
@@ -50,7 +50,7 @@ jobs:
             echo "base=$(git rev-parse HEAD)"
             if [ "$HAS_APP_ID" = true ] && [ "$HAS_APP_KEY" = true ]; then echo app=true; else echo app=false; fi
             if git diff --quiet; then
-              echo "No version changes this week." >&2
+              echo "No version changes found." >&2
               echo changed=false
             else
               echo changed=true

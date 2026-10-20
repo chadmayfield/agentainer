@@ -13,10 +13,10 @@ Agentainer is one public container image that bundles four AI coding agents (Cla
 | `rootfs/` | Files copied into the image: the entrypoint and its steps, `agentainer-*` commands, seeded configs |
 | `bin/agentainer` | The host launcher (POSIX sh) |
 | `deploy/kubernetes/` | The Kubernetes example: StatefulSet, ContainerSSH, auth webhook |
-| `scripts/` | Build, weekly pin update, CI report scripts |
+| `scripts/` | Build, scheduled pin update, CI report scripts |
 | `tests/` | Container tests (`NN-*.sh`), host tests (`host/`), unit tests (`unit/`), fixtures |
 | `docs/` | User documentation |
-| `.github/workflows/` | CI, release and the weekly update |
+| `.github/workflows/` | CI, release and the scheduled update |
 
 `docs/private/` holds the maintainer's design notes, may be stale, and is ignored by git. Never commit anything under it.
 
@@ -52,13 +52,13 @@ Check each command's exit code directly. Piping into `tail` or `grep` hides a fa
 ## Pins and downloads
 
 - Every pinned version, digest and checksum for the image lives in `versions.env`. Do not hardcode versions in the `Containerfile` or scripts. Exceptions: GitHub Actions and the actionlint image are pinned by SHA or digest in the workflow files, and the two image references in `deploy/kubernetes/*/deployment.yaml` repeat their `versions.env` pins (`bump_versions.py` rewrites them and `tests/host/test-manifests.sh` checks they match).
-- A new pin needs a resolver in `scripts/bump_versions.py`, unless the weekly update must never change it (`SOURCE_DATE_EPOCH`). Its key must match a pattern in `VALUE_PATTERNS` (most keys match by suffix, such as `_VERSION` or `_SHA256_ARM64`). The weekly update refuses to write a value that matches no pattern.
+- A new pin needs a resolver in `scripts/bump_versions.py`, unless the scheduled update must never change it (`SOURCE_DATE_EPOCH`). Its key must match a pattern in `VALUE_PATTERNS` (most keys match by suffix, such as `_VERSION` or `_SHA256_ARM64`). The scheduled update refuses to write a value that matches no pattern.
 - Check every download against the checksum the project publishes. When a project publishes none, record the SHA-256 you computed and say so in a comment.
 - Install upstream release binaries. Do not build a tool from source to pick up a newer Go, Rust or library version.
 
 ## Vulnerabilities in bundled tools
 
-- Findings inside an upstream binary are reported, not chased. A new upstream release reaches the image through the weekly update.
+- Findings inside an upstream binary are reported, not chased. A new upstream release reaches the image through the scheduled update.
 - When a tool stops shipping releases and carries a critical finding that only a rebuild would fix, the maintainer decides whether to keep, drop or replace it. Record the decision in the pull request that makes it.
 
 ## Image and runtime

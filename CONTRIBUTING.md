@@ -52,7 +52,7 @@ Re-running a failed release is safe. The `version` job checks only for the git t
 
 ## The bump GitHub App
 
-The weekly update ([`.github/workflows/bump.yml`](.github/workflows/bump.yml)) opens its pull request with a GitHub App token, so CI starts without "Approve workflows to run". To set the App up:
+The scheduled update ([`.github/workflows/bump.yml`](.github/workflows/bump.yml)) opens its pull request with a GitHub App token, so CI starts without "Approve workflows to run". To set the App up:
 
 1. Under your account's Settings, Developer settings, GitHub Apps, create a new App. Use the repository URL as its homepage and turn off its webhook.
 2. Give it the repository permissions Contents (read and write) and Pull requests (read and write), and nothing else. Allow installing it only on your account.
