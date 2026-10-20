@@ -1,5 +1,6 @@
 #!/bin/sh
-# Renders the Kubernetes example offline and checks the settings the spec requires.
+# Renders the Kubernetes example offline and checks the security and wiring settings
+# it depends on.
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/../lib.sh"
 cd "$(dirname "$0")/../.." || exit 2
@@ -20,7 +21,10 @@ assert_eq "drops ALL" "ALL" "$(q "$sts.spec.template.spec.containers[0].security
 assert_eq "seccomp RuntimeDefault" "RuntimeDefault" "$(q "$sts.spec.template.spec.securityContext.seccompProfile.type")"
 assert_eq "SSH targetPort 2222" "2222" "$(q 'select(.kind=="Service" and .metadata.name=="containerssh").spec.ports[0].targetPort')"
 assert_eq "restricted namespace" "restricted" "$(q 'select(.kind=="Namespace" and .metadata.name=="agentainer").metadata.labels."pod-security.kubernetes.io/enforce"')"
-assert_eq "RBAC verbs are only create and get" "create get" "$(q 'select(.kind=="Role") | .rules[].verbs[]' | grep -v '^---' | sort -u | paste -sd ' ' -)"
+# ContainerSSH v0.6.0 reads the pod (Pods().Get) and runs exec with a POST SPDY request,
+# which RBAC authorizes as create on pods/exec.
+assert_eq "RBAC allows get on pods and create on pods/exec, nothing else" "pods=get pods/exec=create" \
+	"$(q 'select(.kind=="Role") | .rules[] | (.resources | join(",")) + "=" + (.verbs | join(","))' | grep -v '^---' | paste -sd ' ' -)"
 cfg=$(q 'select(.kind=="Deployment" and .metadata.name=="containerssh").spec.template.spec.volumes[] | select(.name=="config").configMap.name')
 case "$cfg" in
 containerssh-config-?*) pass "containerssh config name carries a content hash, so edits roll out" ;;
@@ -35,6 +39,61 @@ wh='select(.kind=="NetworkPolicy" and .metadata.name=="agentainer-auth-ingress")
 assert_eq "webhook ingress policy selects the webhook" "agentainer-auth" "$(q "$wh.spec.podSelector.matchLabels.app")"
 assert_eq "webhook ingress admits only ContainerSSH" "containerssh" "$(q "$wh.spec.ingress[0].from[0].podSelector.matchLabels.app")"
 assert_eq "webhook ingress port" "8080" "$(q "$wh.spec.ingress[0].ports[0].port")"
+
+# ContainerSSH settings, read from the generated ConfigMap.
+csc='select(.kind=="ConfigMap" and (.metadata.name | test("^containerssh-config"))).data["config.yaml"] | from_yaml'
+# ContainerSSH appends /pubkey and /password to the auth URL (ContainerSSH v0.6.0 auth webhook docs).
+authurl=$(q "$csc | .auth.publicKey.webhook.url")
+case "$authurl" in
+http://*/* | https://*/*) fail "auth webhook URL has no path" "got [$authurl]" ;;
+http://?* | https://?*) pass "auth webhook URL has no path" ;;
+*) fail "auth webhook URL has no path" "got [$authurl]" ;;
+esac
+cfgurl=$(q "$csc | .configserver.url")
+case "$cfgurl" in
+http*://*/config) pass "configserver URL ends in /config" ;;
+*) fail "configserver URL ends in /config" "got [$cfgurl]" ;;
+esac
+assert_eq "SSH keepalive interval is set" "30s" "$(q "$csc | .ssh.clientAliveInterval")"
+dep='select(.kind=="Deployment" and .metadata.name=="containerssh").spec.template.spec'
+hk="$dep.volumes[] | select(.name==\"hostkey\").secret"
+assert_eq "host key Secret item is host.key" "host.key host.key" "$(q "$hk | .items[0].key + \" \" + .items[0].path")"
+assert_eq "hostkeys path matches the host.key mount" \
+	"$(q "$dep.containers[0].volumeMounts[] | select(.name==\"hostkey\").mountPath")/host.key" \
+	"$(q "$csc | .ssh.hostkeys[0]")"
+# shellcheck disable=SC2016 # the docs line contains a literal $keydir
+assert_contains "docs/kubernetes.md creates the host key Secret from host.key" \
+	'create secret generic containerssh-hostkey --from-file="$keydir/host.key"' "$(cat docs/kubernetes.md)"
+assert_eq "host key file mode 0400" "256" "$(q "$hk.defaultMode")"
+assert_eq "fsGroup lets user 1022 read the host key" "1022" "$(q "$dep.securityContext.fsGroup")"
+for d in containerssh agentainer-auth; do
+	p="select(.kind==\"Deployment\" and .metadata.name==\"$d\").spec.template.spec"
+	assert_eq "$d runAsNonRoot" "true" "$(q "$p.securityContext.runAsNonRoot")"
+	assert_eq "$d seccomp RuntimeDefault" "RuntimeDefault" "$(q "$p.securityContext.seccompProfile.type")"
+	assert_eq "$d no privilege escalation" "false" "$(q "$p.containers[0].securityContext.allowPrivilegeEscalation")"
+	assert_eq "$d drops ALL" "ALL" "$(q "$p.containers[0].securityContext.capabilities.drop | join(\" \")")"
+	assert_eq "$d has resource requests and limits" "cpu memory cpu memory" \
+		"$(q "$p.containers[0].resources | (.requests | keys | join(\" \")) + \" \" + (.limits | keys | join(\" \"))")"
+done
+svc='select(.kind=="Service" and .metadata.name=="containerssh")'
+assert_eq "containerssh Service keeps the client source IP" "Local" "$(q "$svc.spec.externalTrafficPolicy")"
+assert_eq "seed ConfigMap volume is optional" "agentainer-seed true" \
+	"$(q "$sts.spec.template.spec.volumes[] | select(.name==\"seed\").configMap | .name + \" \" + (.optional | tostring)")"
+assert_eq "seed volume is mounted read-only at /etc/agentainer/seed" "/etc/agentainer/seed true" \
+	"$(q "$sts.spec.template.spec.containers[0].volumeMounts[] | select(.name==\"seed\") | .mountPath + \" \" + (.readOnly | tostring)")"
+assert_contains "docs/kubernetes.md shows how to create the seed ConfigMap" \
+	"kubectl -n agentainer create configmap agentainer-seed" "$(cat docs/kubernetes.md)"
+assert_eq "PVCs are kept on delete and scale down" "Retain Retain" \
+	"$(q "$sts.spec.persistentVolumeClaimRetentionPolicy | .whenDeleted + \" \" + .whenScaled")"
+assert_eq "headless Service has no ports" "None 0" \
+	"$(q 'select(.kind=="Service" and .metadata.name=="agentainer").spec | .clusterIP + " " + ((.ports // []) | length | tostring)')"
+assert_eq "every object has part-of agentainer" "agentainer" \
+	"$(q '.metadata.labels."app.kubernetes.io/part-of"' | grep -v '^---' | sort -u | paste -sd ' ' -)"
+# One line per object: how many selectors it has and how many of them carry part-of.
+# The marker "selectors=1" proves yq ran and the paths reach real selectors.
+assert_absent "selectors do not carry part-of" \
+	"$(q '"selectors=" + ([.spec.selector, .spec.podSelector] | map(select(. != null)) | length | tostring) + " part-of=" + ([.spec.selector."app.kubernetes.io/part-of", .spec.selector.matchLabels."app.kubernetes.io/part-of", .spec.podSelector.matchLabels."app.kubernetes.io/part-of"] | map(select(. != null)) | length | tostring)')" \
+	"selectors=1 " part-of=1 part-of=2 part-of=3
 . ./versions.env
 assert_contains "containerssh digest matches versions.env" "$CONTAINERSSH_IMAGE" "$out"
 assert_contains "webhook python digest matches versions.env" "$WEBHOOK_PYTHON_IMAGE" "$out"

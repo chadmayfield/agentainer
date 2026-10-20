@@ -1,39 +1,112 @@
 name: bump
 on:
   schedule:
-    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
+    - cron: "0 6 1,15 * *"  # 1st and 15th of each month, 06:00 UTC
   workflow_dispatch:
 
-permissions:
-  contents: write
-  pull-requests: write
-  actions: write
+# Each job sets what its GITHUB_TOKEN may do. Only pr-token, the fallback without the
+# App, gets write access.
+permissions: {}
 
 jobs:
-  bump:
+  # Runs the resolver, which makes HTTP requests to upstream projects, with a read-only
+  # GITHUB_TOKEN and no token stored in .git/config. The pin changes go to the next job
+  # as a base64 patch in a job output (outputs are limited to 1 MB per job, GitHub docs,
+  # output-limitations).
+  resolve:
     runs-on: ubuntu-26.04
+    # Runs take about 15 seconds; the resolver's HTTP requests time out after 60 seconds each.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+      base: ${{ steps.diff.outputs.base }}
+      patch: ${{ steps.diff.outputs.patch }}
+      changes: ${{ steps.diff.outputs.changes }}
+      app: ${{ steps.diff.outputs.app }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with: {ref: develop}
+        with:
+          ref: develop
+          persist-credentials: false
       - name: Resolve pins
         shell: bash  # adds -o pipefail, so a failed resolver fails the job
         env:
+          # Read-only here; the resolver uses it only to raise the GitHub API rate limit.
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/bump_versions.py | tee changes.txt
-      - name: Open the PR and start CI on it
+      - id: diff
+        name: Collect the changes
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          RUN: ${{ github.run_number }}
+          # A step "if" cannot read secrets (GitHub docs, use-secrets.md), so this carries
+          # whether the App key is set.
+          HAS_APP_KEY: ${{ secrets.BUMP_APP_PRIVATE_KEY != '' }}
+          HAS_APP_ID: ${{ vars.BUMP_APP_CLIENT_ID != '' }}
         run: |
-          if git diff --quiet; then echo "No version changes this week."; exit 0; fi
-          b="bump/$(date -u +%Y-%m-%d)-$RUN"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$b"
-          git commit -am "chore: weekly version bump"
-          git push origin "$b"
-          { echo "Automated weekly pin update. Review and merge by hand."; echo; echo '```'; cat changes.txt; echo '```'; } > body.md
-          gh pr create --base develop --head "$b" --title "Weekly version bump $(date -u +%Y-%m-%d)" --body-file body.md
-          # A PR opened with GITHUB_TOKEN starts no pull_request workflow; a dispatch does run.
-          gh workflow run build.yml --ref "$b"
+          set -u
+          {
+            echo "base=$(git rev-parse HEAD)"
+            if [ "$HAS_APP_ID" = true ] && [ "$HAS_APP_KEY" = true ]; then echo app=true; else echo app=false; fi
+            if git diff --quiet; then
+              echo "No version changes found." >&2
+              echo changed=false
+            else
+              echo changed=true
+              echo "patch=$(git diff --binary | base64 -w0)"
+              echo "changes=$(base64 -w0 changes.txt)"
+            fi
+          } >>"$GITHUB_OUTPUT"
+
+  # A pull request opened with GITHUB_TOKEN gets its CI runs "in an approval-required
+  # state" (GitHub docs, actions-do-not-trigger-workflows). A push and pull request made
+  # with a GitHub App installation token start CI without that approval. The App token
+  # does every write here, so GITHUB_TOKEN stays read-only.
+  pr-app:
+    needs: resolve
+    if: needs.resolve.outputs.changed == 'true' && needs.resolve.outputs.app == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.BUMP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BUMP_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # The develop commit the resolver ran on, so the patch applies.
+          ref: ${{ needs.resolve.outputs.base }}
+          # checkout stores this token in the git config, so the git push uses it.
+          token: ${{ steps.app.outputs.token }}
+      - uses: ./.github/actions/bump-pr
+        with:
+          token: ${{ steps.app.outputs.token }}
+          app-slug: ${{ steps.app.outputs.app-slug }}
+          patch: ${{ needs.resolve.outputs.patch }}
+          changes: ${{ needs.resolve.outputs.changes }}
+
+  # Without the App variable and secret, GITHUB_TOKEN pushes the branch and opens the
+  # pull request, so this job needs write access.
+  pr-token:
+    needs: resolve
+    if: needs.resolve.outputs.changed == 'true' && needs.resolve.outputs.app != 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.base }}
+      - uses: ./.github/actions/bump-pr
+        with:
+          token: ${{ github.token }}
+          patch: ${{ needs.resolve.outputs.patch }}
+          changes: ${{ needs.resolve.outputs.changes }}

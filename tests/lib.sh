@@ -57,6 +57,43 @@ assert_contains() {
 	esac
 }
 
+# assert_absent NAME OUTPUT MARKER NEEDLE...: passes only when OUTPUT contains MARKER
+# (proof the command ran) and none of the NEEDLEs. Without the marker, an empty output
+# from a command that never ran would look like a pass.
+assert_absent() {
+	_name=$1 _out=$2 _marker=$3
+	shift 3
+	case "$_out" in
+	*"$_marker"*) ;;
+	*)
+		fail "$_name" "marker [$_marker] missing, so the command did not run: [$_out]"
+		return 0
+		;;
+	esac
+	for _needle; do
+		case "$_out" in
+		*"$_needle"*)
+			fail "$_name" "[$_needle] found in [$_out]"
+			return 0
+			;;
+		esac
+	done
+	pass "$_name"
+}
+
+# wait_for SECONDS COMMAND...: retries COMMAND once a second until it succeeds.
+# Returns 1 if it never does.
+wait_for() {
+	_left=$1
+	shift
+	while [ "$_left" -gt 0 ]; do
+		"$@" >/dev/null 2>&1 && return 0
+		_left=$((_left - 1))
+		sleep 1
+	done
+	return 1
+}
+
 finish() {
 	printf '1..%s\n' "$_count"
 	[ "$_failures" -eq 0 ]

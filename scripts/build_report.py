@@ -6,7 +6,8 @@
   build_report.py layers TOTAL_BYTES         image size and largest layers; reads
                                              `docker history --human=false --no-trunc
                                              --format '{{.Size}}\t{{.CreatedBy}}'` on stdin
-  build_report.py tests LABEL LOG            pass and fail counts per test file
+  build_report.py tests LABEL LOG            pass and fail counts per test file, from
+                                             the TAP output of tests/run.sh
 """
 import json
 import re
@@ -121,7 +122,9 @@ def tests(label, path):
                 continue
             if current is None:
                 continue
-            m = re.match(r"(not )?ok \d+ - (.*)$", line)
+            # TAP makes the test number optional; tests/run.sh omits it on the line it adds
+            # for a file that exits non-zero without a failing test.
+            m = re.match(r"(not )?ok(?: \d+)? - (.*)$", line)
             if m:
                 if m.group(1):
                     current[2] += 1

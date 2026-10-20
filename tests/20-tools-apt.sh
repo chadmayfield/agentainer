@@ -23,4 +23,16 @@ assert_contains "node is 22" "v22." "$(run_in -- node --version)"
 assert_contains "tmux runs" "tmux 3.6" "$(run_in -- tmux -V)"
 assert_contains "pip --user is refused (PEP 668)" "externally-managed" "$(run_in -- sh -c 'python3 -m pip install --user requests 2>&1 || true')"
 
+# ansible-core only: the commands without the 450 MB of bundled collections.
+assert_eq "ansible-core without bundled collections" "none" "$(run_in -- sh -c 'ls -d /usr/lib/python3/dist-packages/ansible_collections 2>/dev/null || echo none')"
+# Builds a collection in the container and installs the tarball with no network.
+assert_eq "ansible-galaxy installs collections" "agentainer.fixture 1.0.0" "$(run_in --network none -- sh -c '
+	set -e
+	ansible-galaxy collection init agentainer.fixture --init-path /tmp/c >/dev/null
+	ansible-galaxy collection build /tmp/c/agentainer/fixture --output-path /tmp/b >/dev/null
+	ansible-galaxy collection install --offline /tmp/b/agentainer-fixture-1.0.0.tar.gz >/dev/null
+	ansible-galaxy collection list agentainer.fixture --format json |
+		python3 -c "import json, sys; print(*(n + \" \" + c[\"version\"] for p in json.load(sys.stdin).values() for n, c in p.items()))"
+' 2>&1)"
+
 finish

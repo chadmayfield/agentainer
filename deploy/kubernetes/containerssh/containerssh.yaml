@@ -5,6 +5,10 @@
 ssh:
   hostkeys:
     - /etc/containerssh/hostkey/host.key
+  # Sends an SSH keepalive request every 30 seconds, so load balancer and NAT idle
+  # timers do not drop a quiet session. ContainerSSH closes the connection after
+  # clientAliveCountMax (default 3) failed sends. The value is a Go duration string.
+  clientAliveInterval: 30s
 auth:
   password:
     method: ""

@@ -4,9 +4,11 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import stat
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(__file__)
 SRC = os.path.join(HERE, "..", "..", "rootfs", "usr", "local", "bin", "agentainer-mcp")
@@ -15,32 +17,32 @@ spec = importlib.util.spec_from_loader("agentainer_mcp", loader)
 mcp = importlib.util.module_from_spec(spec)
 loader.exec_module(mcp)
 
-# Stub CLI: logs its argv; "claude mcp get NAME" succeeds when "claude NAME" is in $EXISTING.
+# Stub CLI: logs its argv and succeeds.
 STUB = """#!/bin/sh
 echo "$(basename "$0") $*" >> "$LOG"
-if [ "$1 $2" = "mcp get" ]; then grep -qx "$(basename "$0") $3" "$EXISTING"; exit $?; fi
 exit 0
 """
 
 
-class SyncTests(unittest.TestCase):
+class SyncBase(unittest.TestCase):
+    """A temporary home and stub agent CLIs that log their arguments."""
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
         self.home = os.path.join(self.tmp, "home")
         self.bin = os.path.join(self.tmp, "bin")
         os.makedirs(os.path.join(self.home, ".agentainer"))
         os.makedirs(self.bin)
         self.log = os.path.join(self.tmp, "log")
-        self.existing = os.path.join(self.tmp, "existing")
         open(self.log, "w").close()
-        open(self.existing, "w").close()
         for name in ("claude", "codex", "opencode", "agy"):
             p = os.path.join(self.bin, name)
             with open(p, "w") as f:
                 f.write(STUB)
             os.chmod(p, os.stat(p).st_mode | stat.S_IEXEC)
         self.env = {"HOME": self.home, "PATH": self.bin + ":/usr/bin:/bin",
-                    "LOG": self.log, "EXISTING": self.existing, "SECRET_TOKEN": "s3cr3t-value"}
+                    "LOG": self.log, "SECRET_TOKEN": "s3cr3t-value"}
 
     def write_mcp(self, servers):
         with open(os.path.join(self.home, ".agentainer", "mcp.json"), "w") as f:
@@ -53,6 +55,25 @@ class SyncTests(unittest.TestCase):
     def sync(self):
         return mcp.main(["sync"], env=self.env)
 
+    def sync_err(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = self.sync()
+        return rc, err.getvalue()
+
+    def assert_added_elsewhere(self, name, agents):
+        """Positive check that sync ran: NAME reached each of AGENTS."""
+        manifest = json.loads(self.read(".agentainer", "mcp-managed.json") or "{}")
+        for agent in agents:
+            self.assertIn(name, manifest.get(agent, []), agent)
+        for agent in ("claude", "agy"):
+            if agent in agents:
+                self.assertIn(name, self.json_servers(agent))
+        if "codex" in agents:
+            self.assertIn("[mcp_servers.%s]" % name, self.read(".codex", "config.toml"))
+        if "opencode" in agents:
+            self.assertIn(name, self.opencode_servers())
+
     def read(self, *parts):
         path = os.path.join(self.home, *parts)
         if not os.path.exists(path):
@@ -60,34 +81,69 @@ class SyncTests(unittest.TestCase):
         with open(path) as f:
             return f.read()
 
+    def json_servers(self, agent):
+        parts = ((".claude.json",) if agent == "claude" else (".gemini", "config", "mcp_config.json"))
+        text = self.read(*parts)
+        return json.loads(text).get("mcpServers", {}) if text else {}
+
     def opencode_servers(self):
         text = self.read(".config", "opencode", "opencode.json")
         return (json.loads(text).get("mcp") or {}).get("servers", {}) if text else {}
 
+
+class SyncTests(SyncBase):
+    def test_startup_skips_unchanged_successful_input_but_direct_sync_runs(self):
+        self.write_mcp({"fs": {"command": "example"}})
+        with mock.patch.object(mcp, "write_atomic", wraps=mcp.write_atomic) as writes:
+            self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+            self.assertIn("fs", self.json_servers("claude"))
+            first = writes.call_count
+            self.assertGreater(first, 0)
+            self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+            self.assertEqual(writes.call_count, first)
+            self.assertEqual(self.sync(), 0)
+            self.assertGreater(writes.call_count, first)
+
+    def test_startup_removes_servers_and_stamp_after_input_is_deleted(self):
+        self.write_mcp({"fs": {"command": "example"}})
+        self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+        self.assertTrue(self.read(".agentainer", ".mcp-synced.sha256"))
+        os.unlink(os.path.join(self.home, ".agentainer", "mcp.json"))
+        self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+        manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
+        self.assertTrue(manifest)
+        self.assertTrue(all(not names for names in manifest.values()))
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".agentainer", ".mcp-synced.sha256")))
+        with mock.patch.object(mcp, "write_atomic", wraps=mcp.write_atomic) as writes:
+            self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+            writes.assert_not_called()
+
     def test_adds_servers_to_each_agent(self):
         self.write_mcp({"fs": {"command": "npx", "args": ["-y", "@example/fs"]}})
         self.assertEqual(self.sync(), 0)
-        log = self.calls()
-        self.assertIn("claude mcp add-json fs", log)
-        self.assertIn("agy mcp add fs -- npx -y @example/fs", log)
+        self.assertEqual(self.json_servers("claude")["fs"],
+                         {"type": "stdio", "command": "npx", "args": ["-y", "@example/fs"], "env": {}})
+        self.assertEqual(self.json_servers("agy")["fs"],
+                         {"command": "npx", "args": ["-y", "@example/fs"], "env": {}, "disabled": False})
         self.assertIn('[mcp_servers.fs]\ncommand = "npx"\nargs = ["-y", "@example/fs"]', self.read(".codex", "config.toml"))
         self.assertEqual(self.opencode_servers()["fs"], {"type": "local", "command": ["npx", "-y", "@example/fs"]})
         manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
         self.assertEqual(manifest, {"agy": ["fs"], "claude": ["fs"], "codex": ["fs"], "opencode": ["fs"]})
 
-    def test_agent_error_output_is_not_logged(self):
-        # An agent CLI may echo its arguments on failure; literal values in mcp.json would
-        # then reach container or pod logs through the warning.
-        p = os.path.join(self.bin, "claude")
-        with open(p, "w") as f:
-            f.write('#!/bin/sh\necho "$(basename "$0") $*" >> "$LOG"\n'
-                    '[ "$1 $2" = "mcp get" ] && exit 1\necho "bad config: $*" >&2\nexit 3\n')
-        os.chmod(p, 0o755)
+    def test_config_write_error_does_not_log_credentials(self):
         self.write_mcp({"web": {"url": "https://mcp.example.com", "headers": {"X-Key": "literal-secret-123"}}})
+        original = mcp.write_atomic
+
+        def fail(path, text):
+            if path == os.path.join(self.home, ".claude.json"):
+                raise OSError("bad config: " + text)
+            return original(path, text)
+
         err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            self.sync()
-        self.assertIn("claude mcp add-json web failed (exit 3)", err.getvalue())
+        with mock.patch.object(mcp, "write_atomic", side_effect=fail):
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(self.sync(), 1)
+        self.assertIn("claude: not updated (OSError)", err.getvalue())
         self.assertNotIn("literal-secret-123", err.getvalue())
 
     def agy_config(self, text):
@@ -96,38 +152,37 @@ class SyncTests(unittest.TestCase):
             f.write(text)
 
     def test_agy_empty_config_has_no_servers(self):
-        # agy's sign-in leaves an empty mcp_config.json (seen in the maintainer's session).
         for text in ("", "  \n"):
-            open(self.log, "w").close()
             self.agy_config(text)
             self.write_mcp({"fs": {"command": "npx"}})
-            self.sync()
-            self.assertIn("agy mcp add fs -- npx", self.calls())
+            self.assertEqual(self.sync(), 0)
+            self.assertEqual(self.json_servers("agy")["fs"]["command"], "npx")
             os.unlink(os.path.join(self.home, ".agentainer", "mcp-managed.json"))
 
     def test_agy_broken_config_is_left_alone(self):
         self.agy_config("{not json")
         self.write_mcp({"fs": {"command": "npx"}})
-        self.sync()
-        self.assertNotIn("agy mcp add", self.calls())
+        rc, err = self.sync_err()
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.read(".gemini", "config", "mcp_config.json"), "{not json")
+        self.assertIn("agy: not updated", err)
+        self.assert_added_elsewhere("fs", ("claude", "codex", "opencode"))
 
     def test_removes_only_managed(self):
         self.write_mcp({"a": {"command": "x"}, "b": {"command": "y"}})
-        self.sync()
+        self.assertEqual(self.sync(), 0)
         self.write_mcp({"a": {"command": "x"}})
-        open(self.log, "w").close()
-        self.sync()
-        log = self.calls()
-        self.assertIn("claude mcp remove b --scope user", log)
-        self.assertIn("agy mcp remove b", log)
-        self.assertEqual(log.count("claude mcp add-json a "), 1)
+        self.assertEqual(self.sync(), 0)
+        for agent in ("claude", "agy"):
+            self.assertEqual(sorted(self.json_servers(agent)), ["a"])
+            self.assertEqual(self.json_servers(agent)["a"]["command"], "x")
         self.assertIn("[mcp_servers.a]", self.read(".codex", "config.toml"))
         self.assertNotIn("[mcp_servers.b]", self.read(".codex", "config.toml"))
         self.assertEqual(sorted(self.opencode_servers()), ["a"])
 
     def test_keeps_unmanaged_servers(self):
-        with open(self.existing, "w") as f:
-            f.write("claude mine\n")
+        with open(os.path.join(self.home, ".claude.json"), "w") as f:
+            json.dump({"mcpServers": {"mine": {"type": "stdio", "command": "theirs"}}}, f)
         os.makedirs(os.path.join(self.home, ".codex"))
         with open(os.path.join(self.home, ".codex", "config.toml"), "w") as f:
             f.write('model = "x"\n\n[mcp_servers.mine]\ncommand = "theirs"\n')
@@ -137,12 +192,18 @@ class SyncTests(unittest.TestCase):
         os.makedirs(os.path.join(self.home, ".gemini", "config"))
         with open(os.path.join(self.home, ".gemini", "config", "mcp_config.json"), "w") as f:
             json.dump({"mcpServers": {"mine": {"command": "theirs"}}}, f)
-        self.write_mcp({"mine": {"command": "z"}})
-        self.sync()
-        log = self.calls()
-        self.assertNotIn("claude mcp add-json mine", log)
-        self.assertNotIn("claude mcp remove mine", log)
-        self.assertNotIn("agy mcp add", log)
+        self.write_mcp({"mine": {"command": "z"}, "other": {"command": "o"}})
+        _, err = self.sync_err()
+        for agent in ("claude", "agy"):
+            self.assertEqual(self.json_servers(agent)["mine"]["command"], "theirs")
+        manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
+        for agent in ("claude", "agy", "codex", "opencode"):
+            self.assertNotIn("mine", manifest[agent])
+        for agent in ("claude", "codex", "opencode", "agy"):
+            self.assertIn("%s already has a server named mine" % agent, err)
+        # A server without a conflict still reaches every agent.
+        self.assertEqual(self.json_servers("claude")["other"]["command"], "o")
+        self.assert_added_elsewhere("other", ("claude", "codex", "opencode", "agy"))
         toml = self.read(".codex", "config.toml")
         self.assertIn('command = "theirs"', toml)
         self.assertNotIn('command = "z"', toml)
@@ -172,6 +233,11 @@ class SyncTests(unittest.TestCase):
                         "web": {"url": "https://mcp.example.com/mcp",
                                 "headers": {"Authorization": "Bearer ${SECRET_TOKEN}"}}})
         self.sync()
+        # The servers were written, so the absence checks below look at real output.
+        self.assertEqual(sorted(self.json_servers("claude")), ["gh", "web"])
+        self.assertEqual(self.json_servers("claude")["web"]["headers"], {"Authorization": "Bearer ${SECRET_TOKEN}"})
+        self.assertIn("[mcp_servers.gh]", self.read(".codex", "config.toml"))
+        self.assertEqual(sorted(self.opencode_servers()), ["gh", "web"])
         self.assertNotIn("s3cr3t-value", self.calls())
         self.assertNotIn("s3cr3t-value", self.read(".codex", "config.toml"))
         self.assertNotIn("s3cr3t-value", self.read(".config", "opencode", "opencode.json"))
@@ -205,16 +271,14 @@ class SyncTests(unittest.TestCase):
         self.assertIn('env_http_headers = { "X-Team" = "TEAM" }', toml)
         self.assertIn('http_headers = { "X-Static" = "1" }', toml)
 
-    def test_agy_static_env_and_headers_passed_references_dropped(self):
+    def test_agy_static_env_and_headers_written_references_dropped(self):
         self.write_mcp({"gh": {"command": "srv", "env": {"MODE": "ro", "T": "${SECRET_TOKEN}"}},
                         "web": {"url": "https://mcp.example.com/mcp", "headers": {"X-Static": "1"}}})
-        self.sync()
-        log = self.calls()
-        self.assertIn("agy mcp add --env MODE=ro gh -- srv", log)
-        self.assertIn("agy mcp add --header X-Static: 1 web https://mcp.example.com/mcp", log)
+        self.assertEqual(self.sync(), 0)
+        self.assertEqual(self.json_servers("agy")["gh"]["env"], {"MODE": "ro"})
+        self.assertEqual(self.json_servers("agy")["web"]["headers"], {"X-Static": "1"})
 
-
-class RobustnessTests(SyncTests):
+class RobustnessTests(SyncBase):
     def codex_path(self):
         os.makedirs(os.path.join(self.home, ".codex"), exist_ok=True)
         return os.path.join(self.home, ".codex", "config.toml")
@@ -238,11 +302,13 @@ class RobustnessTests(SyncTests):
                      '[mcp_servers."foo"]\ncommand = "theirs"\n'):
             with open(self.codex_path(), "w") as f:
                 f.write(text)
-            self.write_mcp({"foo": {"command": "ours"}})
-            self.sync()
+            self.write_mcp({"foo": {"command": "ours"}, "bar": {"command": "ok"}})
+            _, err = self.sync_err()
             toml = self.read(".codex", "config.toml")
             self.assertNotIn('"ours"', toml, text)
             self.assertIn('"theirs"', toml, text)
+            self.assertIn("codex already has a server named foo", err, text)
+            self.assertIn('[mcp_servers.bar]\ncommand = "ok"', toml, text)
 
     def test_non_bmp_characters_are_written_literally(self):
         self.write_mcp({"u": {"command": "srv", "args": ["\U0001F600", "a\x7fb"]}})
@@ -275,17 +341,23 @@ class RobustnessTests(SyncTests):
         self.write_mcp({})
         open(self.log, "w").close()
         self.sync()
-        self.assertIn("claude mcp remove k", self.calls())
-        self.assertIn("agy mcp remove k", self.calls())
+        self.assertEqual(self.json_servers("claude"), {})
+        self.assertEqual(self.json_servers("agy"), {})
 
-    def test_failed_cli_add_returns_nonzero(self):
-        p = os.path.join(self.bin, "claude")
-        with open(p, "w") as f:
-            f.write('#!/bin/sh\necho "claude $*" >> "$LOG"\ncase "$2" in add-json | get) exit 1 ;; esac\nexit 0\n')
+    def test_failed_config_write_returns_nonzero(self):
         self.write_mcp({"k": {"command": "x"}})
-        self.assertNotEqual(self.sync(), 0)
+        original = mcp.write_atomic
+
+        def fail(path, text):
+            if path == os.path.join(self.home, ".claude.json"):
+                raise OSError("injected failure")
+            return original(path, text)
+
+        with mock.patch.object(mcp, "write_atomic", side_effect=fail):
+            self.assertNotEqual(self.sync(), 0)
         manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
         self.assertNotIn("k", manifest.get("claude", []))
+        self.assertIn("k", manifest["agy"])
 
     def test_partial_reference_warns(self):
         import io
@@ -296,12 +368,102 @@ class RobustnessTests(SyncTests):
             self.sync()
         self.assertIn("only exact ${NAME}", err.getvalue())
 
+    def test_codex_bearer_reference_on_other_header_is_left_out(self):
+        # Codex env_http_headers sends the variable's value as the whole header, so
+        # "Bearer ${T}" on a header other than Authorization has no Codex spelling.
+        self.write_mcp({"w": {"url": "https://x.example.com", "headers": {"X-Auth": "Bearer ${T}"}}})
+        rc, err = self.sync_err()
+        toml = self.read(".codex", "config.toml")
+        self.assertNotIn("X-Auth", toml)
+        self.assertNotIn("${T}", toml)
+        self.assertIn("codex: header X-Auth on w", err)
+        self.assertEqual(rc, 0)
+
+    def test_sse_server_goes_to_claude_as_sse(self):
+        self.write_mcp({"s": {"type": "sse", "url": "https://x.example.com/sse"}})
+        rc, err = self.sync_err()
+        self.assertEqual(self.json_servers("claude")["s"]["type"], "sse")
+        self.assertNotIn("[mcp_servers.s]", self.read(".codex", "config.toml"))
+        self.assertNotIn("s", self.json_servers("agy"))
+        self.assertIn("codex: s uses SSE", err)
+        self.assertIn("agy: s uses SSE", err)
+        manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
+        self.assertEqual(manifest["claude"], ["s"])
+        self.assertEqual(manifest["codex"], [])
+        self.assertEqual(manifest["agy"], [])
+        self.assertEqual(rc, 0)
+
+    def test_http_type_is_accepted(self):
+        self.write_mcp({"h": {"type": "http", "url": "https://x.example.com/mcp"},
+                        "c": {"type": "stdio", "command": "srv"}})
+        rc, err = self.sync_err()
+        self.assertEqual(rc, 0)
+        self.assertNotIn("warning", err)
+        self.assertEqual(self.json_servers("claude")["h"]["type"], "http")
+
+    def test_bad_type_is_rejected(self):
+        for s in ({"type": "sse", "command": "srv"}, {"type": "ws", "url": "wss://x.example.com"}):
+            open(self.log, "w").close()
+            self.write_mcp({"b": s})
+            self.assertEqual(self.sync_err()[0], 1)
+            self.assertEqual(self.calls(), "")
+
+    def test_unknown_keys_warn(self):
+        self.write_mcp({"c": {"command": "srv", "cwd": "/tmp", "timeout": 5, "disabled": True}})
+        rc, err = self.sync_err()
+        self.assertIn("c: cwd, disabled, timeout", err)
+        self.assertEqual(self.json_servers("claude")["c"]["command"], "srv")
+
+    def claude_json(self, data):
+        with open(os.path.join(self.home, ".claude.json"), "w") as f:
+            f.write(data if isinstance(data, str) else json.dumps(data))
+
+    def test_claude_conflict_reads_user_scope_only(self):
+        # A project-scope server of the same name (in /workspace) is not a conflict.
+        self.claude_json({"mcpServers": {"mine": {"type": "stdio", "command": "x"}},
+                          "projects": {"/workspace": {"mcpServers": {"proj": {"command": "y"}}}}})
+        self.write_mcp({"mine": {"command": "z"}, "proj": {"command": "z"}})
+        self.sync()
+        self.assertEqual(self.calls(), "")
+        data = json.loads(self.read(".claude.json"))
+        self.assertEqual(data["projects"]["/workspace"]["mcpServers"], {"proj": {"command": "y"}})
+        self.assertEqual(self.json_servers("claude")["mine"]["command"], "x")
+        self.assertEqual(self.json_servers("claude")["proj"]["command"], "z")
+
+    def test_claude_conflict_honours_claude_config_dir(self):
+        d = os.path.join(self.tmp, "cc")
+        os.makedirs(d)
+        with open(os.path.join(d, ".claude.json"), "w") as f:
+            json.dump({"mcpServers": {"mine": {"command": "x"}}}, f)
+        self.env["CLAUDE_CONFIG_DIR"] = d
+        self.write_mcp({"mine": {"command": "z"}, "other": {"command": "o"}})
+        _, err = self.sync_err()
+        self.assertIn("claude already has a server named mine", err)
+        with open(os.path.join(d, ".claude.json")) as f:
+            servers = json.load(f)["mcpServers"]
+        self.assertEqual(servers["mine"]["command"], "x")
+        self.assertEqual(servers["other"]["command"], "o")
+        self.assert_added_elsewhere("mine", ("agy", "codex", "opencode"))
+
+    def test_unreadable_claude_json_is_left_alone(self):
+        self.claude_json("{broken")
+        self.write_mcp({"k": {"command": "z"}})
+        _, err = self.sync_err()
+        self.assertIn("claude: not updated", err)
+        self.assertEqual(self.read(".claude.json"), "{broken")
+        self.assert_added_elsewhere("k", ("agy", "codex", "opencode"))
+
 
 
 class WriteAtomicTests(unittest.TestCase):
+    def tmpdir(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        return d
+
     def test_another_writers_temp_file_does_not_block(self):
         # Two containers can share one home volume, so a fixed temp name can collide.
-        d = tempfile.mkdtemp()
+        d = self.tmpdir()
         path = os.path.join(d, "mcp-managed.json")
         os.mkdir(path + ".agentainer-tmp")
         mcp.write_atomic(path, "{}")
@@ -310,13 +472,39 @@ class WriteAtomicTests(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(d)), ["mcp-managed.json", "mcp-managed.json.agentainer-tmp"])
 
     def test_keeps_the_mode_of_a_replaced_file(self):
-        d = tempfile.mkdtemp()
+        d = self.tmpdir()
         path = os.path.join(d, "config.toml")
         with open(path, "w") as f:
             f.write("old")
         os.chmod(path, 0o640)
         mcp.write_atomic(path, "new")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o640)
+
+    def test_symlinked_file_stays_a_symlink(self):
+        # A user who keeps config.toml in a dotfiles repo links it into place.
+        d = self.tmpdir()
+        os.mkdir(os.path.join(d, "dotfiles"))
+        target = os.path.join(d, "dotfiles", "config.toml")
+        with open(target, "w") as f:
+            f.write("old")
+        link = os.path.join(d, "config.toml")
+        os.symlink(os.path.join("dotfiles", "config.toml"), link)
+        mcp.write_atomic(link, "new")
+        self.assertTrue(os.path.islink(link))
+        with open(target) as f:
+            self.assertEqual(f.read(), "new")
+        self.assertEqual(sorted(os.listdir(os.path.join(d, "dotfiles"))), ["config.toml"])
+
+    def test_syncs_data_before_rename(self):
+        calls = []
+        real_fsync, real_replace = os.fsync, os.replace
+        os.fsync = lambda fd: (calls.append("fsync"), real_fsync(fd))[1]
+        os.replace = lambda a, b: (calls.append("replace"), real_replace(a, b))[1]
+        try:
+            mcp.write_atomic(os.path.join(self.tmpdir(), "f"), "x")
+        finally:
+            os.fsync, os.replace = real_fsync, real_replace
+        self.assertEqual(calls[:2], ["fsync", "replace"])
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ContainerSSH auth and config webhook for one Agentainer user (spec 15.2).
+"""ContainerSSH auth and config webhook for one Agentainer user.
 
 POST /pubkey   accepts the configured user with a key from AUTHORIZED_KEYS
 POST /password always rejects
@@ -8,12 +8,25 @@ Standard library only. Formats follow ContainerSSH v0.6.0 containerssh-authconfi
 """
 import json
 import os
-import re
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-KEY_TYPE = re.compile(r"^(ssh-|ecdsa-sha2-|sk-ssh-|sk-ecdsa-)")
+# The key types sshd(8) of OpenSSH 10.4 lists under AUTHORIZED_KEYS FILE FORMAT. Certificate types
+# (*-cert-v01@openssh.com) are left out: sshd trusts a certificate only through a
+# cert-authority line, so a certificate listed as a plain key must not grant access.
+KEY_TYPES = frozenset((
+    "sk-ecdsa-sha2-nistp256@openssh.com", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521", "sk-ssh-ed25519@openssh.com", "ssh-ed25519", "ssh-rsa",
+))
 MAX_BODY = 64 * 1024
+# Connections handled at once. Each one holds a thread until it closes, so the cap
+# bounds memory under the Deployment's 128Mi limit when a client opens many idle
+# connections.
+MAX_WORKERS = 16
+_BUSY_BODY = b'{"message": "too busy"}'
+BUSY = (b"HTTP/1.0 503 Service Unavailable\r\nContent-Type: application/json\r\n"
+        b"Content-Length: %d\r\nConnection: close\r\n\r\n" % len(_BUSY_BODY) + _BUSY_BODY)
 
 
 class Settings:
@@ -30,7 +43,7 @@ def load_keys(path):
     with open(path) as f:
         for line in f:
             parts = line.split()
-            if len(parts) >= 2 and KEY_TYPE.match(parts[0]):
+            if len(parts) >= 2 and parts[0] in KEY_TYPES:
                 keys.add(parts[0] + " " + parts[1])
     return keys
 
@@ -64,7 +77,8 @@ def make_handler(s):
                 req = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(req, dict):
                     raise ValueError("not an object")
-            except ValueError:
+            except (ValueError, RecursionError):
+                # json.loads raises RecursionError for deeply nested input.
                 return self._reply(400, {"message": "invalid JSON"})
             out = echo(req)
             if self.path == "/pubkey":
@@ -83,7 +97,11 @@ def make_handler(s):
                     "metadata": {"name": s.pod, "namespace": s.namespace},
                     "createMissingPods": False,
                     "disableAgent": True,
-                    "shellCommand": ["tmux", "new-session", "-A", "-s", "main"],
+                    # disableAgent drops the client's environment, TERM included
+                    # (ContainerSSH v0.6.0 kubernetesPodImpl.go createExecLocked), and
+                    # tmux exits with "open terminal failed" when TERM is unset.
+                    "shellCommand": ["/usr/bin/env", "TERM=xterm-256color",
+                                     "tmux", "new-session", "-A", "-s", "main"],
                 }}}
             else:
                 return self._reply(404, {"message": "not found"})
@@ -92,8 +110,38 @@ def make_handler(s):
     return Handler
 
 
-def make_server(addr, settings):
-    return ThreadingHTTPServer(addr, make_handler(settings))
+class BoundedServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that runs at most max_workers handler threads. A connection
+    beyond that gets a 503 and is closed right away instead of starting a thread."""
+
+    def __init__(self, addr, handler, max_workers):
+        super().__init__(addr, handler)
+        self._slots = threading.BoundedSemaphore(max_workers)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.settimeout(1)
+                request.sendall(BUSY)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
+def make_server(addr, settings, max_workers=MAX_WORKERS):
+    return BoundedServer(addr, make_handler(settings), max_workers)
 
 
 def main():

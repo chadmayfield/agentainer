@@ -24,6 +24,9 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
+          resources:  # example values
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 128Mi}
           volumeMounts:
             - {name: app, mountPath: /app, readOnly: true}
             - {name: keys, mountPath: /etc/agentainer-auth, readOnly: true}

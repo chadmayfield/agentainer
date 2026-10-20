@@ -15,7 +15,7 @@ shellcheck -x "${files[@]}"
 shfmt -d "${files[@]}"
 steps=rootfs/usr/local/lib/agentainer/entrypoint.d
 if [ -d "$steps" ]; then
-	shellcheck -x -s sh "$steps"/*.sh
-	shfmt -d "$steps"
+	shellcheck -x -s sh "$steps"/*.sh rootfs/usr/local/lib/agentainer/*.sh
+	shfmt -d "$steps" rootfs/usr/local/lib/agentainer/*.sh
 fi
 echo "lint ok"'

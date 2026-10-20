@@ -7,9 +7,10 @@
 # Exact version lines, so a pin of 1.3.2 cannot match 1.3.21.
 assert_eq "claude version" "$CLAUDE_CODE_VERSION (Claude Code)" "$(run_in -- claude --version 2>/dev/null)"
 assert_eq "codex version" "codex-cli $CODEX_VERSION" "$(run_in -- codex --version 2>/dev/null)"
-# agy prints the bare version for --version (checked in the built image).
+# agy prints the bare version for --version.
 assert_eq "agy version" "$AGY_VERSION" "$(run_in -- agy --version 2>/dev/null)"
 assert_eq "opencode version" "opencode v$OPENCODE_VERSION" "$(run_in -- opencode --version 2>/dev/null | tail -1)"
+
 assert_eq "agents run as uid 1000" "1000" "$(run_in -- id -u)"
 for b in claude codex agy opencode; do
 	p=$(run_in -- sh -c "readlink -f \$(command -v $b)")
@@ -19,8 +20,11 @@ for b in claude codex agy opencode; do
 	esac
 	assert_eq "$b root-owned" "root" "$(run_in -- stat -c %U "$p")"
 done
-assert_eq "no unused musl Claude binaries" "END" \
-	"$(run_in -- sh -c 'ls -d /usr/local/lib/node_modules/@anthropic-ai/claude-code/node_modules/@anthropic-ai/*musl* 2>/dev/null; echo END')"
+# Claude Code is the native release binary itself, with no npm copy beside it.
+assert_eq "claude is the native binary, not a link" "file" \
+	"$(run_in -- sh -c 'if [ -f /usr/local/bin/claude ] && [ ! -L /usr/local/bin/claude ]; then echo file; else echo other; fi')"
+assert_absent "no npm Claude Code package" \
+	"$(run_in -- sh -c 'ls -d /usr/local/lib/node_modules/@anthropic-ai 2>/dev/null; echo END')" END "@anthropic-ai"
 # shellcheck disable=SC2016 # expands in the container
 assert_eq "update locks in the environment" "1 true 1 1" \
 	"$(run_in -- sh -c 'echo $DISABLE_UPDATES $AGY_CLI_DISABLE_AUTO_UPDATE $OPENCODE_DISABLE_AUTOUPDATE $CLAUDE_CODE_NONBLOCKING_STDOUT')"
@@ -37,8 +41,10 @@ assert_eq "source label" "https://github.com/chadmayfield/agentainer" \
 assert_eq "version label is ours, not the base image's" "rc=0" \
 	"$(
 		v=$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
-		[ "$v" != 26.04 ] && [ -n "$v" ]
-		echo rc=$?
+		if [ "$v" != 26.04 ] && [ -n "$v" ]; then echo rc=0; else echo rc=1; fi
 	)"
+
+# Codex's voice host needs a microphone, which a container does not have.
+assert_eq "no Codex voice resources" "none" "$(run_in -- sh -c 'ls -d /opt/codex/codex-resources/voice 2>/dev/null || echo none')"
 
 finish

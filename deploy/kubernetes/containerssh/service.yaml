@@ -3,7 +3,16 @@ kind: Service
 metadata: {name: containerssh, namespace: containerssh}
 spec:
   type: LoadBalancer
-  # type: NodePort  # alternative without a load balancer
+  # Local skips the source NAT that Cluster applies, so ContainerSSH sees and logs the
+  # client's real address. Traffic goes only to nodes that run a ContainerSSH pod.
+  externalTrafficPolicy: Local
+  # Alternative without a load balancer: set type to NodePort and delete the
+  # loadBalancerSourceRanges line. The API server rejects a NodePort Service that sets it.
+  # type: NodePort
+  # kube-proxy applies these ranges only to traffic sent to the load balancer address.
+  # A LoadBalancer Service also opens a node port on every node, which these ranges do
+  # not cover, so block node ports from untrusted networks with a firewall. See
+  # docs/kubernetes.md for allocateLoadBalancerNodePorts.
   loadBalancerSourceRanges: [203.0.113.0/24]  # documentation range; replace with your client range
   selector: {app: containerssh}
   ports: [{name: ssh, port: 22, targetPort: 2222}]
