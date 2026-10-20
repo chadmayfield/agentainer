@@ -18,6 +18,13 @@ class ReleaseTests(unittest.TestCase):
             (t / "digests").mkdir()
             for arch in ("amd64", "arm64"):
                 (t / "digests" / arch).write_text("sha256:" + "a" * 64 + "\n")
+            artifact_case = extra.pop("CX_ARTIFACT_CASE", "")
+            if artifact_case == "missing":
+                (t / "digests/arm64").unlink()
+            elif artifact_case == "malformed":
+                (t / "digests/arm64").write_text("not-a-digest")
+            elif artifact_case == "extra":
+                (t / "digests/unexpected").write_text("extra")
             manifest = json.dumps({"schemaVersion": 2, "annotations": {
                 "org.opencontainers.image.description":
                     "Claude Code, Codex, Antigravity CLI and OpenCode in one container"}})
@@ -38,10 +45,18 @@ if cmd == 'git':
     if a[0] == 'log':
         print(os.environ['CX_HISTORY'])
     sys.exit(0)
+stage = ('dry-run' if '--dry-run' in a else
+         'retag' if 'create' in a and any(':latest' in x for x in a) else
+         'create-sha' if 'create' in a else 'inspect')
+if stage == os.environ.get('CX_DOCKER_FAIL'):
+    sys.exit(9)
 if '--raw' in a:
-    print(os.environ['CX_MANIFEST'])
+    doc = json.loads(os.environ['CX_MANIFEST'])
+    if os.environ.get('CX_BAD_ANNOTATION'):
+        doc['annotations'] = {}
+    print(json.dumps(doc))
 elif 'inspect' in a:
-    print(json.dumps({'digest': os.environ['CX_DIGEST']}))
+    print(json.dumps({'digest': 'sha256:' + 'c' * 64 if os.environ.get('CX_BAD_POST') and any(x.endswith(':latest') or x.endswith(':' + os.environ['V']) for x in a) else os.environ['CX_DIGEST']}))
 elif '--dry-run' in a:
     print('{}' if os.environ.get('CX_BAD_DRY') else os.environ['CX_MANIFEST'])
 """
@@ -56,7 +71,8 @@ elif '--dry-run' in a:
                        **extra)
             result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
                                     cwd=t, env=env, capture_output=True, text=True)
-            calls = [json.loads(s) for s in (t / "log").read_text().splitlines()]
+            calls = [json.loads(s) for s in (t / "log").read_text().splitlines()] if (t / "log").exists() else []
+            self.last_calls = calls
             tags = [c[i + 1] for c in calls if c[:4] == ["docker", "buildx", "imagetools", "create"]
                     for i, arg in enumerate(c) if arg == "-t"]
             return result, tags
@@ -119,3 +135,43 @@ elif '--dry-run' in a:
                 self.assertNotEqual(r.returncode, 0)
                 self.assertNotIn(IMAGE + ":" + candidate, tags)
                 self.assertNotIn(IMAGE + ":latest", tags)
+
+    def test_bad_digest_artifacts_stop_before_registry_or_signing_calls(self):
+        for case in ("missing", "malformed", "extra"):
+            with self.subTest(case=case):
+                r, tags = self.run_release("2026.10.19", ["2026.10.19"], CX_ARTIFACT_CASE=case)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertEqual(tags, [])
+                self.assertEqual(self.last_calls, [])
+
+    def test_wrong_annotations_cannot_move_public_tags(self):
+        r, tags = self.run_release("2026.10.19", ["2026.10.19"], CX_BAD_ANNOTATION="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(tags, [IMAGE + ":sha-" + "b" * 7])
+        self.assertFalse(any(c[0] == "cosign" for c in self.last_calls))
+
+    def test_registry_command_failures_stop_the_release(self):
+        for stage in ("create-sha", "inspect", "dry-run", "retag"):
+            with self.subTest(stage=stage):
+                r, _ = self.run_release("2026.10.19", ["2026.10.19"], CX_DOCKER_FAIL=stage)
+                self.assertNotEqual(r.returncode, 0)
+                if stage != "retag":
+                    self.assertFalse(any(IMAGE + ":latest" in c for c in self.last_calls))
+
+    def test_a_wrong_digest_after_retagging_fails(self):
+        r, tags = self.run_release("2026.10.19", ["2026.10.19"], CX_BAD_POST="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(IMAGE + ":latest", tags)
+        self.assertIn("points at sha256:" + "c" * 64, r.stderr)
+
+    def test_success_signs_recursively_and_checks_dry_run_before_public_tags(self):
+        r, _ = self.run_release("2026.10.19", ["2026.10.19"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        calls = self.last_calls
+        signing = next(i for i, c in enumerate(calls) if c[0] == "cosign")
+        dry_run = next(i for i, c in enumerate(calls) if "--dry-run" in c)
+        retag = next(i for i, c in enumerate(calls) if IMAGE + ":latest" in c and "create" in c)
+        self.assertIn("--recursive", calls[signing])
+        self.assertIn("@sha256:", calls[signing][-1])
+        self.assertLess(signing, dry_run)
+        self.assertLess(dry_run, retag)

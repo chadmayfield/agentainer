@@ -31,7 +31,9 @@ sh tests/host/test-launcher.sh
 sh tests/host/test-build-script.sh
 sh tests/host/test-fetch.sh
 sh tests/host/test-manifests.sh
+sh tests/host/test-launcher-integration.sh  # real engine, existing local image
 sh tests/host/test-build-uid.sh             # slow: full build with --uid 1001 --gid 20
+python3 tests/host/test-layer-repro.py      # slow: two clean tool builds, configured Buildx
 ```
 
 Check each command's exit code directly. Piping into `tail` or `grep` hides a failure.

@@ -126,7 +126,7 @@ jobs:
           - {arch: arm64, runner: ubuntu-26.04-arm}
     runs-on: ${{ matrix.runner }}
     # A normal run takes 15 to 20 minutes.
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       IMAGE: localhost/agentainer:dev
     steps:
@@ -164,6 +164,10 @@ jobs:
           RUNTIME=docker sh tests/run.sh 2>&1 | tee tests-docker.log || rc=$?
           python3 scripts/build_report.py tests Docker tests-docker.log >>"$GITHUB_STEP_SUMMARY"
           exit "$rc"
+      - name: Real launcher lifecycle with Docker
+        run: RUNTIME=docker sh tests/host/test-launcher-integration.sh
+      - name: Custom UID and existing GID build
+        run: RUNTIME=docker sh tests/host/test-build-uid.sh
       - name: Manifest tests
         run: RUNTIME=docker sh tests/host/test-manifests.sh
       - name: Linux host checks with Docker
@@ -257,6 +261,8 @@ jobs:
           # bind-mount ownership: rootless Podman keeps the runner user's UID
           mkdir -p wsp && podman run --rm --userns=keep-id:uid=1000,gid=1000 -v "$PWD/wsp:/workspace" "$IMAGE" touch /workspace/p
           test "$(stat -c %u wsp/p)" = "$(id -u)"
+      - name: Real launcher lifecycle with rootless Podman
+        run: RUNTIME=podman sh tests/host/test-launcher-integration.sh
       - name: Container tests with Podman
         shell: bash  # -o pipefail: a failing command before | tee must fail the step
         run: |
@@ -265,6 +271,28 @@ jobs:
           python3 scripts/build_report.py tests Podman tests-podman.log >>"$GITHUB_STEP_SUMMARY"
           exit "$rc"
 
+  layer-repro:
+    name: layer-repro (${{ matrix.arch }})
+    needs: [changes, lint-unit]
+    if: needs.changes.outputs.image == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-26.04}
+          - {arch: arm64, runner: ubuntu-26.04-arm}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - id: pins
+        run: echo "buildkit=$(sed -n 's/^BUILDKIT_IMAGE=//p' versions.env)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+        with:
+          driver-opts: image=${{ steps.pins.outputs.buildkit }}
+      - name: Compare every tool layer across two clean builds
+        run: python3 tests/host/test-layer-repro.py
+
   # The one check that branch protection requires. A matrix job skipped by its "if"
   # reports a single skipped check instead of "image (amd64)" and "image (arm64)", so
   # those names would stay pending on a docs-only pull request. A job skipped because a
@@ -272,7 +300,7 @@ jobs:
   # unless every job it needs succeeded, or the image job was skipped on purpose.
   ci:
     if: always()
-    needs: [changes, lint-unit, image]
+    needs: [changes, lint-unit, image, layer-repro]
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
@@ -282,11 +310,17 @@ jobs:
           LINT_UNIT: ${{ needs.lint-unit.result }}
           IMAGE: ${{ needs.image.result }}
           IMAGE_NEEDED: ${{ needs.changes.outputs.image }}
+          LAYER_REPRO: ${{ needs.layer-repro.result }}
         run: |
           echo "changes=$CHANGES lint-unit=$LINT_UNIT image=$IMAGE (needed: $IMAGE_NEEDED)"
           for r in "$CHANGES" "$LINT_UNIT"; do
             [ "$r" = success ] || { echo "::error::A required job did not succeed." >&2; exit 1; }
           done
+          case "$LAYER_REPRO" in
+          success) ;;
+          skipped) [ "$IMAGE_NEEDED" = false ] || exit 1 ;;
+          *) echo "::error::Layer comparison did not succeed." >&2; exit 1 ;;
+          esac
           case "$IMAGE" in
           success) ;;
           skipped) [ "$IMAGE_NEEDED" = false ] || { echo "::error::The image job was skipped but the change needs it." >&2; exit 1; } ;;
@@ -459,6 +493,14 @@ jobs:
           OWNER: ${{ github.repository_owner }}
         run: |
           bash scripts/release-image.sh
+      - name: Verify published signatures, attestations and native startup
+        env:
+          SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 tests/host/test-published-image.py "ghcr.io/$REPOSITORY" "sha-${SHA::7}" \
+            "https://github.com/$REPOSITORY/.github/workflows/build.yml@refs/heads/main" \
+            https://token.actions.githubusercontent.com
       - name: Git tag and GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

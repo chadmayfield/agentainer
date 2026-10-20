@@ -132,3 +132,62 @@ class RecoveryTests(base.SyncBase):
         for parts in ((".claude.json",), (".gemini", "config", "mcp_config.json"),
                       (".codex", "config.toml"), (".config", "opencode", "opencode.json")):
             self.assertEqual(os.stat(os.path.join(self.home, *parts)).st_mode & 0o777, 0o600)
+
+    def test_every_agent_recovers_at_journal_config_and_manifest_boundaries(self):
+        original = mcp.write_atomic
+        for agent in ("claude", "agy", "codex", "opencode"):
+            for boundary in ("journal", "config", "manifest"):
+                with self.subTest(agent=agent, boundary=boundary):
+                    name = agent + "_" + boundary
+                    self.write_mcp({name: {"command": "example"}})
+                    pending = os.path.join(self.home, ".agentainer", "mcp-pending-" + agent + ".json")
+                    config = mcp.agent_config_path(agent, self.env)
+                    manifest = os.path.join(self.home, ".agentainer", "mcp-managed.json")
+                    target = {"journal": pending, "config": config, "manifest": manifest}[boundary]
+
+                    def interrupted(path, text):
+                        original(path, text)
+                        if path == target and os.path.exists(pending):
+                            raise KeyboardInterrupt("injected termination at " + boundary)
+
+                    with mock.patch.object(mcp, "write_atomic", side_effect=interrupted):
+                        with self.assertRaises(KeyboardInterrupt):
+                            self.sync()
+                    self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+                    owned = json.loads(self.read(".agentainer", "mcp-managed.json"))
+                    self.assertEqual(owned[agent], [name])
+                    self.write_mcp({})
+                    self.assertEqual(self.sync(), 0)
+                    self.assertTrue(all(not names for names in json.loads(self.read(".agentainer", "mcp-managed.json")).values()))
+
+    def test_corrupt_or_misdirected_journal_preserves_existing_config(self):
+        self.write_mcp({"kept": {"command": "original"}})
+        self.assertEqual(self.sync(), 0)
+        before = self.read(".claude.json")
+        pending = os.path.join(self.home, ".agentainer", "mcp-pending-claude.json")
+        for text in ("{broken", json.dumps({"path": "/different/config"})):
+            with self.subTest(text=text):
+                with open(pending, "w") as f:
+                    f.write(text)
+                self.write_mcp({})
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.sync(), 1)
+                self.assertEqual(self.read(".claude.json"), before)
+                self.assertTrue(os.path.exists(pending))
+
+    def test_interruption_after_journal_cleanup_keeps_committed_ownership(self):
+        self.write_mcp({"committed": {"command": "example"}})
+        original = mcp.os.unlink
+        target = os.path.join(self.home, ".agentainer", "mcp-pending-claude.json")
+
+        def interrupted(path):
+            original(path)
+            if path == target:
+                raise KeyboardInterrupt("after journal cleanup")
+
+        with mock.patch.object(mcp.os, "unlink", side_effect=interrupted):
+            with self.assertRaises(KeyboardInterrupt):
+                self.sync()
+        self.write_mcp({})
+        self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+        self.assertEqual(json.loads(self.read(".claude.json"))["mcpServers"], {})

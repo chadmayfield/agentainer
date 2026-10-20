@@ -173,9 +173,20 @@ class ConcurrencyLimitTests(unittest.TestCase):
         import socket
         import time
         self.assertEqual(self.status(), 200)
+        def wait_slots(expected):
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                # Observe readiness under the semaphore's own condition lock.
+                with self.server._slots._cond:
+                    if self.server._slots._value == expected:
+                        return
+                time.sleep(0.01)
+            self.fail("server did not reach %d free worker slots" % expected)
+
+        wait_slots(2)  # the initial request has released its worker
         for _ in range(2):
             self.idle.append(socket.create_connection(("127.0.0.1", self.port), timeout=5))
-        time.sleep(0.3)  # let the server accept both idle connections
+        wait_slots(0)
         self.assertEqual(self.status(), 503)
         for s in self.idle:
             s.close()

@@ -49,4 +49,6 @@ The release job refreshes `main` while holding its release lock. Only the highes
 
 The published image is a fresh build from the release commit with the same pinned inputs, not the exact image the pull request's tests ran on.
 
-Instructions for checking the signature with `cosign verify` will be added with the first release, once they have been run against a published image.
+The release workflow runs [`tests/host/test-published-image.py`](../tests/host/test-published-image.py) before creating the GitHub release. It verifies the index and both platform signatures with the exact build workflow identity and GitHub OIDC issuer ([Sigstore CI verification](https://docs.sigstore.dev/quickstart/quickstart-ci/)). It checks for SBOM and provenance attestation descriptors bound to each platform manifest ([Docker attestation storage](https://docs.docker.com/build/metadata/attestations/attestation-storage/)), then pulls and starts the native platform using the verified index digest. Descriptor checks do not validate every field inside the attestation payloads.
+
+This verifier runs against published artifacts during a release. A pull request exercises its success and failure cases with fixtures; live registry and keyless verification remain not verified until that release job runs.

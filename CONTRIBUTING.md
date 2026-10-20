@@ -24,7 +24,9 @@ sh tests/host/test-launcher.sh              # launcher tests, no container neede
 sh tests/host/test-build-script.sh          # scripts/build.sh tests, no container needed
 sh tests/host/test-fetch.sh                 # fetch.sh and Rust manifest check tests, no container needed
 sh tests/host/test-manifests.sh             # Kubernetes manifest tests (kubectl, and the image for yq)
+sh tests/host/test-launcher-integration.sh  # real engine, existing local image
 sh tests/host/test-build-uid.sh             # slow: builds a full image with --uid 1001 --gid 20
+python3 tests/host/test-layer-repro.py      # slow: two clean tool builds, configured Buildx
 ```
 
 With Docker, prefix the commands with `RUNTIME=docker`. `IMAGE=<name>` tests another image.
@@ -34,16 +36,18 @@ With Docker, prefix the commands with `RUNTIME=docker`. `IMAGE=<name>` tests ano
 [`.github/workflows/build.yml`](.github/workflows/build.yml) runs on every pull request and every push to `develop` and `main`. A pull request also runs it again when you edit it, which includes changing its base branch:
 
 - the `lint-unit` job: actionlint, the Python unit tests, and the launcher, `scripts/build.sh` and `build/fetch.sh` tests;
-- the `image` job, on amd64 and arm64: the image build, shellcheck and shfmt (`tests/lint.sh` runs them from the image), the container tests under Docker and rootless Podman, the manifest tests, a check that the agents start on a CPU without AVX2, and trivy scans (a secret fails the build; vulnerabilities are reported).
+- the `image` job, on amd64 and arm64: the image build, shellcheck and shfmt (`tests/lint.sh` runs them from the image), the container tests and real launcher lifecycle under Docker and rootless Podman, a custom UID/GID build, the manifest tests, a check that the agents start on a CPU without AVX2, and trivy scans (a secret fails the build; vulnerabilities are reported).
 
-The image job is skipped when every changed file is `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` or a file under `docs/` other than `docs/kubernetes.md` (the manifest tests check its install commands). For a pull request, the changed files are what the merge adds to the base branch. For a push to `develop`, they are the files changed since the previous tip. A push to `main` and a pull request whose base branch changed always build the image. A docs-only change gets no shell lint, because no shell file changed. The required check is `ci`, which passes only when every job passed or the image job was skipped for a docs-only change.
+The `layer-repro` job runs on amd64 and arm64 and uses the pinned BuildKit image to build an isolated copy of every tool twice with no cache. It compares the exported tool-layer digests. This checks unchanged inputs; it does not test every possible combination of pin changes. The required `ci` check includes this job.
+
+The image and layer comparison jobs are skipped when every changed file is `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` or a file under `docs/` other than `docs/kubernetes.md` (the manifest tests check its install commands). For a pull request, the changed files are what the merge adds to the base branch. For a push to `develop`, they are the files changed since the previous tip. A push to `main` and a pull request whose base branch changed always build the image. A docs-only change gets no shell lint, because no shell file changed. The required check is `ci`, which passes only when every job passed or the image job was skipped for a docs-only change.
 
 ## Releases
 
 1. From an up-to-date `develop`, run `git flow release start <version>`. The version is the release date, `YYYY.MM.DD`, with `.N` for a second release that day.
 2. Push the branch and open a pull request from `release/<version>` to `main`.
 3. When `ci` passes, merge it with "Create a merge commit". The `version` job reads the version from the merge commit's subject, which must be exactly `Merge pull request #N from <owner>/release/<version>`, where `<owner>` is the repository owner and `<version>` is a real date. Any other push to `main` fails the `version` job and publishes nothing.
-4. The workflow on `main` builds both architectures and pushes them. The `release` job then tags the multi-architecture index only `sha-<short>`, checks its annotations, and signs it and each architecture's image with cosign. Only after that does it point `<version>` at the signed digest. While holding the release lock, it refreshes `main` and compares calendar versions from its first-parent release merges. Historical release names that are not valid calendar versions are ignored; the candidate version must still be valid and present in history. Only the highest merged version can move `latest`; an older build or retry keeps its own version tag without rolling `latest` back. A failed history refresh stops publication. Its last step creates the tag `v<version>` and a GitHub release with the vulnerability summary.
+4. The workflow on `main` builds both architectures and pushes them. The `release` job then tags the multi-architecture index only `sha-<short>`, checks its annotations, and signs it and each architecture's image with cosign. Only after that does it point `<version>` at the signed digest. While holding the release lock, it refreshes `main` and compares calendar versions from its first-parent release merges. Historical release names that are not valid calendar versions are ignored; the candidate version must still be valid and present in history. Only the highest merged version can move `latest`; an older build or retry keeps its own version tag without rolling `latest` back. A failed history refresh stops publication. After publishing the image tags, a read-only test verifies the index and both platform signatures against the build workflow identity, checks their SBOM and provenance attestation descriptors, and pulls and starts the native platform by the verified index digest. Its last step creates the tag `v<version>` and a GitHub release with the vulnerability summary.
 5. Open a pull request from `main` to `develop` to bring back any fixes made on the release branch.
 
 Do not run `git flow release finish`: it merges into `main` locally. A hotfix is a new release made the same way; a `hotfix/*` branch merged into `main` does not publish.
