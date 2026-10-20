@@ -1,6 +1,8 @@
 """Exercise the session assertion from the disconnect test without a container."""
 from pathlib import Path
 import subprocess
+import json
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,3 +31,29 @@ class DisconnectAssertionTests(unittest.TestCase):
     def test_changed_session_fails(self):
         r = self.check_session("$0", "$1")
         self.assertNotEqual(r.returncode, 0)
+
+    def pane_snapshot(self, window_name, pid="157", dead="0"):
+        text = (ROOT / "tests/95-disconnect.sh").read_text()
+        function = re.search(r"^panes\(\) \{.*$", text, re.M).group(0)
+        fields = {"window_name": window_name, "window_id": "@0", "pane_id": "%0",
+                  "pane_pid": pid, "pane_dead": dead}
+        renderer = """import json,sys
+text = sys.argv[-1]
+for key, value in json.loads(sys.argv[1]).items():
+    text = text.replace('#{' + key + '}', value)
+print(text)
+"""
+        # POSIX shell positional parameters keep the tmux format unchanged for the renderer.
+        shell = 'renderer=$1; fields=$2; x() { python3 -c "$renderer" "$fields" "$@"; }\n'
+        result = subprocess.run(["sh", "-c", shell + function + "\npanes\n", "sh", renderer, json.dumps(fields)],
+                                cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def test_automatic_window_rename_does_not_change_pane_identity(self):
+        self.assertEqual(self.pane_snapshot("tmux"), self.pane_snapshot("bash"))
+
+    def test_pane_snapshot_detects_process_replacement_and_death(self):
+        before = self.pane_snapshot("bash")
+        self.assertNotEqual(before, self.pane_snapshot("bash", pid="158"))
+        self.assertNotEqual(before, self.pane_snapshot("bash", dead="1"))

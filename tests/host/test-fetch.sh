@@ -154,4 +154,23 @@ assert_contains "rust: a full hash in the update file fails" "rc=1" "$(rust_chec
 assert_contains "rust: a missing update hash fails" "rc=1" "$(rust_check "$R/used.toml" "$R/nonexistent")"
 assert_contains "rust: a missing copy fails" "rc=1" "$(rust_check "$R/nonexistent" "$R/update-hash")"
 
+# Completion order may differ while the set of installed Rust components stays the same.
+mkdir -p "$R/first" "$R/second"
+printf '%s\n' rustc cargo clippy rustfmt >"$R/first/components"
+printf '%s\n' clippy rustfmt cargo rustc >"$R/second/components"
+printf '%s\n' cargo clippy rustc rustfmt >"$R/expected-components"
+chmod 640 "$R/first/components"
+normalize_components() {
+	err=$(TARGETARCH=amd64 bash "$I" normalize-rust-components "$1" 2>&1 >/dev/null)
+	printf 'rc=%s\n%s' "$?" "$err"
+}
+assert_eq "rust: normalizes first component order" "rc=0" "$(normalize_components "$R/first/components")"
+assert_eq "rust: normalizes second component order" "rc=0" "$(normalize_components "$R/second/components")"
+assert_eq "rust: component order is canonical" "$(cat "$R/expected-components")" "$(cat "$R/first/components")"
+assert_eq "rust: completion order does not change component bytes" "$(cat "$R/first/components")" "$(cat "$R/second/components")"
+assert_eq "rust: normalization keeps file permissions" "0o640" "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$R/first/components")"
+assert_eq "rust: normalization is idempotent" "rc=0" "$(normalize_components "$R/first/components")"
+assert_eq "rust: normalization keeps every component" "$(cat "$R/expected-components")" "$(cat "$R/first/components")"
+assert_contains "rust: a missing components file fails" "rc=1" "$(normalize_components "$R/no-components")"
+
 finish

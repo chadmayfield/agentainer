@@ -21,7 +21,8 @@ agents_up() {
 }
 # pane_shows SESSION: the session's first pane has printed something.
 pane_shows() { x tmux capture-pane -p -t "$1" | grep -q .; }
-panes() { x tmux list-panes -a -F '#{window_name}:#{pane_pid}:#{pane_dead}'; }
+# Automatic window names follow the foreground command and may change during startup.
+panes() { x tmux list-panes -a -F '#{window_id}:#{pane_id}:#{pane_pid}:#{pane_dead}'; }
 clients() { x tmux list-clients -t main 2>/dev/null | wc -l | tr -d ' '; }
 one_client() { [ "$(clients)" = 1 ]; }
 no_client() { [ "$(clients)" = 0 ]; }

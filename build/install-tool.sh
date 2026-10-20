@@ -79,6 +79,13 @@ sys.exit(1 if bad else 0)
 EOF
 }
 
+# rustup appends component names as concurrent downloads finish. Their order has no
+# meaning when rustup reads them, so use stable bytes for the exported tool layer.
+# https://github.com/rust-lang/rustup/blob/1.29.1/src/dist/component/components.rs
+normalize_rust_components() {
+	LC_ALL=C sort -o "$1" "$1" || return 1
+}
+
 W=$(mktemp -d)
 cd "$W"
 
@@ -104,6 +111,7 @@ rust)
 	check_rust_manifest rust-manifest.toml "${RUST_MANIFEST_SHA256}" \
 		"/opt/rustup/toolchains/${toolchain}/lib/rustlib/multirust-channel-manifest.toml" \
 		"/opt/rustup/update-hashes/${toolchain}"
+	normalize_rust_components "/opt/rustup/toolchains/${toolchain}/lib/rustlib/components"
 	rm -rf /opt/rustup/toolchains/*/share/doc
 	chmod -R a+rX /opt/rustup /opt/cargo
 	;;
@@ -186,6 +194,10 @@ opencode)
 	sh $F "https://registry.npmjs.org/@opencode/cli-${OC}/-/cli-${OC}-${OPENCODE_VERSION}.tgz" sri "$(pin OPENCODE_INTEGRITY)" opencode.tgz
 	tar -xzf opencode.tgz package/bin/opencode
 	install -m 0755 package/bin/opencode /usr/local/bin/opencode
+	;;
+normalize-rust-components)
+	shift
+	normalize_rust_components "$@"
 	;;
 check-rust-manifest)
 	# Runs the check alone, for tests: install-tool.sh check-rust-manifest PINNED SHA256 USED UPDATE_HASH
