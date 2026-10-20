@@ -58,7 +58,7 @@ assert_contains "warns about a dangling symlink" "points to a missing file" "$ou
 
 # An unedited file (it matches an earlier image default) follows a new default, with one
 # line, when the image is a release. A hash-only line counts as an unknown, older version.
-REL="-e AGENTAINER_IMAGE_VERSION=2026.10.19"
+REL="-e AGENTAINER_IMAGE_VERSION=0.1.0"
 run_in $H -- agentainer-entrypoint sh -c 'echo "# old default" > ~/.agentainer/AGENTS.md; chmod 600 ~/.agentainer/AGENTS.md; sha256sum ~/.agentainer/AGENTS.md | cut -d" " -f1 > ~/.agentainer/agents-default.sha256' >/dev/null
 out=$(run_in $H -e AGENTAINER_IMAGE_VERSION=dev -- agentainer-entrypoint echo STARTED 2>&1)
 assert_absent "dev build: unedited file is not replaced" "$out" STARTED "replaced it"
@@ -101,8 +101,8 @@ assert_eq "diff exits 0 when files differ" "rc=0" "$(run_in $H -- agentainer-ent
 OLD=$(mktemp -d)
 printf '# older default\n' >"$OLD/AGENTS.md"
 chmod -R a+rX "$OLD"
-A="-v $OLD/AGENTS.md:/etc/agentainer/AGENTS.md:ro -e AGENTAINER_IMAGE_VERSION=2026.01.01"
-B="-e AGENTAINER_IMAGE_VERSION=2026.02.01"
+A="-v $OLD/AGENTS.md:/etc/agentainer/AGENTS.md:ro -e AGENTAINER_IMAGE_VERSION=0.1.0"
+B="-e AGENTAINER_IMAGE_VERSION=0.2.0"
 is_default='cmp -s ~/.agentainer/AGENTS.md /etc/agentainer/AGENTS.md && echo same'
 run_in $H $B -- agentainer-entrypoint true >/dev/null 2>&1
 out=$(run_in $H $A -- agentainer-entrypoint echo STARTED 2>&1)
@@ -118,11 +118,11 @@ run_in $H $A -- agentainer-entrypoint true >/dev/null 2>&1
 assert_contains "A, B: newer release replaces the older default" "replaced it with the new default" \
 	"$(run_in $H $B -- agentainer-entrypoint true 2>&1)"
 assert_eq "A, B: file is the newer default" "same" "$(run_in $H $B -- agentainer-entrypoint sh -c "$is_default")"
-assert_contains "the hash file records the image version" "2026.02.01" \
+assert_contains "the hash file records the image version" "0.2.0" \
 	"$(run_in $H -- agentainer-entrypoint cat /home/agent/.agentainer/agents-default.sha256)"
-# A same-day second release (.N) is newer than the first.
-run_in $H -v "$OLD/AGENTS.md:/etc/agentainer/AGENTS.md:ro" -e AGENTAINER_IMAGE_VERSION=2026.02.01.2 -- agentainer-entrypoint true >/dev/null 2>&1
-assert_eq "release .N is newer than the same day without .N" "# older default" \
+# A patch release is newer than the prior patch.
+run_in $H -v "$OLD/AGENTS.md:/etc/agentainer/AGENTS.md:ro" -e AGENTAINER_IMAGE_VERSION=0.2.1 -- agentainer-entrypoint true >/dev/null 2>&1
+assert_eq "a patch release is newer than the prior patch" "# older default" \
 	"$(run_in $H -- agentainer-entrypoint cat /home/agent/.agentainer/AGENTS.md)"
 rm -rf "$OLD"
 

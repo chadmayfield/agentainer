@@ -57,7 +57,7 @@ retag=$(docker buildx imagetools create --dry-run "$img@$digest" |
 	echo "::error::Re-tagging would push $retag, not the signed $digest." >&2
 	exit 1
 }
-# Refresh main inside the release lock. The highest merged calendar version is the
+# Refresh main inside the release lock. The highest merged stable version is the
 # only release allowed to move latest; a delayed older build still gets its own tag.
 # git-log documents --first-parent and --format: https://git-scm.com/docs/git-log
 # git-fetch documents --no-tags and refspecs: https://git-scm.com/docs/git-fetch
@@ -68,7 +68,7 @@ set -- "$V"
 if [ "$move_latest" = true ]; then
 	set -- "$@" latest
 else
-	echo "A newer release is merged into main; keeping latest and publishing only $V."
+	echo "Prerelease or a newer stable release exists; keeping latest and publishing only $V."
 fi
 tags=()
 for t; do tags+=(-t "$img:$t"); done
@@ -80,3 +80,5 @@ for t; do
 		exit 1
 	}
 done
+# Pass the same latest policy to the GitHub release step after successful tagging.
+if [ -n "${GITHUB_OUTPUT:-}" ]; then printf 'latest=%s\n' "$move_latest" >>"$GITHUB_OUTPUT"; fi
