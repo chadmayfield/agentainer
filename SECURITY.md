@@ -18,7 +18,7 @@ A vulnerability in an agent or tool that the image installs (Claude Code, Codex,
 
 ## Supported versions
 
-Only the latest release receives fixes. Releases are calendar versions (`YYYY.MM.DD`), and the image tag `latest` follows the newest one.
+Fixes ship in new releases; older images are not rebuilt under the same version. Releases use SemVer, including dated development prereleases such as `0.1.0-dev.20261019.1`. The image tag `latest` follows the highest stable release. Prereleases require an explicit version tag, and `latest` does not exist before the first stable release. See the [release policy](docs/versions.md#releases).
 
 ## Known limits
 

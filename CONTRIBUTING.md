@@ -69,7 +69,7 @@ Do not run `git flow release finish`: it merges into `main` locally. A hotfix is
 
 Re-run a failed tag workflow without replacing the signed tag. A failure before verification and the retag dry run pass leaves the version and `latest` tags unchanged. A rebuilt image gets a new digest; it must be signed, attested and verified again before promotion. Once the GitHub release exists, its version cannot be republished. Use a new version for further changes.
 
-CI holds no maintainer private signing key. It uses GitHub OIDC for image signatures and attestations. Live registry verification is not verified until the first release completes ([attestation verification flags](https://cli.github.com/manual/gh_attestation_verify)).
+CI holds no maintainer private signing key. It verifies the GPG-signed release tag using the maintainer's public key, then uses GitHub OIDC for container image signatures and attestations.
 
 ## The bump GitHub App
 
