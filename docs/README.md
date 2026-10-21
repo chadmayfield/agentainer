@@ -3,6 +3,8 @@
 | File | Covers |
 |---|---|
 | [running.md](running.md) | The launcher, `docker run` and `podman run`, sudo, file ownership, upgrading |
+| [defaults.md](defaults.md) | Seeded shell, tool and agent configuration, colors and customization paths |
+| [customization.md](customization.md) | Your own configs, bind-mounted homes, separate test homes and custom images |
 | [logins.md](logins.md) | Signing in to each agent, which Claude login wins, GitHub tokens |
 | [configuration.md](configuration.md) | The shared `AGENTS.md`, MCP servers, tools that agents install, OpenRouter |
 | [kubernetes.md](kubernetes.md) | The Kubernetes example with ContainerSSH |

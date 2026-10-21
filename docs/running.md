@@ -23,6 +23,8 @@ N defaults to `agentainer`. These variables override the launcher's defaults:
 | `AGENTAINER_HOME_VOLUME` | `agentainer-home` |
 | `AGENTAINER_RUNTIME` | `podman` if installed, else `docker` |
 
+For a host directory instead of the default named home volume, set `AGENTAINER_HOME_VOLUME` to an existing directory such as `"$HOME/.config/agentainer/home"`. Both mount at `/home/agent`. [Customizing Agentainer](customization.md) covers setup, your own dotfiles and separate test homes.
+
 `up` records its options (DIR, image, sudo setting, home volume and the env file's absolute path) as container labels, and `update` reads them back:
 
 - `update` changes nothing when the pull fails, when DIR or the env file no longer exists, or when the container was not made by `up`.
