@@ -4,3 +4,7 @@ env
 .DS_Store
 # The maintainer's private design notes; never commit them.
 docs/private/
+
+# Local visual-review dependencies and generated artifacts.
+/tests/visual/node_modules/
+/artifacts/visual/

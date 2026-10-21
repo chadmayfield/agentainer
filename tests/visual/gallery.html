@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentainer color review</title>
+<style>
+/*__FONT__*/
+* { box-sizing: border-box; }
+body { margin: 0; background: #111; color: #bfbdb6; font: 16px/1.6 system-ui, sans-serif; }
+main { max-width: 1320px; margin: auto; padding: 32px 24px 64px; }
+h1, h2 { color: #e6b450; font-weight: 600; line-height: 1.3; }
+h1 { margin-bottom: 8px; }
+h2 { font-size: 20px; }
+a { color: #59c2ff; }
+small, .metadata { color: #aaa; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 24px 0; }
+section { margin: 36px 0; }
+figure { margin: 0; overflow-x: auto; background: black; border: 1px solid #333; border-radius: 6px; }
+figure img { display: block; max-width: 100%; width: auto; height: auto; }
+.terminal { padding: 12px; width: max-content; background: #000; }
+.palette { display: flex; flex-wrap: wrap; gap: 12px; }
+.swatch { border: 1px solid #555; border-left: 20px solid var(--color); padding: 2px 8px; }
+/*__XTERM_CSS__*/
+</style>
+</head>
+<body><main>
+<h1>Agentainer color review</h1>
+<p>Agentainer colors, inspired by Ayu. Review readability, selections, file types, diff colors, and the distinct Vim and tmux status bars.</p>
+<p class="metadata">__METADATA__</p>
+<p>Captured from actual tools in an isolated container with generic files. Browser rendering uses a fixed font and an Ayu-inspired reference ANSI palette. Your terminal's ANSI colors and font rendering may differ, especially for bat. The tmux clock and sample timestamps are fixed.</p>
+<div class="palette">
+<span class="swatch" style="--color:#000000">Black</span>
+<span class="swatch" style="--color:#202020">Charcoal</span>
+<span class="swatch" style="--color:#bfbdb6">Text</span>
+<span class="swatch" style="--color:#e6b450">Amber</span>
+<span class="swatch" style="--color:#aad94c">Added</span>
+<span class="swatch" style="--color:#f07178">Removed</span>
+<span class="swatch" style="--color:#253340">Vim status</span>
+</div>
+<nav aria-label="Screenshots">__NAV__</nav>
+__CARDS__
+<p><small>Screenshots are review artifacts. Their generation does not mean a person has approved the appearance.</small></p>
+</main>
+__RENDERER__
+</body></html>

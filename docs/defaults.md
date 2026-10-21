@@ -22,7 +22,7 @@ The Agentainer colorscheme is inspired by [Ayu Dark](https://github.com/ayu-them
 
 The shell exports `LS_COLORS` from `~/.config/agentainer/shell-theme.bash`. It gives `ls` and eza gray directories, amber symbolic links and green executables. Edit that file to customize the file colors. Agentainer does not change the host terminal's ANSI palette, which bat's `ansi` theme uses.
 
-The offline tests in [`tests/55-defaults.sh`](../tests/55-defaults.sh) check actual RGB output from `ls`, eza and Git, eza's `LS_COLORS` override, redirected Git output, and Vim and tmux settings. They also check that startup preserves edited color configuration files. These checks do not replace a visual check in the user's terminal.
+The offline tests in [`tests/55-defaults.sh`](../tests/55-defaults.sh) check actual RGB output from `ls`, eza and Git, eza's `LS_COLORS` override, redirected Git output, and Vim and tmux settings. They also check that startup preserves edited color configuration files. These checks do not replace a visual check in the user's terminal. Generate the optional screenshot gallery with the commands in [visual review](../tests/visual/README.md). The gallery captures multiple states per tool for human review; generation does not approve their appearance.
 
 ## Shell and command-line tools
 

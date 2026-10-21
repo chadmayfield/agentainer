@@ -5,3 +5,4 @@ tests
 deploy
 .github
 **/.DS_Store
+artifacts/visual
