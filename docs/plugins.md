@@ -81,6 +81,8 @@ claude plugin uninstall code-simplifier@claude-plugins-official --scope user
 
 See [Claude's installation and scope documentation](https://code.claude.com/docs/en/discover-plugins). Avoid project scope when the choice should apply only to you.
 
+The bundled Claude installer rewrote the seeded permission mode from `manual` to `default` during the installation check. It retained the other seeded display and shared-instruction settings. Inspect your settings after installation; plugin management can normalize existing settings as well as add plugin entries. Actual tool-approval behavior was not tested.
+
 ## Codex
 
 Browse configured marketplaces and their available plugins:
@@ -117,6 +119,8 @@ For Superpowers, open `/plugins` in Codex, search for `Superpowers`, and select 
 Agentainer does not enable these recommendations automatically. See the [official Codex CLI plugin reference](https://learn.chatgpt.com/docs/cli/reference#codex-plugin) for supported sources and marketplace management.
 
 ## OpenCode
+
+Runtime discovery is not verified with the pinned OpenCode. In a disposable-container check, `plugin add` wrote the expected `plugins` entry and `plugin remove` removed it, but `plugin list` and the native plugin API returned empty lists. The skill API also returned an empty list after copying the four recommended skills and their shared references. An installation success message alone does not prove that OpenCode loaded them.
 
 List installed package plugins:
 
@@ -193,4 +197,16 @@ Choose each pack independently. See [Antigravity's plugin documentation](https:/
 
 ## Verification limits
 
-Native command syntax was checked against the bundled CLIs' help. Recommended package names, sources and setup steps come from the linked upstream guides and skill files. Remote installation, plugin loading and account-dependent behavior in Agentainer are not verified. These instructions do not install or enable anything until you run the installation commands or apply the plugin configuration.
+The following checks ran on 2026-10-21 with the agent versions pinned in [versions.env](../versions.env), using disposable homes in the existing local arm64 image. No personal home or credentials were mounted, and no model requests were sent.
+
+| Agent or package | Observed result |
+|---|---|
+| Claude Code | All four recommended plugins installed from the official marketplace, appeared enabled in `claude plugin list --json`, and disappeared after uninstalling them. The installer normalized the permission-mode spelling as described above. |
+| Codex | Superpowers and agent-skills installed from local checkouts of their upstream repositories, appeared enabled in `codex plugin list --json`, and disappeared after removal. The unauthenticated default catalog returned no available entries, so the curated Superpowers and Codex Security browser installations remain not verified. |
+| Antigravity | Both packs installed from local upstream checkouts. `agy plugin list --json` listed the four recommended agent-skills workflows and Superpowers' skills; both packs disappeared after uninstalling them. |
+| OpenCode | Superpowers' pinned Git package entry was added and removed successfully. Runtime plugin and skill discovery remain not verified, as described above. |
+| UI UX Pro Max | The `ui-ux-pro-max-cli` installer created per-project assets for Codex, OpenCode and Antigravity. Its local `ui-ux-pro-max/scripts/search.py` design-system generator succeeded for all three layouts. Agent-driven use remains not verified. |
+
+The pack checks used Superpowers revision [`b739a8a`](https://github.com/obra/superpowers/tree/b739a8af570e10a95898f2bdf6cec97467fa6c12) and agent-skills revision [`aeac41d`](https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d). The UI UX Pro Max check used the npm CLI release `2.15.0`. That installer also included auxiliary design skills; inspect its generated files before adding them to a project.
+
+Native command syntax was checked against the bundled CLIs' help. Recommended package names, sources and setup steps come from the linked upstream guides and skill files. Actual coding workflows, account connections, model costs, hook execution and approval delivery remain not verified. Installation checks do not establish plugin effectiveness or constitute a full security audit. These instructions do not install or enable anything until you run the installation commands or apply the plugin configuration.
