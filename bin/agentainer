@@ -7,6 +7,7 @@ HOME_VOLUME=${AGENTAINER_HOME_VOLUME:-agentainer-home}
 LABEL=io.github.chadmayfield.agentainer=1
 # up stores its options in labels with this prefix, so update can recreate the container.
 OPT=io.github.chadmayfield.agentainer
+update_token=""
 
 usage() {
 	cat >&2 <<'EOF'
@@ -109,12 +110,54 @@ create() {
 		fi
 		set -- "$@" --env-file "$envf"
 	fi
+	if [ -n "$update_token" ]; then set -- "$@" --label "$OPT.update=$update_token"; fi
 	run "$@" "$IMAGE"
 }
 
 # label NAME KEY: print the value of label $OPT.KEY on container NAME.
 label() {
 	"$R" inspect --type container --format "{{index .Config.Labels \"$OPT.$2\"}}" -- "$1"
+}
+
+# Wait for startup to finish before discarding the previous container. Older images
+# have no completion marker, so their tools link supplies the legacy readiness check.
+wait_ready() {
+	[ "${AGENTAINER_DRY_RUN:-0}" != 1 ] || return 0
+	left=180
+	while [ "$left" -gt 0 ]; do
+		running=$("$R" inspect --type container --format '{{.State.Running}}' -- "$name") || return 1
+		[ "$running" = true ] || return 1
+		if "$R" exec "$name" sh -ec '
+if grep -q "^# Startup readiness marker" /usr/local/bin/agentainer-entrypoint; then
+  test -f /var/lib/agentainer/ready
+else
+  test -L /var/lib/agentainer/active
+fi' 2>/dev/null; then return 0; fi
+		left=$((left - 1))
+		sleep 1
+	done
+	return 1
+}
+
+rollback_update() {
+	rc=$?
+	trap - EXIT HUP INT TERM
+	if [ "$update_pending" = 1 ]; then
+		if [ "$create_attempted" = 1 ] &&
+			[ "$(label "$name" update 2>/dev/null || true)" = "$update_token" ]; then
+			run "$R" rm -f "$name" || true
+		fi
+		if run "$R" rename "$backup" "$name"; then
+			if [ "$was_running" = true ] && ! run "$R" start "$name"; then
+				echo "agentainer: update failed; restored $name but could not restart it; inspect its logs" >&2
+			else
+				echo "agentainer: update failed; restored the previous container $name" >&2
+			fi
+		else
+			echo "agentainer: update failed; previous container remains as $backup; restore it manually" >&2
+		fi
+	fi
+	exit "$rc"
 }
 
 case "$cmd" in
@@ -173,8 +216,39 @@ update)
 		exit 1
 	fi
 	run "$R" pull "$IMAGE"
-	run "$R" rm -f "$name"
-	create "$name" "$sudo" "$dir"
+	backup="cx-agentainer-backup-$name"
+	if "$R" inspect --type container "$backup" >/dev/null 2>&1; then
+		echo "agentainer: $backup already exists; inspect the previous update before retrying" >&2
+		exit 1
+	fi
+	was_running=$("$R" inspect --type container --format '{{.State.Running}}' -- "$name")
+	case "$was_running" in true | false) ;; *)
+		echo "agentainer: cannot read $name running state" >&2
+		exit 1
+		;;
+	esac
+	update_token=$("$R" inspect --type container --format '{{.Id}}' -- "$name")
+	[ -n "$update_token" ] || {
+		echo "agentainer: cannot read $name container ID" >&2
+		exit 1
+	}
+	update_pending=0
+	create_attempted=0
+	trap rollback_update EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' HUP TERM
+	run "$R" rename "$name" "$backup"
+	update_pending=1
+	if [ "$was_running" = true ]; then run "$R" stop "$backup"; fi
+	create_attempted=1
+	if (create "$name" "$sudo" "$dir"); then :; else exit "$?"; fi
+	if ! wait_ready; then
+		echo "agentainer: replacement did not finish startup; restoring the previous container" >&2
+		exit 1
+	fi
+	update_pending=0
+	trap - EXIT HUP INT TERM
+	run "$R" rm "$backup"
 	;;
 start) run "$R" start "${1:-agentainer}" ;;
 attach) run "$R" exec -it "${1:-agentainer}" tmux new-session -A -s main ;;

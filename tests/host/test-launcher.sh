@@ -104,6 +104,10 @@ mkdir -p "$T/labels"
 cat >"$T/insp" <<'EOF'
 #!/bin/sh
 if [ "$1" = inspect ]; then
+	case "$*" in
+	*'.State.Running'*) echo true; exit 0 ;;
+	*'.Id'*) echo cx-previous-container; exit 0 ;;
+	esac
 	printf '%s\n' "$*" >>"$LABELS.calls"
 	shift
 	fmt="" obj=""
@@ -128,10 +132,10 @@ ins() { LABELS="$T/labels" AGENTAINER_RUNTIME="$T/insp" sh "$L" "$@"; }
 p=io.github.chadmayfield.agentainer
 printf '%s\n' "$p.dir=$T/my code" "$p.image=example.com/i:2" "$p.sudo=1" "$p.home=h2" "$p.env-file=$envf" >"$T/labels/proj"
 out=$(AGENTAINER_HOME_VOLUME=other AGENTAINER_ENV_FILE=/nonexistent ins update proj 2>/dev/null)
-assert_eq "update pulls, removes, then recreates" "pull|rm|run" \
+assert_eq "update retains a backup until replacement startup" "pull|rename|stop|run|exec|rm" \
 	"$(printf '%s\n' "$out" | awk 'NR==1 || prev=="---" {print} {prev=$0}' | paste -sd '|' -)"
 has_line "update pulls the recorded image" "example.com/i:2" "$(printf '%s\n' "$out" | sed -n '1,/^---$/p')"
-run_part=$(printf '%s\n' "$out" | sed -n '/^run$/,$p')
+run_part=$(printf '%s\n' "$out" | sed -n '/^run$/,/^---$/p')
 has_line "update keeps the name" "proj" "$run_part"
 has_line "update keeps DIR" "$(cd "$T/my code" && pwd -P):/workspace" "$run_part"
 has_line "update keeps the home volume" "h2:/home/agent" "$run_part"

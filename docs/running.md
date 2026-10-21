@@ -28,6 +28,8 @@ For a host directory instead of the default named home volume, set `AGENTAINER_H
 `up` records its options (DIR, image, sudo setting, home volume and the env file's absolute path) as container labels, and `update` reads them back:
 
 - `update` changes nothing when the pull fails, when DIR or the env file no longer exists, or when the container was not made by `up`.
+- After pulling, `update` renames the previous container to `cx-agentainer-backup-N` and stops it. It removes that backup only after replacement startup succeeds. A creation or startup failure restores the previous container and its running or stopped state. Home and workspace changes made by the replacement are not rolled back.
+- Startup may take up to 180 seconds. New images signal entrypoint completion; older images fall back to checking the tools link. If the launcher is killed before it can restore a failed update, inspect `cx-agentainer-backup-N` before retrying. It refuses to overwrite an existing backup. These operations use [Docker rename](https://docs.docker.com/reference/cli/docker/container/rename/) and [Podman rename](https://docs.podman.io/en/latest/markdown/podman-rename.1.html).
 - `update` pulls from a registry, so it cannot update a container that runs an image you built locally (`localhost/...`). Use `agentainer down` and `agentainer up --image ...` for those.
 - DIR must not contain `:`, because `-v` splits its value at `:`. Rename the directory to remove `:`.
 

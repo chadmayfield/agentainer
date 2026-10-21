@@ -11,6 +11,7 @@ volume="$name-home"
 real_runtime=$(command -v "$RUNTIME")
 cleanup() {
 	"$real_runtime" rm -f "$name" >/dev/null 2>&1 || true
+	"$real_runtime" rm -f "cx-agentainer-backup-$name" >/dev/null 2>&1 || true
 	"$real_runtime" volume rm -f "$volume" >/dev/null 2>&1 || true
 	rm -rf "$tmp"
 }
@@ -29,6 +30,19 @@ cat >"$wrapper" <<'WRAPPER'
 #!/bin/sh
 if [ "$#" = 2 ] && [ "$1" = pull ] && [ "$2" = "$CX_TEST_IMAGE" ]; then
 	exec "$CX_TEST_RUNTIME" image inspect "$2"
+fi
+if [ "$1" = run ]; then
+	case "${CX_TEST_UPDATE_FAILURE:-}" in
+	create) exit 125 ;;
+	startup)
+		shift
+		exec "$CX_TEST_RUNTIME" run --entrypoint /bin/false "$@"
+		;;
+	esac
+fi
+if [ "$1" = run ] && [ -n "${CX_TEST_ENTRYPOINT:-}" ]; then
+	shift
+	exec "$CX_TEST_RUNTIME" run -v "$CX_TEST_ENTRYPOINT:/usr/local/bin/agentainer-entrypoint:ro" "$@"
 fi
 exec "$CX_TEST_RUNTIME" "$@"
 WRAPPER
@@ -57,6 +71,17 @@ second=$("$real_runtime" inspect --type container --format '{{.Id}}' "$name")
 [ -n "$first" ] && [ -n "$second" ] && [ "$first" != "$second" ]
 pass "update recreates the real container"
 assert_eq "update retains home, workspace and original environment" "PRESERVED" "$("$real_runtime" exec "$name" sh -ec 'test "$(cat "$HOME/launcher-marker")" = home; test "$(cat /workspace/launcher-marker)" = workspace; test "$CX_LAUNCHER_VALUE" = "retained value"; echo PRESERVED')"
+for failure in create startup; do
+	if CX_TEST_UPDATE_FAILURE="$failure" launch update "$name" >"$tmp/failed-update.log" 2>&1; then
+		fail "$failure failure rejects the update"
+	else
+		pass "$failure failure rejects the update"
+	fi
+	assert_eq "$failure failure restores the previous container identity" "$second" \
+		"$("$real_runtime" inspect --type container --format '{{.Id}}' "$name")"
+	assert_eq "$failure failure restores a working container and home" "home" \
+		"$("$real_runtime" exec "$name" cat /home/agent/launcher-marker)"
+done
 launch down "$name" >/dev/null
 if "$real_runtime" inspect --type container "$name" >/dev/null 2>&1; then
 	fail "down removes the container"

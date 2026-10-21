@@ -47,5 +47,9 @@ for step in "$STEPS"/[0-9][0-9]-*.sh; do
 	fi
 done
 
+# Startup readiness marker is private to this container's writable layer.
+if [ -d /var/lib/agentainer ]; then
+	: >/var/lib/agentainer/ready || exit 1
+fi
 [ "$#" -gt 0 ] || set -- sleep infinity
 exec "$@"
