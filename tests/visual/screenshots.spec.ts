@@ -25,12 +25,31 @@ test('render all terminal states and publish an offline review gallery', async (
   const template = fs.readFileSync(path.join(__dirname, 'gallery.html'), 'utf8');
   const xtermJs = fs.readFileSync(path.join(__dirname, 'node_modules/@xterm/xterm/lib/xterm.js'), 'utf8');
   const xtermCss = fs.readFileSync(path.join(__dirname, 'node_modules/@xterm/xterm/css/xterm.css'), 'utf8');
-  const metadata = `Image: ${recording.image}. Defaults: ${recording.defaults}. Renderer: ${browser.version()}. Terminal: 120 × 32 and narrow 80 × 24, JetBrains Mono 14px.`;
+  const metadata = [
+    `Image: ${recording.image}`,
+    `Defaults: ${recording.defaults}`,
+    `Renderer: ${browser.version()}`,
+    'Terminal: 120 × 32 and narrow 80 × 24, JetBrains Mono 14px.',
+  ];
+  const navigationGroups = [
+    ['Shell', [['shell', 'Prompt and ls']]],
+    ['eza', [['eza', 'Listing'], ['eza-tree', 'Tree'], ['eza-broken', 'Broken link']]],
+    ['Git', [['git-status', 'Status'], ['git-diff', 'Diff'], ['git-staged', 'Staged'], ['git-conflict', 'Conflict']]],
+    ['bat', [['bat', 'Python'], ['bat-yaml', 'YAML']]],
+    ['fzf', [['fzf-idle', 'Idle'], ['fzf', 'Filtered'], ['fzf-selected', 'Selected'], ['fzf-empty', 'No matches']]],
+    ['Vim', [['vim', 'Python'], ['vim-yaml', 'YAML'], ['vim-browser', 'Browser'], ['vim-search', 'Search'],
+      ['vim-selection', 'Selection'], ['vim-browser-narrow', '80 columns']]],
+    ['tmux', [['tmux-single', 'Single pane'], ['tmux', 'Split panes'], ['tmux-copy', 'Copy mode'],
+      ['tmux-activity', 'Activity'], ['tmux-narrow', '80 columns']]],
+  ] as const;
+  const navigation = navigationGroups.map(([tool, links]) =>
+    `<div class="nav-group"><span class="nav-label">${tool}</span><div class="nav-links">${links.map(([id, label]) =>
+      `<a href="#${id}">${label}</a>`).join('')}</div></div>`).join('');
   const html = (cards: string) => template
     .replace('/*__FONT__*/', '')
     .replace('/*__XTERM_CSS__*/', '')
-    .replace('__METADATA__', escapeHtml(metadata))
-    .replace('__NAV__', recording.captures.map((item: any) => `<a href="#${item.id}">${escapeHtml(item.title)}</a>`).join(''))
+    .replace('__METADATA__', metadata.map(item => `<li>${escapeHtml(item)}</li>`).join(''))
+    .replace('__NAV__', navigation)
     .replace('__CARDS__', cards).replace('__RENDERER__', '');
   const terminalPage = `<!doctype html><html><head><meta charset="utf-8"><style>
     ${fontCss()}
@@ -117,7 +136,17 @@ ${xtermCss}
     // Validate the delivered page before replacing the last complete gallery.
     const gallery = html(cards.join('\n'));
     await page.setContent(gallery);
+    await expect(page.locator('nav .nav-group')).toHaveCount(7);
+    expect(await page.locator('nav a').evaluateAll(links => links.map(link => link.getAttribute('href'))))
+      .toEqual(expectedIds.map(id => `#${id}`));
+    await expect(page.locator('ul.metadata > li')).toHaveCount(4);
+    expect(gallery).not.toContain('Their generation does not mean a person has approved the appearance.');
     await expect(page.locator('figure img')).toHaveCount(expectedIds.length);
+    const frameWidths = await page.locator('figure').evaluateAll(figures => figures.map(figure => ({
+      frame: figure.getBoundingClientRect().width,
+      image: figure.querySelector('img')!.getBoundingClientRect().width,
+    })));
+    for (const widths of frameWidths) expect(widths.frame - widths.image).toBeCloseTo(2, 0);
     await expect(page.locator('script, link, iframe')).toHaveCount(0);
     expect(await page.locator('figure img').evaluateAll(images => images.every(image =>
       (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
@@ -139,12 +168,31 @@ ${xtermCss}
   }
 });
 
+test('gallery follows the client color scheme while screenshot frames stay black', async ({ page }) => {
+  await page.setContent(fs.readFileSync(path.join(__dirname, 'gallery.html'), 'utf8')
+    .replace('__NAV__', '<a href="#sample">Sample</a>')
+    .replace('__CARDS__', '<figure><img alt="Sample"></figure>'));
+  for (const [scheme, background, foreground, link] of [
+    ['light', 'rgb(250, 248, 242)', 'rgb(39, 43, 48)', 'rgb(0, 95, 135)'],
+    ['dark', 'rgb(17, 17, 17)', 'rgb(191, 189, 182)', 'rgb(89, 194, 255)'],
+    ['light', 'rgb(250, 248, 242)', 'rgb(39, 43, 48)', 'rgb(0, 95, 135)'],
+  ] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await expect(page.locator('body')).toHaveCSS('background-color', background);
+    await expect(page.locator('body')).toHaveCSS('color', foreground);
+    await expect(page.locator('nav a')).toHaveCSS('color', link);
+    await expect(page.locator('figure')).toHaveCSS('background-color', 'rgb(0, 0, 0)');
+  }
+});
+
 test('Markdown keeps screenshot links relative and escapes captured text', () => {
   const markdown = markdownGallery([{ id: 'vim-selection', title: 'Vim [selection]',
-    description: '<script>example</script>', cols: 120, rows: 32 }], 'Example image');
+    description: '<script>example</script>', cols: 120, rows: 32 }], ['Example image']);
   expect(markdown).toContain('![Vim \\[selection\\] terminal screenshot](screenshots/vim-selection.png)');
   expect(markdown).not.toContain('<script>');
   expect(markdown).not.toContain('data:image');
+  expect(markdown).toContain('\n- Example image\n');
+  expect(markdown).not.toContain('Their generation does not mean a person has approved the appearance.');
   expect(() => markdownGallery([{ id: '../outside', title: 'Invalid',
-    description: '', cols: 120, rows: 32 }], '')).toThrow('invalid screenshot identifier');
+    description: '', cols: 120, rows: 32 }], [])).toThrow('invalid screenshot identifier');
 });
