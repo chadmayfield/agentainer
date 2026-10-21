@@ -75,13 +75,21 @@ An EditorConfig file applies to files in its directory and descendants, not to u
 
 | File in home | Default and source |
 |---|---|
-| `.claude/settings.json` | Retains the shared `AGENTS.md` integration and stable update channel; uses `permissions.defaultMode=manual`, verified by the pinned binary's `claude --help` permission choices. [Settings](https://code.claude.com/docs/en/settings) |
+| `.claude/settings.json` | Shared `AGENTS.md` integration, stable updates, manual permissions, explanatory output, turn durations and terminal-bell notifications. Includes the published editor schema. [Settings and schema](https://code.claude.com/docs/en/settings), [output styles](https://code.claude.com/docs/en/output-styles), [duration setting](https://code.claude.com/docs/en/settings-reference#showturnduration), [notifications](https://code.claude.com/docs/en/terminal-config#get-a-terminal-bell-or-notification) |
 | `.codex/config.toml` | File-backed login storage and explicit `approval_policy=on-request`. Retains the existing container sandbox setting, because bubblewrap cannot create its nested mount. [Config reference](https://learn.chatgpt.com/docs/config-file/config-reference) |
-| `.gemini/antigravity-cli/settings.json` | Terminal colors, `toolPermission=request-review`, and Vim as the external editor. [Antigravity settings](https://antigravity.google/docs/cli/reference#configuration-keys-settingsjson) |
-| `.config/opencode/opencode.json` | Retains the existing disabled updater. [Config](https://opencode.ai/v2/docs/config) |
-| `.config/opencode/cli.json` | Built-in `ayu` theme in dark mode. Theme settings belong here, not in `opencode.json`. [Themes](https://opencode.ai/v2/docs/themes) |
+| `.gemini/antigravity-cli/settings.json` | Terminal colors, `toolPermission=request-review`, Vim as the external editor and completion notifications. [Antigravity settings](https://antigravity.google/docs/cli/reference#configuration-keys-settingsjson) |
+| `.config/opencode/opencode.json` | Disabled updater and the published editor schema. [Config](https://opencode.ai/v2/docs/config) |
+| `.config/opencode/cli.json` | Built-in `ayu` dark theme, notifications without sound, explicit prompting for permission requests, diff layout selected by available width, word wrapping and a diff file tree. The mini interface shows its status footer and turn summaries. Includes the published CLI schema. [CLI settings](https://opencode.ai/v2/docs/cli/config), [themes](https://opencode.ai/v2/docs/themes) |
 
 Models, accounts and provider URLs are left for users to configure. These files do not set automatic permission bypasses. Codex's existing full-access container sandbox setting is separate from approval policy; do not treat the config as a security boundary. Interactive account access and actual agent tool approvals are not verified by the offline default-configuration tests.
+
+The offline defaults fixture uses a fresh named home volume and compares its seeded files with the image defaults before user edits. This checks files copied from the image into the volume as well as files added by the entrypoint. It runs `claude doctor` and checks its report for invalid settings, because the command can exit successfully while reporting a configuration error. It starts the actual OpenCode client in a terminal and checks that the configured Ayu cursor color is applied. Both checks include deliberately invalid settings: Claude must report the bad value, and OpenCode's fallback to its default theme must fail the Ayu check. The fixture also verifies that a second startup preserves edits to all four agents' configuration files.
+
+In a manual container check, Antigravity login, terminal appearance, denied and approved file writes, and login/settings persistence worked. The task completed without an observed bell. The test session had `bell-action none`, matching the seeded tmux config. Whether Antigravity emitted a bell during that task is not verified.
+
+Notification delivery depends on the host terminal and tmux settings. Claude uses a terminal bell so the container needs no desktop notification command. Antigravity's notification option includes a terminal chime; OpenCode's sound option is separate and disabled. Notification delivery from these defaults is not verified.
+
+Customize models, providers, plugins and hooks in your own home files. Keep API keys in the runtime environment or the agent's login store. Claude and Antigravity use strict JSON, so put notes beside the configuration rather than adding comments. OpenCode supports JSONC, but Agentainer's MCP sync writes `opencode.json` and stops if `opencode.jsonc` exists; keep that filename when using sync. Codex's TOML supports comments. Custom status-line commands and hooks need their own scripts and are not included in these defaults.
 
 ## Existing homes
 

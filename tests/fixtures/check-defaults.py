@@ -2,7 +2,15 @@
 import hashlib
 import json
 import os
+import pty
+import re
+import select
 import shlex
+import signal
+import struct
+import termios
+import time
+import fcntl
 from pathlib import Path
 import subprocess
 import tempfile
@@ -20,6 +28,15 @@ class DefaultsTests(unittest.TestCase):
         result = run(args, **kwargs)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout
+
+    def test_home_contains_image_defaults_before_user_edits(self):
+        source = Path('/etc/agentainer/home')
+        for path in source.rglob('*'):
+            if path.is_file():
+                target = HOME / path.relative_to(source)
+                self.assertTrue(target.is_file(), str(target))
+                self.assertEqual(target.read_bytes(), path.read_bytes(),
+                                 'Initial home differs from image defaults: ' + str(target))
 
     def test_git_has_generic_identity_and_working_ignore_patterns(self):
         config = self.command(['git', 'config', 'list', '--file', str(HOME / '.gitconfig')])
@@ -98,11 +115,19 @@ class DefaultsTests(unittest.TestCase):
         claude = json.loads((HOME / '.claude/settings.json').read_text())
         self.assertEqual(claude['permissions']['defaultMode'], 'manual')
         self.assertNotIn('allow', claude['permissions'])
+        self.assertEqual(claude['outputStyle'], 'Explanatory')
+        self.assertIs(claude['showTurnDuration'], True)
+        self.assertEqual(claude['preferredNotifChannel'], 'terminal_bell')
         agy = json.loads((HOME / '.gemini/antigravity-cli/settings.json').read_text())
         self.assertEqual(agy['toolPermission'], 'request-review')
         self.assertEqual(agy['colorScheme'], 'terminal')
+        self.assertIs(agy['notifications'], True)
         cli = json.loads((HOME / '.config/opencode/cli.json').read_text())
         self.assertEqual(cli['theme'], {'name': 'ayu', 'mode': 'dark'})
+        self.assertEqual(cli['session']['permissions'], 'prompt')
+        self.assertEqual(cli['attention'], {'notifications': True, 'sound': False})
+        self.assertEqual(cli['diffs'], {'view': 'auto', 'wrap': 'word', 'tree': True})
+        self.assertEqual(cli['mini'], {'footer': 'show', 'turn_summary': 'show'})
         codex = (HOME / '.codex/config.toml').read_text()
         self.assertIn('approval_policy = "on-request"', codex)
         for path in (HOME / '.claude/settings.json', HOME / '.gemini/antigravity-cli/settings.json',
@@ -110,6 +135,88 @@ class DefaultsTests(unittest.TestCase):
             data = json.loads(path.read_text())
             self.assertNotIn('model', data)
             self.assertNotIn('apiKey', data)
+            self.assertNotIn('env', data)
+            self.assertNotIn('hooks', data)
+            self.assertNotIn('provider', data)
+
+    def claude_settings_report(self):
+        result = run(['claude', 'doctor'], timeout=30)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn('Claude Code doctor', output)
+        return output
+
+    def test_claude_native_diagnostic_accepts_defaults_and_detects_invalid_settings(self):
+        self.assertNotIn('Invalid settings', self.claude_settings_report())
+        path = HOME / '.claude/settings.json'
+        original = path.read_bytes()
+        try:
+            data = json.loads(original)
+            data['showTurnDuration'] = 'not a boolean'
+            path.write_text(json.dumps(data))
+            output = self.claude_settings_report()
+            self.assertIn('Invalid settings', output)
+            self.assertIn('showTurnDuration', output)
+        finally:
+            path.write_bytes(original)
+
+    def opencode_terminal(self, seconds=6):
+        pid, master = pty.fork()
+        if pid == 0:
+            try:
+                fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack('HHHH', 32, 120, 0, 0))
+                os.execvpe('opencode', ['opencode'], dict(os.environ,
+                    TERM='xterm-256color', COLORTERM='truecolor'))
+            except BaseException:
+                os._exit(127)
+        output = bytearray()
+        started = time.monotonic()
+        try:
+            while time.monotonic() - started < seconds:
+                if not select.select([master], [], [], 0.1)[0]:
+                    continue
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                output.extend(chunk)
+                for query, response in ((b'\x1b[6n', b'\x1b[1;1R'),
+                                        (b'\x1b[c', b'\x1b[?1;2c'),
+                                        (b'\x1b]11;?\x07', b'\x1b]11;rgb:0000/0000/0000\x07')):
+                    if query in chunk:
+                        os.write(master, response)
+            return output.decode(errors='replace')
+        finally:
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            os.waitpid(pid, 0)
+            os.close(master)
+
+    def assert_opencode_loaded_ayu(self, output):
+        plain = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', output)
+        self.assertIn('Ask anything', plain, 'OpenCode did not render its input prompt')
+        self.assertIn('\x1b]12;#bfbdb6\x07', output,
+                      'OpenCode did not apply the configured Ayu cursor color')
+
+    def test_opencode_native_client_loads_cli_config_and_detects_fallback(self):
+        self.assert_opencode_loaded_ayu(self.opencode_terminal())
+        path = HOME / '.config/opencode/cli.json'
+        original = path.read_bytes()
+        try:
+            data = json.loads(original)
+            data['attention'] = 'not an object'
+            path.write_text(json.dumps(data))
+            output = self.opencode_terminal()
+            plain = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', output)
+            self.assertIn('Ask anything', plain, 'OpenCode did not render its input prompt')
+            with self.assertRaises(AssertionError):
+                self.assert_opencode_loaded_ayu(output)
+        finally:
+            path.write_bytes(original)
 
     def test_shell_completion_and_cli_theme_options_are_usable(self):
         output = self.command(['bash', '-ic',
@@ -174,6 +281,21 @@ class DefaultsTests(unittest.TestCase):
             with path.open('a') as file:
                 file.write('\n# User customization marker\n' if path.name != '.vimrc'
                            else '\n" User customization marker\n')
+        for name, key, value in (
+            ('.claude/settings.json', 'outputStyle', 'default'),
+            ('.gemini/antigravity-cli/settings.json', 'notifications', False),
+            ('.config/opencode/opencode.json', 'update', 'notify'),
+            ('.config/opencode/cli.json', 'attention', {'notifications': False, 'sound': True}),
+        ):
+            path = HOME / name
+            data = json.loads(path.read_text())
+            data[key] = value
+            path.write_text(json.dumps(data))
+            paths.append(path)
+        codex = HOME / '.codex/config.toml'
+        with codex.open('a') as file:
+            file.write('\n# User customization marker\n')
+        paths.append(codex)
         before = {path: hashlib.sha256(path.read_bytes()).digest() for path in paths}
         self.command(['agentainer-entrypoint', 'true'])
         self.assertEqual(before, {path: hashlib.sha256(path.read_bytes()).digest() for path in paths})

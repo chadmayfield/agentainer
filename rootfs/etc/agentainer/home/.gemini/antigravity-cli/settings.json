@@ -1,5 +1,6 @@
 {
   "colorScheme": "terminal",
   "toolPermission": "request-review",
-  "editor": "vim"
+  "editor": "vim",
+  "notifications": true
 }
