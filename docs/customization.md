@@ -67,7 +67,7 @@ For the bind mount above:
 | Antigravity | `.gemini/antigravity-cli/settings.json` | `~/.gemini/antigravity-cli/settings.json` |
 | OpenCode | `.config/opencode/opencode.json` and `cli.json` | `~/.config/opencode/opencode.json` and `cli.json` |
 
-The paths and supported settings are documented in [default configuration](defaults.md). Agent configuration files that select plugins, hooks or status-line commands also need those plugins or commands available inside the container. A host-specific command or absolute symlink target does not become available merely because its configuration file is mounted.
+The paths and supported settings are documented in [default configuration](defaults.md). Agent configuration files that select plugins, hooks or status-line commands also need those plugins or commands available inside the container. See [optional plugin installation](plugins.md) for each agent's commands. A host-specific command or absolute symlink target does not become available merely because its configuration file is mounted.
 
 With a named volume, open a shell with `bin/agentainer shell` and edit the same container paths. With a bind mount, changes made from either side affect the same files. Restart the affected application when it does not reload a changed setting automatically.
 
