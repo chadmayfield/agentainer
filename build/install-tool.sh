@@ -83,7 +83,19 @@ EOF
 # meaning when rustup reads them, so use stable bytes for the exported tool layer.
 # https://github.com/rust-lang/rustup/blob/1.29.1/src/dist/component/components.rs
 normalize_rust_components() {
-	LC_ALL=C sort -o "$1" "$1" || return 1
+	local tmp
+	tmp=$(mktemp) || return 1
+	if ! LC_ALL=C sort "$1" >"$tmp"; then
+		rm -f "$tmp"
+		return 1
+	fi
+	# Write through the existing file so sort implementations that replace -o's
+	# destination cannot change its owner or permissions.
+	if ! cat "$tmp" >"$1"; then
+		rm -f "$tmp"
+		return 1
+	fi
+	rm -f "$tmp"
 }
 
 W=$(mktemp -d)
