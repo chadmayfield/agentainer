@@ -414,6 +414,13 @@ jobs:
           # zstd makes this image's download about 20% smaller than gzip. BuildKit maps levels 9
           # to 22 to its "Best" setting (about zstd 11; Docker build exporters docs).
           outputs: type=image,name=ghcr.io/chadmayfield/agentainer,push-by-digest=true,name-canonical=true,push=true,compression=zstd,compression-level=9,force-compression=true,rewrite-timestamp=true
+      - name: Check the pushed image on its native runner
+        env:
+          REF: ghcr.io/chadmayfield/agentainer@${{ steps.build.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+          SHA: ${{ github.sha }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: sh scripts/check-release-platform.sh "$REF" "$ARCH" "$SHA" "$VERSION"
       # One file per architecture, named after it, holds the digest, so the release job
       # can check that it got exactly one digest for each.
       - name: Record the digest

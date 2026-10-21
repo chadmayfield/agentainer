@@ -62,6 +62,8 @@ These commands require that version to have completed its release workflow. A me
 
 The published image is a fresh build from the release commit with the same pinned inputs, not the exact image the pull request's tests ran on.
 
+Each publish job checks the freshly pushed digest on its native architecture before uploading the digest artifact. It checks architecture and release labels, entrypoint completion, non-root execution and startup of all four agents ([platform check](../scripts/check-release-platform.sh)). A failure prevents index publication and promotion. Live execution of this additional gate in GitHub Actions is not verified until the next release.
+
 Release publishing waits for aggregate CI and signed-tag verification. The release workflow signs the multi-architecture index and platform manifests, then uses [`actions/attest`](https://github.com/actions/attest) to attest the index digest. The attestation is stored in GitHub and pushed to GHCR. It links the index to the source commit and release tag without a long-lived signing key in CI.
 
 Before moving version or `latest` tags, [`tests/host/test-published-image.py`](../tests/host/test-published-image.py) verifies:
