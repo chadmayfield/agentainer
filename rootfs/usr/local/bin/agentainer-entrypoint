@@ -8,10 +8,18 @@ log() { printf 'agentainer: %s\n' "$*" >&2; }
 warn() { printf 'agentainer: warning: %s\n' "$*" >&2; }
 
 # seed_file SRC DEST: copy SRC to DEST only if DEST does not exist.
-seed_file() {
+seed_file() (
 	[ -e "$2" ] || [ -L "$2" ] && return 0
-	mkdir -p "$(dirname "$2")" && cp "$1" "$2"
-}
+	dir=$(dirname "$2")
+	mkdir -p "$dir" || return 1
+	tmp=$(mktemp "$dir/.agentainer-seed.XXXXXX") || return 1
+	trap 'rm -f "$tmp"' EXIT
+	trap 'exit 1' HUP INT TERM
+	cp "$1" "$tmp" && chmod --reference="$1" "$tmp" || return 1
+	# A hard link publishes complete bytes without replacing a destination another
+	# process created during the copy. -T never treats that destination as a directory.
+	ln -T "$tmp" "$2" 2>/dev/null || { [ -e "$2" ] || [ -L "$2" ]; }
+)
 
 # A one-shot command (anything but the default "sleep infinity") keeps informational
 # startup lines out of its output unless AGENTAINER_QUIET is set explicitly.
