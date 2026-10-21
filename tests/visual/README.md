@@ -15,6 +15,8 @@ npm ci --ignore-scripts
 
 The exact test dependency versions and published integrity hashes are in `package.json` and `package-lock.json`. They were verified with `npm view PACKAGE version dist.integrity --json` against the npm registry. Nothing is added to the Agentainer runtime image. npm setup needs network access; terminal capture and rendering do not.
 
+Dependabot checks these npm dependencies weekly and groups updates into one pull request against `develop`, with a seven-day cooldown. Review the lockfile changes and run the visual tests before merging ([Dependabot configuration](../../.github/dependabot.yml), [configuration reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)).
+
 ## Generate the review
 
 From `tests/visual/`, using an existing Chrome installation:
