@@ -18,4 +18,6 @@ if [ -d "$steps" ]; then
 	shellcheck -x -s sh "$steps"/*.sh rootfs/usr/local/lib/agentainer/*.sh
 	shfmt -d "$steps" rootfs/usr/local/lib/agentainer/*.sh
 fi
+shellcheck -x -s bash rootfs/etc/agentainer/home/.bashrc rootfs/etc/agentainer/home/.config/agentainer/shell-theme.bash
+shfmt -ln bash -d rootfs/etc/agentainer/home/.bashrc rootfs/etc/agentainer/home/.config/agentainer/shell-theme.bash
 echo "lint ok"'

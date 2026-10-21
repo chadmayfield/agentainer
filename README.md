@@ -33,6 +33,7 @@ Start an agent in a tmux window (`claude`, `codex`, `agy` or `opencode`). Close 
 |---|---|
 | Launcher commands, `docker run` and `podman run`, sudo, file ownership, upgrading | [docs/running.md](docs/running.md) |
 | Signing in to each agent, which Claude login wins, GitHub tokens | [docs/logins.md](docs/logins.md) |
+| Seeded shell, Git, tmux, Vim, EditorConfig, agent settings and Ayu-inspired Agentainer colors | [docs/defaults.md](docs/defaults.md) |
 | The shared `AGENTS.md`, MCP servers, tools that agents install, OpenRouter | [docs/configuration.md](docs/configuration.md) |
 | Kubernetes with ContainerSSH | [docs/kubernetes.md](docs/kubernetes.md) |
 | What the container isolates, and vulnerability reports | [docs/security.md](docs/security.md) |

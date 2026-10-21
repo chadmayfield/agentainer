@@ -251,8 +251,9 @@ ENV DISABLE_UPDATES=1 \
 	CLAUDE_CODE_TMUX_TRUECOLOR=1
 
 # Named volumes copy the image's /home/agent on first use, so it carries the same
-# .profile the entrypoint seeds into an empty PVC.
+# shell defaults the entrypoint seeds into an empty PVC.
 RUN install -m 0644 -o agent -g "${AGENT_GID}" /etc/agentainer/home/.profile /home/agent/.profile \
+	&& install -m 0644 -o agent -g "${AGENT_GID}" /etc/agentainer/home/.bashrc /home/agent/.bashrc \
 	&& rm -rf /tmp/agentainer-build \
 	&& install -d -o agent -g "${AGENT_GID}" /var/lib/agentainer /var/lib/agentainer/tools \
 	&& install -d /etc/agentainer/home /etc/agentainer/seed
