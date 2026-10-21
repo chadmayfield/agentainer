@@ -111,7 +111,7 @@ class DefaultsTests(unittest.TestCase):
             self.assertIn('38;2;1;2;3', overridden)
             self.assertIn('38;2;230;180;80', overridden)
 
-    def test_agent_settings_do_not_approve_tools_automatically(self):
+    def test_agent_settings_have_expected_display_and_permission_values(self):
         claude = json.loads((HOME / '.claude/settings.json').read_text())
         self.assertEqual(claude['permissions']['defaultMode'], 'manual')
         self.assertNotIn('allow', claude['permissions'])
@@ -130,6 +130,7 @@ class DefaultsTests(unittest.TestCase):
         self.assertEqual(cli['mini'], {'footer': 'show', 'turn_summary': 'show'})
         codex = (HOME / '.codex/config.toml').read_text()
         self.assertIn('approval_policy = "on-request"', codex)
+        self.assertIn('sandbox_mode = "danger-full-access"', codex)
         for path in (HOME / '.claude/settings.json', HOME / '.gemini/antigravity-cli/settings.json',
                      HOME / '.config/opencode/opencode.json', HOME / '.config/opencode/cli.json'):
             data = json.loads(path.read_text())

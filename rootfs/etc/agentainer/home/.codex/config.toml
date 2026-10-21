@@ -2,7 +2,8 @@
 cli_auth_credentials_store = "file"
 # Codex's bubblewrap sandbox cannot start inside a container ("bwrap: Can't mount devpts
 # on /newroot/dev/pts: Permission denied"), so every shell command would fail. The
-# container is the isolation; Codex still asks before running commands.
+# container is the isolation. on-request permits prompts but does not require one
+# for every command. Mounted files, runtime credentials and network remain accessible.
 # https://learn.chatgpt.com/docs/agent-approvals-security
 sandbox_mode = "danger-full-access"
 

@@ -20,7 +20,7 @@ The image runs as the non-root user `agent` (UID 1000), agent binaries are root-
 
 Agents keep their own approval prompts; the image turns on no skip-permissions mode. If you turn one on, note Anthropic's warning: "When executed with `--dangerously-skip-permissions`, dev containers do not prevent a malicious project from exfiltrating anything accessible inside the container, including the Claude Code credentials" ([devcontainer docs](https://code.claude.com/docs/en/devcontainer)).
 
-Codex's own sandbox is off (`sandbox_mode = "danger-full-access"` in the seeded `~/.codex/config.toml`). Its bubblewrap sandbox cannot start in a container and fails with "bwrap: Can't mount devpts on /newroot/dev/pts: Permission denied". The container provides the isolation, and Codex still asks before it runs a command.
+Codex's own sandbox is off (`sandbox_mode = "danger-full-access"` in the seeded `~/.codex/config.toml`). Its bubblewrap sandbox failed in the tested container with "bwrap: Can't mount devpts on /newroot/dev/pts: Permission denied", so the container provides the isolation. The seeded `approval_policy = "on-request"` permits approval requests; it does not require confirmation for every command. Codex can run commands against mounted files and use available network access without prompting. Treat every writable mount and supplied credential as accessible to it ([OpenAI approval semantics](https://learn.chatgpt.com/docs/agent-approvals-security)).
 
 Antigravity's terms say: "Wrapping `agy` inside third-party coding agents or applications ... is not supported under consumer plans" ([Antigravity FAQ](https://antigravity.google/docs/faq.md)). Agentainer installs `agy` for you to run yourself and does not wrap it.
 
