@@ -36,6 +36,7 @@ Start an agent in a tmux window (`claude`, `codex`, `agy` or `opencode`). Close 
 | Seeded shell, Git, tmux, Vim, EditorConfig, agent settings and Ayu-inspired Agentainer colors | [docs/defaults.md](docs/defaults.md) |
 | Your own configs, bind-mounted homes, separate test homes and custom images | [docs/customization.md](docs/customization.md) |
 | Python tests and linting, JavaScript tooling, native builds and PostgreSQL scripts | [docs/project-tools.md](docs/project-tools.md) |
+| Optional Playwright setup, persistent browser downloads and execution checks | [docs/browser-testing.md](docs/browser-testing.md) |
 | Optional plugins for Claude Code, Codex, OpenCode and Antigravity | [docs/plugins.md](docs/plugins.md) |
 | The shared `AGENTS.md`, MCP servers, tools that agents install, OpenRouter | [docs/configuration.md](docs/configuration.md) |
 | Kubernetes with ContainerSSH | [docs/kubernetes.md](docs/kubernetes.md) |
