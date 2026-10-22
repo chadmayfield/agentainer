@@ -13,9 +13,9 @@ Agents see only what you mount and the credentials you pass in, and the same ima
 
 You need Podman or Docker. The launcher [`bin/agentainer`](bin/agentainer) is a POSIX shell script.
 
-No image is published to `ghcr.io/chadmayfield/agentainer` until the first release. Until then, build it with `scripts/build.sh`, then `export AGENTAINER_IMAGE=localhost/agentainer:dev` or pass `--image localhost/agentainer:dev` to `up`.
+Before starting, set `AGENTAINER_IMAGE` to a published image's full registry reference and version tag, following [release versions](docs/versions.md#releases). To build locally, use `scripts/build.sh`, then `export AGENTAINER_IMAGE=localhost/agentainer:dev` or pass `--image localhost/agentainer:dev` to `up`.
 
-Development prereleases have explicit version tags, such as `0.1.0-dev.20261019.1`. Set `AGENTAINER_IMAGE` to that full registry reference after it is published ([release versions](docs/versions.md#releases)). The launcher defaults to `latest`, which is published only for stable versions.
+Development prereleases have explicit version tags, such as `0.1.0-dev.20261019.1`. The launcher defaults to `latest`, which is published only for stable versions.
 
 ```sh
 mkdir -p ~/.config/agentainer
@@ -35,6 +35,7 @@ Start an agent in a tmux window (`claude`, `codex`, `agy` or `opencode`). Close 
 | Signing in to each agent, which Claude login wins, GitHub tokens | [docs/logins.md](docs/logins.md) |
 | Seeded shell, Git, tmux, Vim, EditorConfig, agent settings and Ayu-inspired Agentainer colors | [docs/defaults.md](docs/defaults.md) |
 | Your own configs, bind-mounted homes, separate test homes and custom images | [docs/customization.md](docs/customization.md) |
+| Project-local Python tests and linting, JavaScript tooling and lockfiles | [docs/project-tools.md](docs/project-tools.md) |
 | Optional plugins for Claude Code, Codex, OpenCode and Antigravity | [docs/plugins.md](docs/plugins.md) |
 | The shared `AGENTS.md`, MCP servers, tools that agents install, OpenRouter | [docs/configuration.md](docs/configuration.md) |
 | Kubernetes with ContainerSSH | [docs/kubernetes.md](docs/kubernetes.md) |

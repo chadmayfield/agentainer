@@ -1,0 +1,75 @@
+# Project-local tooling
+
+Run these commands inside Agentainer, from the project root under `/workspace`. Follow an existing project's dependency files, lockfile and setup instructions. Each new-project example below assumes its own empty directory.
+
+The image supplies Python, uv, Node.js and npm. The examples install development dependencies into the project. They do not change Agentainer's image pins or require sudo. Initial package resolution and uncached downloads need network access ([uv projects](https://docs.astral.sh/uv/guides/projects/), [npm install](https://docs.npmjs.com/cli/v9/commands/npm-install/)).
+
+## Python tests and linting with uv
+
+For a new Python project, create its dependency declaration and add pytest and Ruff to the development group:
+
+```sh
+uv init --bare --vcs none
+uv add --dev pytest ruff
+mkdir -p tests
+cat > tests/test_example.py <<'PY'
+def test_addition():
+    assert 2 + 2 == 4
+PY
+uv run --locked pytest
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+```
+
+`uv add` updates `pyproject.toml` and resolves exact versions in `uv.lock`. The project environment is `.venv`. Keep `pyproject.toml` and `uv.lock` in version control; leave `.venv` out. See [dependency management](https://docs.astral.sh/uv/guides/projects/#managing-dependencies) and [Ruff's tutorial](https://docs.astral.sh/ruff/tutorial/).
+
+For an existing uv project that declares pytest and Ruff, install its locked dependencies and run its checks:
+
+```sh
+uv sync --locked
+uv run --locked pytest
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+```
+
+`--locked` rejects a missing or stale lockfile instead of updating it. It does not force offline operation. Use `uv add` when deliberately changing dependencies, then review the declaration and lockfile together ([locking and syncing](https://docs.astral.sh/uv/concepts/projects/sync/)).
+
+The example uses the image's Python. An existing project can require a different Python version; follow its runtime requirements. Ubuntu's Python rejects global and `--user` pip installs outside a virtual environment, so use the project's uv workflow or venv ([Python packaging and tool persistence](configuration.md#tools-that-agents-install)).
+
+## JavaScript dependencies and package-manager versions
+
+For a new npm project, record the npm version in use, add TypeScript as an exact development dependency, and create a test with Node's built-in test runner:
+
+```sh
+npm init --yes
+npm pkg set "packageManager=npm@$(npm --version)" 'scripts.test=node --test'
+npm install --save-dev --save-exact typescript
+mkdir -p tests
+cat > tests/example.test.mjs <<'JS'
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+test('addition', () => {
+  assert.equal(2 + 2, 4);
+});
+JS
+npm exec -- tsc --version
+npm test
+```
+
+Keep `package.json`, `package-lock.json` and the tests in version control; leave `node_modules` out. `--save-exact` records the selected dependency version without a range. `npm exec` runs the local TypeScript compiler in this example. See [npm install](https://docs.npmjs.com/cli/v9/commands/npm-install/), [npm pkg](https://docs.npmjs.com/cli/v9/commands/npm-pkg/) and [Node's test runner](https://github.com/nodejs/node/blob/v22.x/doc/api/test.md).
+
+For an existing npm project with a committed lockfile and a test script:
+
+```sh
+npm ci
+npm test
+```
+
+`npm ci` requires the lockfile to agree with `package.json`, replaces `node_modules` and leaves the dependency declarations and lockfile unchanged. Use `npm install` for deliberate dependency changes. Keep any project-specific install flags in the project's configuration so local and CI installs agree ([npm ci](https://docs.npmjs.com/cli/v9/commands/npm-ci/)).
+
+The `packageManager` field records the project's expected package-manager version. Running plain `npm` uses the executable on `PATH`; the field alone does not switch it. Check `npm --version` against the project's requirement. Corepack documents version selection for npm, pnpm and Yarn in its [project configuration](https://github.com/nodejs/corepack#when-authoring-packages). Follow an existing pnpm or Yarn project's setup rather than creating an npm lockfile beside its own lockfile.
+
+## Persistence
+
+`.venv` and `node_modules` live with the project under the workspace mount. `AGENTAINER_TOOLS=persist` controls supported user-wide tool installations separately. See [customization](customization.md#project-dependencies-and-installed-tools) for recreation and runtime-change guidance. A persistent home does not preserve dependencies installed only in a container's writable layer.

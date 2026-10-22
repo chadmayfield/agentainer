@@ -103,3 +103,11 @@ Rebuild when you want different defaults for new homes or a different bundled to
 - Build your own tag with `sh scripts/build.sh --tag localhost/my-agentainer:dev` and select it with `AGENTAINER_IMAGE` or `bin/agentainer up --image` ([build script](../scripts/build.sh)).
 
 Rebuilding does not replace existing home files. For user-installed tools that should survive container recreation, use `AGENTAINER_TOOLS=persist` in the runtime env file before creating the container. This applies to the supported user package managers, not OS packages installed with `sudo apt`. See [tools that agents install](configuration.md#tools-that-agents-install).
+
+## Project dependencies and installed tools
+
+Use a project's dependency files and lockfile for its tests, linters and application libraries. [Project-local tooling](project-tools.md) gives Python/uv and JavaScript/npm examples. Agentainer does not create these files or install project dependencies at startup.
+
+Project environments such as `.venv` and `node_modules` live under the project directory. Under `/workspace`, their files are on the workspace bind mount, independently of `AGENTAINER_TOOLS`. Recreate them from the lockfile when changing the container architecture or Python/Node runtime; dependencies may contain native binaries ([uv environment portability](https://docs.astral.sh/uv/concepts/projects/layout/#the-project-environment), [npm platform selection](https://docs.npmjs.com/cli/v9/configuring-npm/package-json#cpu)).
+
+Use `AGENTAINER_TOOLS=persist` for the supported user-installed commands you want across projects. It preserves their installation roots on the home volume; it does not record the install commands or reproduce the same tool versions in another home. Keep those choices in your own setup instructions or custom image. Caches and installed environments can be rebuilt; keep the project's dependency declarations and lockfiles in version control.
