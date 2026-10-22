@@ -41,7 +41,7 @@ Start an agent in a tmux window (`claude`, `codex`, `agy` or `opencode`). Close 
 | Kubernetes with ContainerSSH | [docs/kubernetes.md](docs/kubernetes.md) |
 | What the container isolates, and vulnerability reports | [docs/security.md](docs/security.md) |
 | Pinned versions, scheduled updates, releases and signatures | [docs/versions.md](docs/versions.md) |
-| Error messages and their fixes | [docs/troubleshooting.md](docs/troubleshooting.md) |
+| Offline diagnostics with `agentainer doctor`, error messages and fixes | [docs/troubleshooting.md](docs/troubleshooting.md) |
 
 To report a vulnerability, follow [SECURITY.md](SECURITY.md). To contribute, read [CONTRIBUTING.md](CONTRIBUTING.md).
 

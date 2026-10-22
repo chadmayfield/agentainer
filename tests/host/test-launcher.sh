@@ -174,6 +174,12 @@ assert_eq "update with a missing env file changes nothing" "" "$(ins update noen
 has_line "up records a relative env file as an absolute path" "io.github.chadmayfield.agentainer.env-file=$(cd "$T" && pwd -P)/env" \
 	"$(cd "$T" && AGENTAINER_ENV_FILE="env" pod up "$T/my code" 2>/dev/null)"
 assert_contains "usage lists start and update" "start [N] | update [N]" "$(sh "$L" 2>&1 || true)"
+assert_eq "doctor runs diagnostics in the default container" "exec|agentainer|agentainer-doctor" "$(pod doctor | paste -sd '|' -)"
+assert_eq "doctor forwards JSON mode without a TTY" "exec|agentainer|agentainer-doctor|--json" "$(pod doctor --json | paste -sd '|' -)"
+assert_eq "doctor selects a named container" "exec|cx-project|agentainer-doctor|--json" "$(pod doctor cx-project --json | paste -sd '|' -)"
+rc=0
+out=$(pod doctor cx-project --json extra 2>&1) || rc=$?
+assert_eq "doctor rejects extra arguments" 2 "$rc"
 
 assert_contains "unknown command fails" "usage" "$(sh "$L" bogus 2>&1 || true)"
 assert_contains "no runtime found is an error" "neither podman nor docker" "$(AGENTAINER_RUNTIME='' PATH=/nonexistent /bin/sh "$L" status 2>&1 || true)"

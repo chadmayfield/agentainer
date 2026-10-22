@@ -13,6 +13,7 @@
 | `agentainer update [N]` | Pulls the image the container was created from and recreates the container with the same options |
 | `agentainer down [N]` | Removes the container. The home volume stays. |
 | `agentainer status` | Lists agentainer containers |
+| `agentainer doctor [N] [--json]` | Runs offline diagnostics in the running container, without a TTY; see [diagnostic checks and exit codes](troubleshooting.md#offline-diagnostics). |
 
 N defaults to `agentainer`. These variables override the launcher's defaults:
 

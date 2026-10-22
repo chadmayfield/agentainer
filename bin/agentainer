@@ -14,6 +14,7 @@ usage() {
 	cat >&2 <<'EOF'
 usage: agentainer up [--name N] [--sudo] [--image I] [--publish MAPPING ...] [--] [DIR]
        agentainer attach [N] | shell [N] | start [N] | update [N] | down [N] | status
+       agentainer doctor [N] [--json]
 If a container already exists, use "agentainer down N" first (your home volume is kept).
 update pulls the image and recreates N with the options and DIR of its "up".
 --publish (-p): [IPv4:]HOST_PORT:CONTAINER_PORT[/tcp|udp]; defaults to 127.0.0.1 and tcp.
@@ -99,7 +100,7 @@ cmd=${1:-}
 [ -n "$cmd" ] || usage
 shift
 case "$cmd" in
-up | attach | shell | start | update | down | status) ;;
+up | attach | shell | start | update | down | status | doctor) ;;
 *) usage ;;
 esac
 R=$(runtime)
@@ -326,6 +327,20 @@ update)
 	run "$R" rm "$backup"
 	;;
 start) run "$R" start "${1:-agentainer}" ;;
+doctor)
+	name=agentainer
+	case "${1:-}" in
+	'' | --json) ;;
+	-*) usage ;;
+	*)
+		name=$1
+		shift
+		;;
+	esac
+	[ "$#" -le 1 ] || usage
+	if [ "$#" = 1 ] && [ "$1" != --json ]; then usage; fi
+	run "$R" exec "$name" agentainer-doctor "$@"
+	;;
 attach) run "$R" exec -it "${1:-agentainer}" tmux new-session -A -s main ;;
 shell) run "$R" exec -it "${1:-agentainer}" bash -l ;;
 down) run "$R" rm -f "${1:-agentainer}" ;;
