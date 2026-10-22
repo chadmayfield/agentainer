@@ -4,6 +4,15 @@ Agentainer seeds these files into a new home and leaves existing files unchanged
 
 No default contains an account, token, private endpoint or signing key. The Git identity and signing examples are comments. Runtime environment variables can still supply Git identity and enable the GitHub credential helper ([logins](logins.md)).
 
+## Contents
+
+- [Agentainer colors](#agentainer-colors)
+- [Shell and command-line tools](#shell-and-command-line-tools)
+- [Tmux](#tmux)
+- [Vim and EditorConfig](#vim-and-editorconfig)
+- [Agent configurations](#agent-configurations)
+- [Existing homes](#existing-homes)
+
 ## Agentainer colors
 
 The Agentainer colorscheme is inspired by [Ayu Dark](https://github.com/ayu-theme/ayu-colors/blob/master/themes/dark.yaml). It uses a pure black background, a subtle charcoal tmux bar, and a slate-blue Vim status line. It is a local adaptation, not the upstream Ayu theme. OpenCode uses its own built-in Ayu theme.

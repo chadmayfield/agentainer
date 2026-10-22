@@ -4,6 +4,15 @@ Run these commands inside Agentainer as the regular container user. Choose the p
 
 Keep the same persistent home when recreating the container to retain home-based plugin settings and files. Try plugins with a [separate test home](customization.md#image-upgrades-and-separate-test-homes) first. External dependencies and account connections may need separate setup; a persistent home does not preserve software installed elsewhere in the container.
 
+## Contents
+
+- [Recommended starting points](#recommended-starting-points)
+- [Claude Code](#claude-code)
+- [Codex](#codex)
+- [OpenCode](#opencode)
+- [Antigravity](#antigravity)
+- [Verification limits](#verification-limits)
+
 ## Recommended starting points
 
 For Codex, OpenCode and Antigravity, [Addy Osmani's agent-skills](https://github.com/addyosmani/agent-skills) provides these reusable workflows:

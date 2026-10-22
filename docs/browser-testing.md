@@ -2,6 +2,14 @@
 
 Install Playwright in the project that needs it. Agentainer supplies Node.js and npm; browsers and their OS libraries are optional. Playwright supports Ubuntu 26.04 on amd64 and arm64 ([system requirements](https://playwright.dev/docs/intro#system-requirements)). Follow an existing project's package-manager instructions and lockfile instead of creating a second setup.
 
+## Contents
+
+- [Allow OS dependency installation](#allow-os-dependency-installation)
+- [Install the project dependency and browser](#install-the-project-dependency-and-browser)
+- [Verify execution](#verify-execution)
+- [Updates, recreation and cleanup](#updates-recreation-and-cleanup)
+- [Verify the Agentainer instructions](#verify-the-agentainer-instructions)
+
 ## Allow OS dependency installation
 
 An agent can run the project installation, browser download and smoke test below. It cannot install missing OS libraries under the default launcher security settings. Have the user enable sudo for that setup or supply a custom image with the libraries already installed. Browser binaries must match the project's Playwright version; downloading a browser alone does not supply its OS dependencies ([Playwright browser requirements](https://playwright.dev/docs/browsers)).

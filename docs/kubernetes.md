@@ -8,6 +8,17 @@
 
 This example has not been deployed to a cluster yet.
 
+## Contents
+
+- [Install](#install)
+- [Logging in](#logging-in)
+- [Limits](#limits)
+- [SSH port access](#ssh-port-access)
+- [Seeding a new home](#seeding-a-new-home)
+- [Network policy](#network-policy)
+- [Upgrading and removing](#upgrading-and-removing)
+- [More than one user](#more-than-one-user)
+
 ## Install
 
 Before you apply, set `loadBalancerSourceRanges` in [`containerssh/service.yaml`](../deploy/kubernetes/containerssh/service.yaml) to your client range, block node ports with a firewall (see [SSH port access](#ssh-port-access)), and pin the image in [`agentainer/kustomization.yaml`](../deploy/kubernetes/agentainer/kustomization.yaml) (`images`, `newTag`). The example follows `latest`.

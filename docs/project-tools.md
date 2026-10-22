@@ -4,6 +4,17 @@ Run these commands inside Agentainer, from the project root under `/workspace`. 
 
 The image supplies Python, uv, Node.js and npm. The examples install development dependencies into the project. They do not change Agentainer's image pins or require sudo. Initial package resolution and uncached downloads need network access ([uv projects](https://docs.astral.sh/uv/guides/projects/), [npm install](https://docs.npmjs.com/cli/v9/commands/npm-install/)).
 
+## Contents
+
+- [Python tests and linting with uv](#python-tests-and-linting-with-uv)
+- [JavaScript dependencies and package-manager versions](#javascript-dependencies-and-package-manager-versions)
+- [Language servers](#language-servers)
+- [Browser tests](#browser-tests)
+- [Native builds](#native-builds)
+- [PostgreSQL scripts](#postgresql-scripts)
+- [Kubernetes and Helm clients](#kubernetes-and-helm-clients)
+- [Persistence](#persistence)
+
 ## Python tests and linting with uv
 
 For a new Python project, create its dependency declaration and add pytest and Ruff to the development group:

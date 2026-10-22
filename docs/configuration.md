@@ -2,6 +2,14 @@
 
 [Default configuration](defaults.md) covers the seeded shell, Git, tmux, Vim, EditorConfig and agent settings. Existing user files are preserved.
 
+## Contents
+
+- [AGENTS.md](#agentsmd)
+- [MCP servers](#mcp-servers)
+- [Tools that agents install](#tools-that-agents-install)
+- [OpenRouter](#openrouter)
+- [Startup messages](#startup-messages)
+
 ## AGENTS.md
 
 You keep one instruction file, `~/.agentainer/AGENTS.md`, and every agent reads it:

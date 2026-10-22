@@ -2,6 +2,12 @@
 
 To report a vulnerability in Agentainer itself, follow [SECURITY.md](../SECURITY.md).
 
+## Contents
+
+- [What the container isolates](#what-the-container-isolates)
+- [Agent permissions](#agent-permissions)
+- [Vulnerability reports](#vulnerability-reports)
+
 ## What the container isolates
 
 The container keeps agents away from host files outside the mounts, host credentials you do not pass in, and other host processes.

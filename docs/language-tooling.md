@@ -4,6 +4,16 @@ Language servers provide navigation, completion and diagnostics through an edito
 
 These are optional user installations. They do not change the image's pins or install anything at startup. Initial installation needs network access. The examples use the bundled Go, Rust and Node.js runtimes, and run as `agent` without sudo.
 
+## Contents
+
+- [Preserve user-installed tools](#preserve-user-installed-tools)
+- [Go with gopls](#go-with-gopls)
+- [Python with Pyright](#python-with-pyright)
+- [TypeScript 7 with its native server](#typescript-7-with-its-native-server)
+  - [TypeScript 6 compatibility fallback](#typescript-6-compatibility-fallback)
+- [Rust with rust-analyzer](#rust-with-rust-analyzer)
+- [Updates and verification](#updates-and-verification)
+
 ## Preserve user-installed tools
 
 Set `AGENTAINER_TOOLS=persist` in the container's runtime environment before creating it. This keeps the supported Go and npm installation roots under the persistent home. Changing this setting does not change an existing container's environment. See [tool persistence](configuration.md#tools-that-agents-install) and [container recreation](customization.md#image-upgrades-and-separate-test-homes).

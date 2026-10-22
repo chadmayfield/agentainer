@@ -1,5 +1,16 @@
 # Running Agentainer with Podman or Docker
 
+## Contents
+
+- [The launcher](#the-launcher)
+- [Development server ports](#development-server-ports)
+- [Without the launcher](#without-the-launcher)
+- [Container health](#container-health)
+- [sudo](#sudo)
+- [File ownership](#file-ownership)
+- [Other options](#other-options)
+- [Upgrading](#upgrading)
+
 ## The launcher
 
 [`bin/agentainer`](../bin/agentainer) wraps the `run` and `exec` commands below. It uses Podman when it finds it, otherwise Docker, and prints each command before it runs it.

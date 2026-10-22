@@ -1,5 +1,10 @@
 # Troubleshooting
 
+## Contents
+
+- [Offline diagnostics](#offline-diagnostics)
+- [Common problems](#common-problems)
+
 ## Offline diagnostics
 
 From the host, check the running container with:

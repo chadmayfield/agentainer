@@ -1,5 +1,12 @@
 # Versions, updates and releases
 
+## Contents
+
+- [Pinned inputs](#pinned-inputs)
+- [Agents do not update themselves](#agents-do-not-update-themselves)
+- [Scheduled updates](#scheduled-updates)
+- [Releases](#releases)
+
 ## Pinned inputs
 
 [`versions.env`](../versions.env) pins every input of the image: the base image digest, the apt snapshot date, each agent and tool version, and the checksum of every download. The build checks each download against it. The one exception is the Rust toolchain: `rustup-init` downloads the components and checks each against the hashes in Rust's own channel manifest.

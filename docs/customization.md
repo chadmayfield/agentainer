@@ -2,6 +2,16 @@
 
 Keep personal configuration in the persistent container home, `/home/agent`. You can edit it without rebuilding the image. Agentainer seeds missing files on startup and keeps existing files. See [default configuration](defaults.md) for the files it supplies and [upgrade behavior](running.md#upgrading) for the limited settings startup manages.
 
+## Contents
+
+- [Choose a persistent home](#choose-a-persistent-home)
+  - [Named volume](#named-volume)
+  - [Host directory](#host-directory)
+- [Use your own configuration files](#use-your-own-configuration-files)
+- [Image upgrades and separate test homes](#image-upgrades-and-separate-test-homes)
+- [Customize the image itself](#customize-the-image-itself)
+- [Project dependencies and installed tools](#project-dependencies-and-installed-tools)
+
 ## Choose a persistent home
 
 Both methods survive container removal and recreation:
