@@ -363,8 +363,19 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "prerelease=$(python3 "$parser" prerelease "$v")" >> "$GITHUB_OUTPUT"
 
-  publish:
+  authorize-release:
     needs: version
+    if: needs.version.outputs.version != ''
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    environment: release
+    steps:
+      - name: Confirm publication approval
+        run: echo "Release publication approved."
+
+  publish:
+    needs: [version, authorize-release]
     if: needs.version.outputs.version != ''
     strategy:
       matrix:
