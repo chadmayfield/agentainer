@@ -227,6 +227,7 @@ COPY --from=agy /usr/local/bin/agy /usr/local/bin/agy
 COPY --from=opencode /usr/local/bin/opencode /usr/local/bin/opencode
 
 ENV RUSTUP_HOME=/opt/rustup \
+	GOTOOLCHAIN=local \
 	PATH=/usr/local/go/bin:/opt/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 COPY versions.env /usr/local/share/agentainer/versions.env

@@ -31,6 +31,8 @@ gopls version
 
 `go install` compiles the selected module and installs its executable under the image's `GOBIN`, which is already on `PATH`. It does not add a dependency to the current project when a version suffix is supplied. `GOTOOLCHAIN=local` prevents an automatic Go compiler download. If a future gopls release requires newer Go, choose a compatible gopls release or a newer Agentainer image. See [gopls installation](https://go.dev/gopls/#installation), [go install](https://pkg.go.dev/cmd/go#hdr-Compile_and_install_packages_and_dependencies) and [Go toolchain selection](https://go.dev/doc/toolchain).
 
+The image defaults to `GOTOOLCHAIN=local`. To let a project select and download newer Go toolchains, opt in for that command with `GOTOOLCHAIN=auto go test ./...`, or set `GOTOOLCHAIN=auto` in the container's runtime environment. Downloaded toolchains are not the image's pinned compiler ([Go toolchain selection](https://go.dev/doc/toolchain#select)).
+
 Configure the client to launch `gopls serve`. Its Go environment must match the project's module and workspace setup. See [gopls editor configuration](https://go.dev/gopls/#editors).
 
 ## Python with Pyright
