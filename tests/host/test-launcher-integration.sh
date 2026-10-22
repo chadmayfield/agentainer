@@ -50,7 +50,14 @@ chmod +x "$wrapper"
 export AGENTAINER_RUNTIME="$wrapper" AGENTAINER_IMAGE="$IMAGE"
 export AGENTAINER_HOME_VOLUME="$volume" AGENTAINER_ENV_FILE="$tmp/env"
 launch() { sh "$repo/bin/agentainer" "$@"; }
-ready() { "$real_runtime" exec "$name" test -L /var/lib/agentainer/active; }
+ready() {
+	"$real_runtime" exec "$name" sh -ec '
+if test -f /usr/local/share/agentainer/startup-readiness-v1; then
+  test -f /var/lib/agentainer/ready
+else
+  test -L /var/lib/agentainer/active
+fi'
+}
 host_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 served() {
 	python3 - "$host_port" <<'PY'

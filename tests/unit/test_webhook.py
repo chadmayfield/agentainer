@@ -28,6 +28,11 @@ CERT = "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5
 
 
 class WebhookTests(unittest.TestCase):
+    def test_non_utf8_key_comment_does_not_disable_valid_keys(self):
+        with tempfile.NamedTemporaryFile("wb") as file:
+            file.write(KEY.encode() + b" invalid-comment-\xe9\n")
+            file.flush()
+            self.assertIn(" ".join(KEY.split()[:2]), webhook.load_keys(file.name))
     @classmethod
     def setUpClass(cls):
         cls.keys = tempfile.NamedTemporaryFile("w", delete=False)

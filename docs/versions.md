@@ -81,3 +81,5 @@ Before moving version or `latest` tags, [`tests/host/test-published-image.py`](.
 - SBOM and provenance descriptors bound to each platform manifest, followed by a pull and native startup by the verified index digest ([attestation storage](https://docs.docker.com/build/metadata/attestations/attestation-storage/)).
 
 These checks enforce the named fields; they do not establish a SLSA level or validate every SBOM package entry. Fixtures exercise rejection cases in pull requests. The [release workflow for `v0.1.0-dev.20261019.1`](https://github.com/chadmayfield/agentainer/actions/runs/39373669375) completed signing, attestation storage and registry verification. Each later release must pass the same checks for its own digest.
+
+The resolver follows current upstream release pointers without a minimum release age. Proposed binaries execute in build and test jobs before a bump pull request is reviewed. Checksums establish byte identity, not that an upstream release is safe. Review upstream changes before merging; a minimum release age and additional publisher-verification requirements are policy decisions.

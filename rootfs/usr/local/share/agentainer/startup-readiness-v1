@@ -1,0 +1,1 @@
+Startup completes when /var/lib/agentainer/ready exists.

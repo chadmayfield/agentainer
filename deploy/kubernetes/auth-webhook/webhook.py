@@ -44,7 +44,7 @@ def load_keys(path):
     ("restrict ssh-ed25519 AAAA...") is skipped: the webhook cannot enforce from=,
     command= or restrict, and accepting the key without them would widen access."""
     keys = set()
-    with open(path) as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             parts = line.split()
             if len(parts) >= 2 and parts[0] in KEY_TYPES:

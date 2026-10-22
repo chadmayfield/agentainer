@@ -20,6 +20,7 @@ scripts/build.sh                            # builds localhost/agentainer:dev fo
 sh tests/run.sh                             # container tests against that image
 sh tests/lint.sh                            # shellcheck and shfmt, run from the image
 python3 -m unittest discover -s tests/unit  # unit tests, no container needed
+sh tests/14-unit-linux.sh                   # image Python and Linux-only unit modules
 sh tests/host/test-launcher.sh              # launcher tests, no container needed
 sh tests/host/test-build-script.sh          # scripts/build.sh tests, no container needed
 sh tests/host/test-fetch.sh                 # fetch.sh and Rust manifest check tests, no container needed

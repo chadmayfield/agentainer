@@ -7,7 +7,7 @@ assert_eq "uid is 1000" "1000" "$(run_in -- id -u)"
 assert_eq "gid is 1000" "1000" "$(run_in -- id -g)"
 # shellcheck disable=SC2016 # expands in the container
 assert_eq "home is /home/agent" "/home/agent" "$(run_in -- sh -c 'echo $HOME')"
-assert_eq "agent has no extra groups (no adm, sudo)" "agent" "$(run_in -- id -Gn)"
+assert_eq "agent belongs only to the agent group" "agent" "$(run_in -- id -Gn)"
 assert_eq "home is owned by agent" "agent:agent" "$(run_in -- stat -c %U:%G /home/agent)"
 assert_eq "no ubuntu user" "rc=2" "$(run_in -- sh -c 'getent passwd ubuntu; echo rc=$?')"
 # shellcheck disable=SC2016 # expands in the container

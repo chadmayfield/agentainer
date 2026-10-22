@@ -38,9 +38,11 @@ Define servers once in `~/.agentainer/mcp.json`, in the `mcpServers` format most
 ```json
 {"mcpServers": {
   "remote": {"url": "https://mcp.example.com/mcp", "headers": {"Authorization": "Bearer ${EXAMPLE_TOKEN}"}},
-  "everything": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]}
+  "everything": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything@2.0.0"]}
 }}
 ```
+
+The sample fixes the package version using [published npm metadata](https://registry.npmjs.org/@modelcontextprotocol/server-everything/2.0.0). Stdio MCP servers execute code with the filesystem access and environment their agent gives them. Review the server and its dependencies before adding it. Use explicit package versions or a locked local installation.
 
 `agentainer-mcp sync` writes them into each agent's own configuration:
 

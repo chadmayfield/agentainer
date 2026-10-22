@@ -27,6 +27,7 @@ scripts/build.sh                            # build localhost/agentainer:dev
 sh tests/run.sh [tests/NN-name.sh ...]      # container tests
 sh tests/lint.sh                            # shellcheck and shfmt
 python3 -m unittest discover -s tests/unit
+sh tests/14-unit-linux.sh                   # image Python and Linux-only unit modules
 sh tests/host/test-launcher.sh
 sh tests/host/test-build-script.sh
 sh tests/host/test-fetch.sh

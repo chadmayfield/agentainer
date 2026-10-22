@@ -174,10 +174,6 @@ jobs:
       - name: Linux host checks with Docker
         run: |
           set -eu
-          # sudo blocked by no-new-privileges=true, allowed without it
-          if docker run --rm --security-opt no-new-privileges=true "$IMAGE" sudo -n true; then
-            echo "FAIL: sudo worked with no-new-privileges"; exit 1; fi
-          docker run --rm "$IMAGE" sudo -n true
           # rootful Docker writes as UID 1000 (a documented limitation, see docs/running.md)
           mkdir -p ws && sudo chmod 777 ws && docker run --rm -v "$PWD/ws:/workspace" "$IMAGE" touch /workspace/d
           echo "docker-created file owner: $(stat -c %u ws/d) (runner uid $(id -u))" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -258,7 +254,6 @@ jobs:
       - name: Linux host checks with rootless Podman
         run: |
           set -eu
-          podman run --rm --userns=keep-id:uid=1000,gid=1000 --security-opt no-new-privileges "$IMAGE" sh -c '! sudo -n true'
           # bind-mount ownership: rootless Podman keeps the runner user's UID
           mkdir -p wsp && podman run --rm --userns=keep-id:uid=1000,gid=1000 -v "$PWD/wsp:/workspace" "$IMAGE" touch /workspace/p
           test "$(stat -c %u wsp/p)" = "$(id -u)"

@@ -211,7 +211,7 @@ wait_ready() {
 		running=$("$R" inspect --type container --format '{{.State.Running}}' -- "$name") || return 1
 		[ "$running" = true ] || return 1
 		if "$R" exec "$name" sh -ec '
-if grep -q "^# Startup readiness marker" /usr/local/bin/agentainer-entrypoint; then
+if test -f /usr/local/share/agentainer/startup-readiness-v1; then
   test -f /var/lib/agentainer/ready
 else
   test -L /var/lib/agentainer/active

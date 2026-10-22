@@ -37,7 +37,20 @@ This table tracks the 77 entries reviewed at commit `b87d7b5`. Duplicate entries
 | 29 | RT-5 | Clarified raw-image sudo behavior. A different sudo architecture is deferred. |
 | 30 | RT-7 | Documented sync coordination limits. Lost writes by live agents are not verified. |
 
+| 31 | RT-ESCAPE-2 | Shared-home shell and sudo trust is documented with entry 1. |
+| 32 | TEST-2 | Positional argument regressions cover the fix from entry 8. |
+| 33 | TEST-3 | Status derives its effective mode from the active root; tests assert the root. |
+| 34 | TEST-4 | Readiness uses a versioned capability file, with current/legacy protocol tests. |
+| 35 | TEST-5 | Sudo restrictions run in the local container suite; the group assertion describes groups only. |
+| 36 | TEST-6 | Added a container runner for modules skipped on macOS and listed it in contributor commands. |
+| 37 | rt-host-4 | Documented literal env-file syntax and bare-name imports. |
+| 38 | rt-host-5 | MCP example uses the verified published package version 2.0.0 and explains code execution. |
+| 39 | rt-k8s-1 | Key-file decoding tolerates non-UTF-8 comments. |
+| 40 | rt-supply-2 | Documented pre-review execution and the absence of an age delay. Release-age and publisher-verification policy is deferred. |
+
 ## Decisions left open
+
+- Whether to impose a release-age delay, how long it should be, and which publisher signatures should be required.
 
 - Whether to change the documented passwordless-sudo architecture.
 - Whether to require isolated config roots for simultaneously running agents. A lost-update incident is not verified.
