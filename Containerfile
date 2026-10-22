@@ -149,7 +149,6 @@ RUN [ -n "${BASH_VERSION:-}" ] && [[ $- == *e* ]] && set -o | grep -Eq '^pipefai
 	&& mkdir -p /usr/local/share/agentainer \
 	&& echo "bash ${BASH_VERSION} errexit pipefail" > /usr/local/share/agentainer/build-shell.txt
 
-COPY --from=certs /etc/ssl/certs/ca-certificates.crt /tmp/agentainer-build/ca.crt
 COPY build/apt-packages.txt build/check-apt-snapshot.py /tmp/agentainer-build/
 
 # apt packages from the pinned Ubuntu snapshot.
@@ -164,7 +163,10 @@ COPY build/apt-packages.txt build/check-apt-snapshot.py /tmp/agentainer-build/
 # - check-apt-snapshot.py fails the build if any installed version is not in the snapshot.
 # - The apt and dpkg logs hold build times and are removed.
 ARG APT_SNAPSHOT
-RUN test -n "${APT_SNAPSHOT}" \
+# The bootstrap bundle is available only during this RUN, outside final image layers.
+# https://docs.docker.com/reference/dockerfile/#run---mounttypebind
+RUN --mount=type=bind,from=certs,source=/etc/ssl/certs/ca-certificates.crt,target=/tmp/agentainer-build/ca.crt \
+    test -n "${APT_SNAPSHOT}" \
 	&& export DEBIAN_FRONTEND=noninteractive \
 	&& printf 'Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute resolute-updates resolute-backports\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\nSnapshot: %s\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\nSnapshot: %s\n' "${APT_SNAPSHOT}" "${APT_SNAPSHOT}" > /etc/apt/sources.list.d/ubuntu.sources \
 	&& APT="apt-get -o Acquire::https::CAInfo=/tmp/agentainer-build/ca.crt -o APT::Get::Always-Include-Phased-Updates=true" \

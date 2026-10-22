@@ -32,6 +32,23 @@ class EnvFileTests(unittest.TestCase):
 
 
 class ParserTests(unittest.TestCase):
+    def test_bsd_and_per_asset_published_checksums(self):
+        checksum = "a" * 64
+        for filename, contents in (("checksums-bsd", "SHA256 (tool.tar.gz) = " + checksum),
+                                   ("tool.tar.gz.sha256", checksum + "  tool.tar.gz"),
+                                   ("codex-package_SHA256SUMS", checksum + "  tool.tar.gz")):
+            release = {"tag_name": "v1", "assets": [
+                {"name": "tool.tar.gz", "digest": "sha256:" + checksum},
+                {"name": filename, "browser_download_url": "https://example.com/sums"}]}
+            self.assertEqual(bv.asset_sha256(release, "tool.tar.gz", fetch_text=lambda url: contents), checksum)
+
+    def test_published_checksum_must_agree_with_asset_digest(self):
+        release = {"tag_name": "v1", "assets": [
+            {"name": "tool.tar.gz", "digest": "sha256:" + "a" * 64},
+            {"name": "checksums.txt", "browser_download_url": "https://example.com/checksums.txt"}]}
+        with self.assertRaises(bv.LookupFailed):
+            bv.asset_sha256(release, "tool.tar.gz", fetch_text=lambda url: "b" * 64 + "  tool.tar.gz\n")
+
     def test_buildkit_skips_frontend_tags_and_prereleases(self):
         releases = [
             {"tag_name": "dockerfile/1.28.0", "prerelease": False},

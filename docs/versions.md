@@ -83,3 +83,22 @@ Before moving version or `latest` tags, [`tests/host/test-published-image.py`](.
 These checks enforce the named fields; they do not establish a SLSA level or validate every SBOM package entry. Fixtures exercise rejection cases in pull requests. The [release workflow for `v0.1.0-dev.20261019.1`](https://github.com/chadmayfield/agentainer/actions/runs/39373669375) completed signing, attestation storage and registry verification. Each later release must pass the same checks for its own digest.
 
 The resolver follows current upstream release pointers without a minimum release age. Proposed binaries execute in build and test jobs before a bump pull request is reviewed. Checksums establish byte identity, not that an upstream release is safe. Review upstream changes before merging; a minimum release age and additional publisher-verification requirements are policy decisions.
+
+## Verifying a release before use
+
+Use a trusted checkout of this repository and independently installed Docker Buildx, cosign and GitHub CLI. Verify the maintainer-signed release tag with the trusted public key and fingerprint first. Obtain the full source commit from that tag and the image index digest from the registry. Review the digest before running the verifier; never substitute an unverified mutable tag afterward.
+
+```sh
+set -eu
+version=0.1.0-dev.20261019.1
+git verify-tag "v$version"
+commit=$(git rev-parse "v$version^{commit}")
+# Replace this placeholder with the release's full index digest.
+digest=sha256:REPLACE_WITH_64_HEX_DIGITS
+python3 tests/host/test-published-image.py ghcr.io/chadmayfield/agentainer "$digest" \
+  "https://github.com/chadmayfield/agentainer/.github/workflows/build.yml@refs/tags/v$version" \
+  https://token.actions.githubusercontent.com chadmayfield/agentainer "$commit" "refs/tags/v$version"
+AGENTAINER_IMAGE="ghcr.io/chadmayfield/agentainer@$digest" bin/agentainer up
+```
+
+The verifier checks cosign identities, GitHub and BuildKit provenance, both platform signatures, and SBOM descriptors. It then pulls and starts the verified digest, so run it only where you intend to execute that release. It requires registry access and GitHub authentication for attestation verification. Its commands and flags are in the [verifier source](../tests/host/test-published-image.py), [Sigstore verification instructions](https://docs.sigstore.dev/quickstart/quickstart-ci/), and [GitHub verification reference](https://cli.github.com/manual/gh_attestation_verify). The launcher does not perform these checks automatically.

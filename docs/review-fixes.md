@@ -48,6 +48,17 @@ This table tracks the 77 entries reviewed at commit `b87d7b5`. Duplicate entries
 | 39 | rt-k8s-1 | Key-file decoding tolerates non-UTF-8 comments. |
 | 40 | rt-supply-2 | Documented pre-review execution and the absence of an age delay. Release-age and publisher-verification policy is deferred. |
 
+| 41 | rt-supply-3 | Candidate and pushed-digest secret scans use an independent pinned scanner; removed implicit secret-rule overrides. |
+| 42 | rt-supply-4 | Documented consumer verification with the existing verifier and subsequent digest-pinned launch. |
+| 43 | BUILD-10 | Both build-ignore files exclude runtime env and host-key paths. |
+| 44 | BUILD-11 | Documented the intentional initial agent-owned shell seed exception. |
+| 45 | BUILD-3 | Bootstrap CA bundle uses a temporary stage bind mount instead of a final image COPY. |
+| 46 | BUILD-6 | Published GNU/BSD/per-asset SHA-256 files are checked against GitHub digests when available. Additional signature mechanisms remain deferred. |
+| 47 | BUILD-7 | Cited the official Antigravity installer beside its manifest endpoint. |
+| 48 | BUILD-8 | Made the timestamp guarantee conditional on builder support. |
+| 49 | BUILD-9 | Same documented sudo policy and deferred architecture decision as entry 29. |
+| 50 | DC-5 | Disabled checkout credential persistence in build jobs. The bump resolve job already disables it; push jobs retain it intentionally. |
+
 ## Decisions left open
 
 - Whether to impose a release-age delay, how long it should be, and which publisher signatures should be required.

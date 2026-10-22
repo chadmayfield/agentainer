@@ -41,7 +41,7 @@ Gemini CLI is not included. Google wrote: "On June 18, 2026, Gemini CLI and Gemi
 
 ## Vulnerability reports
 
-CI scans every image with trivy. A secret found in the image fails the build. Vulnerabilities are reported and do not fail it.
+CI scans candidate images and the exact pushed release digests with an independent Trivy container pinned by digest in `versions.env`. It does not execute the scanner bundled in the image under test or load a secret-rule override from the checkout. A secret fails the build or stops release promotion. Vulnerabilities are reported and do not fail it ([workflow](../.github/workflows/build.yml), [Trivy image scans](https://trivy.dev/docs/latest/target/container_image/)).
 
 - Pull requests and `develop`: the run's summary page shows counts by severity, how many have a fix, and up to 50 critical findings. The full trivy JSON is the `vulnerabilities-<arch>` artifact on that run.
 - Releases: the scan runs on the images pushed to GHCR. The release notes start with the same summary, and `vulnerabilities-amd64.json` and `vulnerabilities-arm64.json` are attached to the release.

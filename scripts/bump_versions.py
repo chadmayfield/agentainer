@@ -13,6 +13,7 @@ import re
 import subprocess
 import tempfile
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -20,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "rootfs/usr/local/l
 from release_version import version_key
 
 ARCHES = {"AMD64": "amd64", "ARM64": "arm64"}
+# Manifest paths come from DOWNLOAD_BASE_URL and MANIFEST_URL in the official installer:
+# https://antigravity.google/cli/install.sh
 AGY_MANIFEST = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_{arch}.json"
 AGY_KEYS = ("version", "url", "sha512")
 AGY_HOST = "storage.googleapis.com"
@@ -198,27 +201,41 @@ def parse_rustup_release(text):
 
 
 def asset_sha256(release, name, fetch_text=None):
-    """SHA-256 of a release asset: GitHub's per-asset digest, or else the line for
-    this asset in the release's own *checksums.txt file (older releases have no digest)."""
+    """Require published SHA-256 files to agree with GitHub's asset digest.
+
+    Projects use GNU checksum lists, BSD SHA256 lists, or per-asset .sha256 files.
+    GitHub's server-computed digest is a fallback only when no such file exists.
+    """
     tag = release.get("tag_name")
     assets = release.get("assets", [])
-    match = [a for a in assets if a["name"] == name]
-    if not match:
-        raise LookupFailed("%s: asset %s not found" % (tag, name))
+    match = [asset for asset in assets if asset["name"] == name]
+    if len(match) != 1:
+        raise LookupFailed("%s: asset %s missing or ambiguous" % (tag, name))
     digest = match[0].get("digest") or ""
-    if digest.startswith("sha256:"):
-        value = digest.split(":", 1)[1]
-        if not HEX64.match(value):
-            raise LookupFailed("%s: asset %s has a malformed digest %r" % (tag, name, digest))
-        return value
-    sums = [a for a in assets if a["name"].endswith("checksums.txt")]
-    if sums:
-        text = (fetch_text or fetch)(sums[0]["browser_download_url"])
+    value = digest.split(":", 1)[1] if digest.startswith("sha256:") else ""
+    if digest and (not digest.startswith("sha256:") or not HEX64.fullmatch(value)):
+        raise LookupFailed("%s: malformed asset digest" % tag)
+    files = [asset for asset in assets if asset["name"] == name + ".sha256"]
+    if not files:
+        files = [asset for asset in assets if asset["name"].endswith(("checksums.txt", "SHA256SUMS"))
+                 or asset["name"] in ("sha256.sum", "checksums-bsd")]
+    published = set()
+    for asset in files:
+        text = (fetch_text or fetch)(asset["browser_download_url"])
         for line in text.splitlines():
             parts = line.split()
-            if len(parts) == 2 and parts[1].lstrip("*") == name and re.match(r"^[0-9a-f]{64}$", parts[0]):
-                return parts[0]
-    raise LookupFailed("%s: no sha256 for asset %s (no digest, not in a checksums file)" % (tag, name))
+            if len(parts) == 2 and parts[1].lstrip("*") == name and HEX64.fullmatch(parts[0]):
+                published.add(parts[0])
+            bsd = re.fullmatch(r"SHA256\s+\(" + re.escape(name) + r"\) = ([0-9a-f]{64})", line)
+            if bsd:
+                published.add(bsd.group(1))
+    if files:
+        if len(published) != 1 or (digest and value not in published):
+            raise LookupFailed("%s: missing or conflicting published sha256 for %s" % (tag, name))
+        return published.pop()
+    if digest:
+        return value
+    raise LookupFailed("%s: no sha256 for asset %s" % (tag, name))
 
 
 def parse_checksum_file(text):
@@ -298,8 +315,13 @@ def r_uv():
 
 
 def r_trivy():
-    return github_tool("TRIVY", "aquasecurity/trivy", {
-        "AMD64": lambda v: "trivy_%s_Linux-64bit.tar.gz" % v, "ARM64": lambda v: "trivy_%s_Linux-ARM64.tar.gz" % v})
+    out = github_tool("TRIVY", "aquasecurity/trivy", {
+        "AMD64": lambda v: "trivy_%s_Linux-64bit.tar.gz" % v,
+        "ARM64": lambda v: "trivy_%s_Linux-ARM64.tar.gz" % v})
+    tag = out["TRIVY_VERSION"]
+    out["TRIVY_SCANNER_IMAGE"] = hub_ref("aquasec/trivy", tag, fetch_json(
+        "https://hub.docker.com/v2/repositories/aquasec/trivy/tags/" + tag))
+    return out
 
 
 def r_curlie():

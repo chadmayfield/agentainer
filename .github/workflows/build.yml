@@ -32,6 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          persist-credentials: false
           # For a pull request, HEAD is GitHub's test merge commit; depth 2 brings its parents.
           fetch-depth: 2
       - id: diff
@@ -101,6 +102,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: actionlint
         env:
           # rhysd/actionlint 1.7.12 from Docker Hub, pinned to the digest of its multi-arch index.
@@ -132,6 +135,8 @@ jobs:
       IMAGE: localhost/agentainer:dev
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build
         run: RUNTIME=docker sh scripts/build.sh --tag "$IMAGE"
       - name: Build report (versions, changed pins, size)
@@ -225,16 +230,13 @@ jobs:
           chmod 644 image.tar
           df -h /
           mounts=(-v "$PWD/image.tar:/scan/image.tar:ro")
-          extra=()
-          if [ -f trivy-secret.yaml ]; then
-            mounts+=(-v "$PWD/trivy-secret.yaml:/scan/trivy-secret.yaml:ro")
-            extra=(--secret-config /scan/trivy-secret.yaml)
-          fi
-          docker run --rm "${mounts[@]}" --entrypoint trivy "$IMAGE" \
-            image --input /scan/image.tar --scanners secret --exit-code 1 "${extra[@]}"
+          scanner=$(sed -n 's/^TRIVY_SCANNER_IMAGE=//p' versions.env)
+          test -n "$scanner"
+          docker run --rm "${mounts[@]}" "$scanner" \
+            image --input /scan/image.tar --scanners secret --exit-code 1
           # The full report is an artifact: the job summary is limited to 1 MiB.
           mkdir -p report && chmod 777 report
-          docker run --rm "${mounts[@]}" -v "$PWD/report:/report" --entrypoint trivy "$IMAGE" \
+          docker run --rm "${mounts[@]}" -v "$PWD/report:/report" "$scanner" \
             image --input /scan/image.tar --scanners vuln --exit-code 0 --format json --output /report/vulnerabilities.json
           python3 scripts/vuln_summary.py "$ARCH=report/vulnerabilities.json" >>"$GITHUB_STEP_SUMMARY"
           echo "Full report: the vulnerabilities-$ARCH artifact." >>"$GITHUB_STEP_SUMMARY"
@@ -281,10 +283,13 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - id: pins
         run: echo "buildkit=$(sed -n 's/^BUILDKIT_IMAGE=//p' versions.env)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
         with:
+          persist-credentials: false
           driver-opts: image=${{ steps.pins.outputs.buildkit }}
       - name: Compare every tool layer across two clean builds
         run: python3 tests/host/test-layer-repro.py
@@ -336,6 +341,7 @@ jobs:
         # Authorization code comes from main, never from the candidate tag.
         # https://github.com/actions/checkout#usage
         with:
+          persist-credentials: false
           ref: main
           fetch-depth: 0
       - id: ver
@@ -374,6 +380,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - id: pins
         name: Build arguments, as scripts/build.sh passes them
         # Each pin a Containerfile stage declares with ARG becomes a build argument, plus
@@ -435,7 +443,7 @@ jobs:
           path: digests/${{ matrix.arch }}
           if-no-files-found: error
           overwrite: true
-      - name: Scan the pushed image for vulnerabilities
+      - name: Scan the pushed image for secrets and vulnerabilities
         env:
           ARCH: ${{ matrix.arch }}
           REF: ghcr.io/chadmayfield/agentainer@${{ steps.build.outputs.digest }}
@@ -445,7 +453,11 @@ jobs:
           docker save -o image.tar "$REF"
           chmod 644 image.tar  # docker save writes 0600; trivy runs as UID 1000
           mkdir -p report && chmod 777 report
-          docker run --rm -v "$PWD/image.tar:/scan/image.tar:ro" -v "$PWD/report:/report" --entrypoint trivy "$REF" \
+          scanner=$(sed -n 's/^TRIVY_SCANNER_IMAGE=//p' versions.env)
+          test -n "$scanner"
+          docker run --rm -v "$PWD/image.tar:/scan/image.tar:ro" "$scanner" \
+            image --input /scan/image.tar --scanners secret --exit-code 1
+          docker run --rm -v "$PWD/image.tar:/scan/image.tar:ro" -v "$PWD/report:/report" "$scanner" \
             image --input /scan/image.tar --scanners vuln --exit-code 0 --format json \
             --output "/report/vulnerabilities-$ARCH.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
@@ -466,7 +478,7 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with: {fetch-depth: 0}
+        with: {fetch-depth: 0, persist-credentials: false}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with: {pattern: digest-*, merge-multiple: true, path: digests}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
