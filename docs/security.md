@@ -25,6 +25,8 @@ It does not isolate:
 - The host kernel. This is a container, not a VM.
 - Everything inside the container once sudo is on ([docs/running.md](running.md#sudo)).
 
+A raw image run has passwordless container sudo unless the runtime enables `no-new-privileges`. The launcher does so by default, and the Kubernetes example disables privilege escalation. Use the documented raw-run security option as well ([sudo](running.md#sudo)).
+
 The image runs as the non-root user `agent` (UID 1000), agent binaries are root-owned, and agents cannot update themselves while sudo is off.
 
 ## Agent permissions

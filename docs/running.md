@@ -45,6 +45,8 @@ For a host directory instead of the default named home volume, set `AGENTAINER_H
 - `update` pulls from a registry, so it cannot update a container that runs an image you built locally (`localhost/...`). Use `agentainer down` and `agentainer up --image ...` for those.
 - DIR must not contain `:`, because `-v` splits its value at `:`. Rename the directory to remove `:`.
 
+Home sources containing `/`, or exactly `.` or `..`, are host paths. Other values are named volumes. Use `./myhome` for a relative directory rather than `myhome`. The launcher warns if a mount exposes the host home, a parent of it, or the host root. Choose a project directory to limit access. Container names also serve as hostnames and must be at most 64 ASCII characters, starting with a letter or digit ([launcher](../bin/agentainer), [hostname limit](https://man7.org/linux/man-pages/man2/sethostname.2.html)).
+
 ## Development server ports
 
 Repeat `--publish` or `-p` before DIR to publish development servers to the host:

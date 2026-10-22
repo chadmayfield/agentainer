@@ -26,7 +26,21 @@ This table tracks the 77 entries reviewed at commit `b87d7b5`. Duplicate entries
 | 19 | DOC-4 | Clarified that server-side TLS requires additional implementation. |
 | 20 | DOC-5 | Added the explicit Codex API-key login step to the env example. |
 
+| 21 | DOC-7 | Documented host paths versus volume names and relative directory syntax. |
+| 22 | LAUNCH-2 | Warn for group/other write access as well as read access. |
+| 23 | LAUNCH-4 | Warn when mounts expose host home, its parents, or host root; retain the documented current-directory default. |
+| 24 | LAUNCH-5 | Validate names and the 64-byte hostname limit before creation. |
+| 25 | LAUNCH-7 | Resolve dot and dot-dot home sources on the client. |
+| 26 | RT-2 | Skip seeding with a warning when its lock cannot open; warn on optional ledger/stamp failures. |
+| 27 | RT-3 | Preserve dangling service configuration symlinks. |
+| 28 | RT-4 | Atomically restrict config permissions when syncing literal environment or header values. |
+| 29 | RT-5 | Clarified raw-image sudo behavior. A different sudo architecture is deferred. |
+| 30 | RT-7 | Documented sync coordination limits. Lost writes by live agents are not verified. |
+
 ## Decisions left open
+
+- Whether to change the documented passwordless-sudo architecture.
+- Whether to require isolated config roots for simultaneously running agents. A lost-update incident is not verified.
 
 - Whether to restrict major-version updates in addition to refusing downgrades.
 - Whether to change snapshot selection after reproducing a base/snapshot mismatch.

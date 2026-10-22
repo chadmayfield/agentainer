@@ -23,7 +23,7 @@ ln -sfn "$root" "$active.new.$$"
 mv -T "$active.new.$$" "$active"
 
 current=$(sha256sum /usr/local/share/agentainer/versions.env | cut -d' ' -f1)
-printf '%s\n' "$current" >"$HOME/.agentainer/image-version"
+(printf '%s\n' "$current" >"$HOME/.agentainer/image-version") 2>/dev/null || warn "cannot record the image version"
 if [ "$mode" = persist ]; then
 	tstamp="$HOME/.agentainer/tools-image-version"
 	persisted=""
@@ -33,7 +33,7 @@ if [ "$mode" = persist ]; then
 	done
 	if [ -z "$persisted" ]; then
 		# Nothing persisted yet: tools installed from now on belong to this image.
-		printf '%s\n' "$current" >"$tstamp"
+		(printf '%s\n' "$current" >"$tstamp") 2>/dev/null || warn "cannot record the tools image version"
 	elif [ "$(cat "$tstamp" 2>/dev/null)" != "$current" ]; then
 		# Repeats on every start until the user runs agentainer-tools reset.
 		warn "image changed since these persisted tools were installed:$persisted"

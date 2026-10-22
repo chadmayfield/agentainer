@@ -104,7 +104,7 @@ def check_partial(warn, agent, name, field, value):
              "this one is written as literal text" % (agent, field, name))
 
 
-def write_atomic(path, text):
+def write_atomic(path, text, private=False):
     # Write through a symlink, so a linked config (a dotfiles repo, say) stays linked.
     path = os.path.realpath(path)
     d = os.path.dirname(path)
@@ -120,7 +120,9 @@ def write_atomic(path, text):
             mode = os.stat(path).st_mode & 0o7777
         except FileNotFoundError:
             mode = 0o600  # agent configs may contain literal credentials
-        os.chmod(tmp, mode)  # preserve permissions on an existing user file
+        if private:
+            mode &= 0o600
+        os.chmod(tmp, mode)
         os.replace(tmp, path)
     except BaseException:
         os.unlink(tmp)
@@ -422,14 +424,17 @@ def recover_pending(box, env, manifest_path, manifest):
     return recovered
 
 
-def commit_config(box, agent, plan, manifest_path, manifest):
+def commit_config(box, agent, plan, manifest_path, manifest, private=False):
     path, text, names = plan
     pending_path = os.path.join(box, "mcp-pending-%s.json" % agent)
     pending = {"path": os.path.realpath(path), "before": file_hash(path),
                "after": hashlib.sha256(text.encode("utf-8")).hexdigest(), "managed": names}
     # Hashes record the intended write without copying credentials into a journal.
     write_atomic(pending_path, json.dumps(pending, sort_keys=True) + "\n")
-    write_atomic(path, text)
+    if private:
+        write_atomic(path, text, private=True)
+    else:
+        write_atomic(path, text)
     manifest[agent] = names
     write_atomic(manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     os.unlink(pending_path)
@@ -498,6 +503,9 @@ def sync(env, if_changed, warn):
     except FileNotFoundError:
         pass
     failed = False
+    private = any(not REF.fullmatch(value) and not BEARER.fullmatch(value)
+                  for server in desired.values()
+                  for field in ("env", "headers") for value in server.get(field, {}).values())
     steps = [("claude", lambda m: sync_json_agent("claude", env, desired, m, warn)),
              ("agy", lambda m: sync_json_agent("agy", env, desired, m, warn)),
              ("codex", lambda m: sync_codex(home, desired, m, warn)),
@@ -506,7 +514,7 @@ def sync(env, if_changed, warn):
         if shutil.which(agent, path=env.get("PATH")) is None:
             continue
         try:
-            commit_config(box, agent, step(manifest.get(agent, [])), manifest_path, manifest)
+            commit_config(box, agent, step(manifest.get(agent, [])), manifest_path, manifest, private=private)
         except Exception as e:  # noqa: BLE001 - one agent's failure must not stop the others
             failed = True
             # Parser and filesystem errors may contain configuration values.

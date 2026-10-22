@@ -120,10 +120,10 @@ class RecoveryTests(base.SyncBase):
         original = mcp.write_atomic
         journals = []
 
-        def observe(path, text):
+        def observe(path, text, **kwargs):
             if "mcp-pending-" in path:
                 journals.append(text)
-            original(path, text)
+            original(path, text, **kwargs)
 
         with mock.patch.object(mcp, "write_atomic", side_effect=observe):
             self.assertEqual(self.sync(), 0)

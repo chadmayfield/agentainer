@@ -119,12 +119,26 @@ fi
 create() {
 	name=$1
 	sudo=$2
+	case "$name" in
+	'' | [!a-zA-Z0-9]* | *[!a-zA-Z0-9_.-]*)
+		echo "agentainer: name must start with a letter or digit and contain only letters, digits, '.', '_' or '-'" >&2
+		exit 2
+		;;
+	esac
+	if [ "${#name}" -gt 64 ]; then
+		echo "agentainer: name must be at most 64 bytes because it is also the hostname" >&2
+		exit 2
+	fi
 	# An absolute path, so the runtime bind-mounts it instead of creating a named volume.
 	# CDPATH is cleared so "code" means ./code, and cd prints nothing.
 	dir=$(CDPATH='' cd -- "$3" 2>/dev/null && pwd -P) || {
 		echo "agentainer: no such directory: $3" >&2
 		exit 1
 	}
+	case "$HOME/" in
+	"$dir/"*) echo "agentainer: warning: workspace exposes the host home directory" >&2 ;;
+	esac
+	if [ "$dir" = / ]; then echo "agentainer: warning: workspace exposes the host root directory" >&2; fi
 	# -v splits its value at ':' (SRC:DEST[:OPTIONS]), so such a path cannot be mounted.
 	case "$dir" in
 	*:*)
@@ -141,7 +155,7 @@ create() {
 	# absolute path too, so update mounts the same directory from any working directory.
 	home=$HOME_VOLUME
 	case "$home" in
-	*/*)
+	*/* | . | ..)
 		home=$(CDPATH='' cd -- "$HOME_VOLUME" 2>/dev/null && pwd -P) || {
 			echo "agentainer: no such directory: $HOME_VOLUME (AGENTAINER_HOME_VOLUME)" >&2
 			exit 1
@@ -154,6 +168,7 @@ create() {
 		esac
 		;;
 	esac
+	if [ "$home" = "$HOME" ]; then echo "agentainer: warning: container home exposes the host home directory" >&2; fi
 	# ping uses unprivileged ICMP sockets (the image removes its NET_RAW file capability).
 	# The range names the agent group only: with keep-id the GID map is not contiguous,
 	# and a wider range no longer contains the agent group after translation.
@@ -168,8 +183,8 @@ create() {
 	esac
 	if [ -n "$envf" ]; then
 		# Following symlinks, any group or other permission bit is too open.
-		if [ -n "$(find -L "$envf" -prune -perm -g+r 2>/dev/null)$(find -L "$envf" -prune -perm -o+r 2>/dev/null)" ]; then
-			echo "agentainer: warning: $envf should not be readable by others (chmod 600 it)" >&2
+		if [ -n "$(find -L "$envf" -prune \( -perm -g+r -o -perm -o+r -o -perm -g+w -o -perm -o+w \) -print 2>/dev/null)" ]; then
+			echo "agentainer: warning: $envf should not be readable by others or writable by others (chmod 600 it)" >&2
 		fi
 		set -- "$@" --env-file "$envf"
 	fi

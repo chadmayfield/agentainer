@@ -61,4 +61,6 @@ fi
 # Record this image's default with its version once. A line with a version is added even
 # when the hash is already listed without one, so a later older image can compare.
 line="$new${ver:+ $ver}"
-if ! grep -qxF "$line" "$f" 2>/dev/null; then printf '%s\n' "$line" >>"$f"; fi
+if ! grep -qxF "$line" "$f" 2>/dev/null; then
+	(printf '%s\n' "$line" >>"$f") 2>/dev/null || warn "cannot record the AGENTS.md default version; leaving the ledger alone"
+fi
