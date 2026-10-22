@@ -70,6 +70,10 @@ npm test
 
 The `packageManager` field records the project's expected package-manager version. Running plain `npm` uses the executable on `PATH`; the field alone does not switch it. Check `npm --version` against the project's requirement. Corepack documents version selection for npm, pnpm and Yarn in its [project configuration](https://github.com/nodejs/corepack#when-authoring-packages). Follow an existing pnpm or Yarn project's setup rather than creating an npm lockfile beside its own lockfile.
 
+## Language servers
+
+See [optional language tooling](language-tooling.md) for gopls, rust-analyzer, Pyright and TypeScript 7's native server, with a project-local TypeScript 6 fallback. Installing a server does not configure an editor or agent to use it.
+
 ## Browser tests
 
 See [optional browser testing](browser-testing.md) for project-local Playwright installation, Linux dependencies, persistent browser downloads and a headless execution check. Browsers are installed only when you choose that setup.
