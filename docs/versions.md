@@ -84,7 +84,7 @@ Before moving version or `latest` tags, [`tests/host/test-published-image.py`](.
 
 These checks enforce the named fields; they do not establish a SLSA level or validate every SBOM package entry. Fixtures exercise rejection cases in pull requests. The [release workflow for `v0.1.0-dev.20261019.1`](https://github.com/chadmayfield/agentainer/actions/runs/39373669375) completed signing, attestation storage and registry verification. Each later release must pass the same checks for its own digest.
 
-The resolver follows current upstream release pointers without a minimum release age. Proposed binaries execute in build and test jobs before a bump pull request is reviewed. Checksums establish byte identity, not that an upstream release is safe. Review upstream changes before merging; a minimum release age and additional publisher-verification requirements are policy decisions.
+The resolver follows current upstream release pointers without a minimum release age. Proposed binaries execute in build and test jobs before a bump pull request is reviewed. Checksums establish byte identity, not that an upstream release is safe. Review upstream changes before merging; no minimum release age is enforced. Publisher checks below establish the accepted signing identity, not that the signed code is safe.
 
 ## Verifying a release before use
 
@@ -104,3 +104,22 @@ AGENTAINER_IMAGE="ghcr.io/chadmayfield/agentainer@$digest" bin/agentainer up
 ```
 
 The verifier checks cosign identities, GitHub and BuildKit provenance, both platform signatures, and SBOM descriptors. It then pulls and starts the verified digest, so run it only where you intend to execute that release. It requires registry access and GitHub authentication for attestation verification. Its commands and flags are in the [verifier source](../tests/host/test-published-image.py), [Sigstore verification instructions](https://docs.sigstore.dev/quickstart/quickstart-ci/), and [GitHub verification reference](https://cli.github.com/manual/gh_attestation_verify). The launcher does not perform these checks automatically.
+
+## Upstream publisher verification
+
+The updater requires `gh`, `cosign` and GnuPG in addition to Python. The scheduled workflow installs cosign through its pinned installer action. [`scripts/verify_upstream.py`](../scripts/verify_upstream.py) checks supported publishers before the resolver writes any pins. A missing verification tool, missing signing asset, changed checksum or failed signature stops the update. Build downloads still check their pinned hashes.
+
+| Download | Required publisher check |
+|---|---|
+| GitHub CLI | GitHub provenance from `cli/cli`, workflow `deployment.yml` on `refs/heads/trunk`. |
+| uv | GitHub provenance from `astral-sh/uv`, workflow `release.yml` on `refs/heads/main`. |
+| Ruff | GitHub provenance from `astral-sh/ruff`, workflow `release.yml` on `refs/heads/main`. |
+| golangci-lint | GitHub provenance from `golangci/golangci-lint`, workflow `release.yml` at the selected release tag. |
+| yq | Signed BSD checksum list from `mikefarah/yq`, workflow `release.yml` at the selected release tag. |
+| Trivy binary | Signed checksum list from `aquasecurity/trivy`, workflow `reusable-release.yaml` at the selected release tag. |
+| Codex package | Sigstore bundle for the whole package from `openai/codex`, workflow `rust-release.yml` at the selected release tag. |
+| Claude Code | GPG-signed release manifest with the pinned Anthropic key fingerprint. |
+
+GitHub provenance checks require the exact workflow certificate identity, repository, source ref and GitHub OIDC issuer ([GitHub CLI verification](https://cli.github.com/manual/gh_attestation_verify), [CLI release workflow](https://github.com/cli/cli/blob/trunk/.github/workflows/deployment.yml), [uv release workflow](https://github.com/astral-sh/uv/blob/main/.github/workflows/release.yml), [Ruff release workflow](https://github.com/astral-sh/ruff/blob/main/.github/workflows/release.yml), [golangci-lint release workflow](https://github.com/golangci/golangci-lint/blob/main/.github/workflows/release.yml)). Sigstore bundle checks require the exact workflow certificate identity and GitHub OIDC issuer ([cosign blob verification](https://docs.sigstore.dev/cosign/verifying/verify_blob/), [yq signing workflow](https://github.com/mikefarah/yq/blob/master/.github/workflows/release.yml), [Trivy signing workflow](https://github.com/aquasecurity/trivy/blob/main/.github/workflows/reusable-release.yaml), [Codex signing action](https://github.com/openai/codex/blob/main/.github/actions/linux-code-sign/action.yml)).
+
+Publisher signature verification for Go, Rust, curlie, tea, kubectl, Helm, Antigravity, OpenCode and the pinned container images is not verified by this implementation. Existing checksum, package-manager and digest checks remain. Some upstream projects publish signing material; this list does not claim they lack it. Their trust policies and verification paths need separate verification before enforcement. No unsigned-update fallback exists for the publishers in the table.

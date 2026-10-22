@@ -2,7 +2,8 @@
 """Resolve the latest upstream pins and rewrite versions.env.
 
 Every value comes from the upstream source named in its resolver. Any failure
-stops the run and leaves the file unchanged. Standard library only.
+stops the run and leaves the file unchanged. Uses the Python standard library
+and the publisher verification CLIs documented in docs/versions.md.
 """
 import argparse
 import datetime
@@ -16,6 +17,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from verify_upstream import VerificationFailed, verify_asset
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "rootfs/usr/local/lib/agentainer"))
 from release_version import version_key
@@ -296,7 +298,16 @@ def github_tool(prefix, repo, names):
     ver = strip_v(rel["tag_name"])
     out = {prefix + "_VERSION": ver}
     for up, fn in names.items():
-        out["%s_SHA256_%s" % (prefix, up)] = asset_sha256(rel, fn(ver))
+        name = fn(ver)
+        checksum = asset_sha256(rel, name)
+        try:
+            supported = verify_asset(repo, rel, name, checksum, fetch_bytes)
+        except VerificationFailed as error:
+            raise LookupFailed(str(error)) from error
+        if not supported:
+            print("%s: publisher signature verification not verified; retaining checksum checks" % repo,
+                  file=sys.stderr)
+        out["%s_SHA256_%s" % (prefix, up)] = checksum
     return out
 
 

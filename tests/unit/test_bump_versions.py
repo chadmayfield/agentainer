@@ -4,12 +4,28 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"))
 import bump_versions as bv  # noqa: E402
 
 
 class EnvFileTests(unittest.TestCase):
+    def test_failed_publisher_verification_preserves_pins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "versions.env")
+            original = "UV_VERSION=0.13.0\n"
+            with open(path, "w") as file:
+                file.write(original)
+            release = {"tag_name": "0.13.1", "assets": [
+                {"name": "uv-test.tar.gz", "digest": "sha256:" + "a" * 64}]}
+            with patch.object(bv, "gh_latest", return_value=release), \
+                    patch.object(bv, "verify_asset", side_effect=bv.VerificationFailed("wrong signer")):
+                resolver = lambda: bv.github_tool("UV", "astral-sh/uv", {"AMD64": lambda v: "uv-test.tar.gz"})
+                self.assertNotEqual(bv.main(["--file", path], resolvers=[resolver]), 0)
+            with open(path) as file:
+                self.assertEqual(file.read(), original)
+
     def test_resolver_downgrade_preserves_the_pin_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "versions.env")
