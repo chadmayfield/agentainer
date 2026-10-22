@@ -40,6 +40,7 @@ ssh dev@<containerssh service address>
 
 ## Limits
 
+- The webhook runs at most 16 handler threads. Excess connections receive HTTP 503. To preserve that response during an in-flight upload, it drains at most 16 rejected sockets without blocking or adding threads. Each drain has an 80 KiB byte budget and a one-second deadline checked by the server's polling loop. Further excess connections close immediately ([implementation](../deploy/kubernetes/auth-webhook/webhook.py), [HTTP connection teardown](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6)).
 - A cluster has no host folder. Clone repos into `/workspace`. **Work you have not pushed exists only on the workspace volume.**
 - sftp and the default `scp` do not work: since OpenSSH 9.0, `scp` uses the SFTP protocol, and the image has no `sftp-server`. `scp -O` (the legacy protocol) and `rsync -e ssh` should work, because ContainerSSH runs those as commands; this is not verified.
 - Port forwarding (`ssh -L`, `ssh -R`), socket forwarding and X11 forwarding are off: ContainerSSH disables them by default and the example keeps that.
