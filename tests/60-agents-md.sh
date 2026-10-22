@@ -56,6 +56,10 @@ out=$(run_in $H -- readlink /home/agent/.gemini/AGENTS.md 2>&1)
 assert_contains "keeps a dangling user symlink" "/nonexistent" "$out"
 assert_contains "warns about a dangling symlink" "points to a missing file" "$out"
 
+# Independent default-upgrade checks use a fresh home without the conflict fixtures.
+"$RUNTIME" volume rm -f "$VOL" >/dev/null
+"$RUNTIME" volume create "$VOL" >/dev/null
+
 # An unedited file (it matches an earlier image default) follows a new default, with one
 # line, when the image is a release. A hash-only line counts as an unknown, older version.
 REL="-e AGENTAINER_IMAGE_VERSION=0.1.0"

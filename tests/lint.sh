@@ -20,4 +20,6 @@ if [ -d "$steps" ]; then
 fi
 shellcheck -x -s bash rootfs/etc/agentainer/home/.bashrc rootfs/etc/agentainer/home/.config/agentainer/shell-theme.bash
 shfmt -ln bash -d rootfs/etc/agentainer/home/.bashrc rootfs/etc/agentainer/home/.config/agentainer/shell-theme.bash
+shellcheck -x -s sh rootfs/etc/agentainer/home/.profile
+shfmt -ln posix -d rootfs/etc/agentainer/home/.profile
 echo "lint ok"'

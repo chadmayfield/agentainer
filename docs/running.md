@@ -139,3 +139,5 @@ On the first start of the new image, the entrypoint adds files that are missing 
 - With `AGENTAINER_TOOLS=persist`, tools you installed stay on `PATH` after the image's own tools. The entrypoint warns on each start until you run `agentainer-tools reset`, which moves them to a dated backup.
 - MCP servers sync again only when `~/.agentainer/mcp.json` changes. Run `agentainer-mcp sync` to sync after an upgrade.
 - Anything installed with `sudo apt install` is gone, as after every new container.
+
+A successful `update` leaves the replacement running, including when the previous container was stopped. Failed updates restore the previous running or stopped state. `AGENTAINER_DRY_RUN=1` prints commands instead of running mutations; update still performs real read-only engine inspections to obtain its recorded options. The trace shell-quotes arguments, including embedded single quotes ([launcher source](../bin/agentainer)).

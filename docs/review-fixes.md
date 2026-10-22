@@ -70,7 +70,21 @@ This table tracks the 77 entries reviewed at commit `b87d7b5`. Duplicate entries
 | 59 | LAUNCH-3 | Runnable prerelease selection and latest limits are covered with entry 7. |
 | 60 | LAUNCH-6 | Suppressed cd output when resolving workspace paths under dash. |
 
+| 61 | LAUNCH-8 | Documented that successful updates leave replacements running, including previously stopped containers. |
+| 62 | LAUNCH-9 | Trace quotes embedded single quotes; dry-run behavior and read-only inspections are documented. |
+| 63 | RT-10 | A fresh temporary image is being built; final runtime validation replaces reliance on the stale development image. |
+| 64 | RT-6 | Python helpers are isolated with entry 10; persisted-library detection includes python/lib. |
+| 65 | RT-8 | Documented secret retention in Vim recovery files. Changing recovery defaults is deferred. |
+| 66 | RT-9 | Version stamps publish through unique temporary files and atomic rename, with a concurrent-reader regression. |
+| 67 | RT-ESCAPE-3 | Preserved the positive launcher posture and runtime-specific UID qualifications. |
+| 68 | TEST-1 | Fresh-image validation is pending completion of the local build. |
+| 69 | TEST-10 | Included the seeded POSIX profile in shellcheck and shfmt. A Python linter remains an optional policy decision. |
+| 70 | TEST-11 | Reset conflict fixtures before independent checks and clarified doctor-overlay prerequisites. |
+
 ## Decisions left open
+
+- Whether to disable Vim recovery files by default, trading recovery for reduced content retention.
+- Whether to adopt a Python lint policy and which tool to use.
 
 - Which branch review, administrator enforcement and Actions approval settings to require.
 - What agent responsiveness a Kubernetes liveness probe should measure, and whether restart can recover it.

@@ -9,6 +9,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class NameArgumentsTests(unittest.TestCase):
+    def test_trace_preserves_embedded_single_quotes(self):
+        import shlex
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            workspace = base / "it's a project"
+            workspace.mkdir()
+            result = self.launch(base, str(workspace))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            trace = next(line for line in result.stderr.splitlines() if line.startswith("+ "))
+            self.assertEqual(shlex.split(trace[2:])[1:], result.stdout.splitlines())
+
     def test_explicit_missing_env_file_is_reported(self):
         with tempfile.TemporaryDirectory() as directory:
             result = self.launch(Path(directory), directory)

@@ -3,7 +3,7 @@
 . "$(dirname "$0")/lib.sh"
 repo=$(cd "$(dirname "$0")/.." && pwd)
 name="cx-doctor-$$"
-# A local source overlay exercises this command without rebuilding an older image.
+# A source overlay needs an image with the command's required tool dependencies.
 set --
 if [ -n "${CX_TEST_DOCTOR:-}" ]; then
 	set -- -v "$CX_TEST_DOCTOR:/usr/local/bin/agentainer-doctor:ro"
