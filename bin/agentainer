@@ -15,7 +15,7 @@ usage() {
 usage: agentainer up [--name N] [--sudo] [--image I] [--publish MAPPING ...] [--] [DIR]
        agentainer attach [N] | shell [N] | start [N] | update [N] | down [N] | status
        agentainer doctor [N] [--json]
-If a container already exists, use "agentainer down N" first (your home volume is kept).
+If an agentainer container already exists, use "agentainer down N" first (your home volume is kept).
 update pulls the image and recreates N with the options and DIR of its "up".
 --publish (-p): [IPv4:]HOST_PORT:CONTAINER_PORT[/tcp|udp]; defaults to 127.0.0.1 and tcp.
 EOF
@@ -291,7 +291,7 @@ update)
 	# Read every option first, so a failure leaves the old container in place.
 	img=$(label "$name" image) || exit 1
 	if [ -z "$img" ]; then
-		echo "agentainer: $name has no option labels, so it was not created by agentainer up; run 'agentainer down $name' and 'agentainer up' again" >&2
+		echo "agentainer: $name has no option labels, so it was not created by this agentainer up; inspect it before recreating it" >&2
 		exit 1
 	fi
 	dir=$(label "$name" dir) && sudo=$(label "$name" sudo) &&
@@ -371,6 +371,14 @@ doctor)
 	;;
 attach) run "$R" exec -it "${1:-agentainer}" tmux new-session -A -s main ;;
 shell) run "$R" exec -it "${1:-agentainer}" bash -l ;;
-down) run "$R" rm -f "${1:-agentainer}" ;;
+down)
+	name=${1:-agentainer}
+	managed=$("$R" inspect --type container --format "{{index .Config.Labels \"${LABEL%=*}\"}}" -- "$name") || exit 1
+	if [ "$managed" != 1 ]; then
+		echo "agentainer: refusing to remove $name because it has no agentainer label" >&2
+		exit 1
+	fi
+	run "$R" rm -f "$name"
+	;;
 status) run "$R" ps -a --filter "label=$LABEL" ;;
 esac

@@ -9,6 +9,19 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class NameArgumentsTests(unittest.TestCase):
+    def test_down_refuses_a_container_without_the_agentainer_label(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            log = base / "removed"
+            engine = base / "engine"
+            engine.write_text('#!/bin/sh\nif [ "$1" = inspect ]; then echo 0; else echo removed >"$CX_LOG"; fi\n')
+            engine.chmod(0o755)
+            result = subprocess.run(["sh", str(ROOT / "bin/agentainer"), "down", "unrelated"],
+                                    env=dict(os.environ, AGENTAINER_RUNTIME=str(engine), CX_LOG=str(log)),
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(log.exists())
+
     def test_trace_preserves_embedded_single_quotes(self):
         import shlex
         with tempfile.TemporaryDirectory() as directory:

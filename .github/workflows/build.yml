@@ -226,7 +226,7 @@ jobs:
         run: |
           docker builder prune -af
           docker save -o image.tar "$IMAGE"
-          # docker save writes mode 0600; the scan runs as the image user (UID 1000).
+          # Keep the exported archive readable by the independent scanner.
           chmod 644 image.tar
           df -h /
           mounts=(-v "$PWD/image.tar:/scan/image.tar:ro")
@@ -451,7 +451,7 @@ jobs:
           set -eu
           docker pull "$REF"
           docker save -o image.tar "$REF"
-          chmod 644 image.tar  # docker save writes 0600; trivy runs as UID 1000
+          chmod 644 image.tar  # keep the exported archive readable by the scanner
           mkdir -p report && chmod 777 report
           scanner=$(sed -n 's/^TRIVY_SCANNER_IMAGE=//p' versions.env)
           test -n "$scanner"

@@ -22,7 +22,7 @@
 | `agentainer shell [N]` | Opens a bash login shell |
 | `agentainer start [N]` | Starts a stopped container, for example after the host or the Podman machine restarts |
 | `agentainer update [N]` | Pulls the image the container was created from and recreates the container with the same options |
-| `agentainer down [N]` | Removes the container. The home volume stays. |
+| `agentainer down [N]` | Removes a container carrying the Agentainer label. It refuses unrelated containers. The home volume stays. |
 | `agentainer status` | Lists agentainer containers |
 | `agentainer doctor [N] [--json]` | Runs offline diagnostics in the running container, without a TTY; see [diagnostic checks and exit codes](troubleshooting.md#offline-diagnostics). |
 
@@ -140,4 +140,4 @@ On the first start of the new image, the entrypoint adds files that are missing 
 - MCP servers sync again only when `~/.agentainer/mcp.json` changes. Run `agentainer-mcp sync` to sync after an upgrade.
 - Anything installed with `sudo apt install` is gone, as after every new container.
 
-A successful `update` leaves the replacement running, including when the previous container was stopped. Failed updates restore the previous running or stopped state. `AGENTAINER_DRY_RUN=1` prints commands instead of running mutations; update still performs real read-only engine inspections to obtain its recorded options. The trace shell-quotes arguments, including embedded single quotes ([launcher source](../bin/agentainer)).
+A successful `update` leaves the replacement running, including when the previous container was stopped. Failed updates restore the previous running or stopped state. `AGENTAINER_DRY_RUN=1` prints commands instead of running mutations; update and down still perform real read-only engine inspections to obtain its recorded options. The trace shell-quotes arguments, including embedded single quotes ([launcher source](../bin/agentainer)).

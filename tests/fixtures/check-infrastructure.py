@@ -8,18 +8,23 @@ import tempfile
 pins = json.loads(Path("/etc/agentainer/versions.json").read_text())["pins"]
 
 
+def require(condition, message="fixture condition failed"):
+    if not condition:
+        raise SystemExit(message)
+
+
 def command(arguments, expected=0):
     result = subprocess.run(arguments, capture_output=True, text=True, timeout=20)
     if expected == 0:
-        assert result.returncode == 0, result.stderr
+        require(result.returncode == 0, result.stderr)
     else:
-        assert result.returncode != 0, "broken input was accepted"
+        require(result.returncode != 0, "broken input was accepted")
     return result.stdout
 
 
 version = json.loads(command(["kubectl", "version", "--client=true", "--output=json"]))
-assert version["clientVersion"]["gitVersion"] == "v" + pins["KUBECTL_VERSION"], version
-assert command(["helm", "version", "--short"]).strip().split("+")[0] == "v" + pins["HELM_VERSION"]
+require(version["clientVersion"]["gitVersion"] == "v" + pins["KUBECTL_VERSION"], version)
+require(command(["helm", "version", "--short"]).strip().split("+")[0] == "v" + pins["HELM_VERSION"], 'fixture condition failed')
 
 with tempfile.TemporaryDirectory(prefix="cx-infrastructure-") as directory:
     base = Path(directory)
@@ -33,7 +38,7 @@ with tempfile.TemporaryDirectory(prefix="cx-infrastructure-") as directory:
         "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: fixture\ndata:\n  message: hello\n")
     rendered = command(["kubectl", "kustomize", str(kustomize)])
     for expected in ("kind: ConfigMap", "namespace: cx-offline", "name: fixture", "message: hello"):
-        assert expected in rendered, rendered
+        require(expected in rendered, rendered)
     (kustomize / "configmap.yaml").unlink()
     command(["kubectl", "kustomize", str(kustomize)], expected=1)
 
@@ -47,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix="cx-infrastructure-") as directory:
                         'data:\n  message: {{ .Values.message | quote }}\n')
     rendered = command(["helm", "template", "cx-offline", str(chart)])
     for expected in ("kind: ConfigMap", "name: cx-offline", 'message: "hello"'):
-        assert expected in rendered, rendered
+        require(expected in rendered, rendered)
     template.write_text("{{ missing_function }}\n")
     command(["helm", "template", "cx-offline", str(chart)], expected=1)
 

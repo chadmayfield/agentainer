@@ -72,16 +72,27 @@ This table tracks the 77 entries reviewed at commit `b87d7b5`. Duplicate entries
 
 | 61 | LAUNCH-8 | Documented that successful updates leave replacements running, including previously stopped containers. |
 | 62 | LAUNCH-9 | Trace quotes embedded single quotes; dry-run behavior and read-only inspections are documented. |
-| 63 | RT-10 | A fresh temporary image is being built; final runtime validation replaces reliance on the stale development image. |
+| 63 | RT-10 | Built a fresh temporary image from the current runtime source and validated its launcher lifecycle; the stale development image is unchanged. |
 | 64 | RT-6 | Python helpers are isolated with entry 10; persisted-library detection includes python/lib. |
 | 65 | RT-8 | Documented secret retention in Vim recovery files. Changing recovery defaults is deferred. |
 | 66 | RT-9 | Version stamps publish through unique temporary files and atomic rename, with a concurrent-reader regression. |
 | 67 | RT-ESCAPE-3 | Preserved the positive launcher posture and runtime-specific UID qualifications. |
-| 68 | TEST-1 | Fresh-image validation is pending completion of the local build. |
+| 68 | TEST-1 | The complete fresh-image container suite passed all 272 checks, including the updated passthrough default and Python startup isolation. |
 | 69 | TEST-10 | Included the seeded POSIX profile in shellcheck and shfmt. A Python linter remains an optional policy decision. |
 | 70 | TEST-11 | Reset conflict fixtures before independent checks and clarified doctor-overlay prerequisites. |
 
+| 71 | TEST-12 | Added a manual read-only workflow for networked optional-tooling checks on both architectures. Its live GitHub execution is not verified. |
+| 72 | TEST-7 | Shared helpers and direct MCP/lint runs refuse registry pulls for missing test images. |
+| 73 | TEST-8 | Doctor/infrastructure fixtures use explicit failures that survive Python optimization. |
+| 74 | TEST-9 | Added real Codex model-override and command-error coverage, strengthened reset content checks, corrected the instruction-settings test name, and made down refuse unrelated containers. |
+| 75 | rt-host-6 | Documented stored env values, engine access, container recreation and leftover backup handling. |
+| 76 | rt-k8s-2 | Stated that DNS and TCP 443 permit all destinations. Deployment-specific restrictions are deferred until their addresses and CNI behavior are verified. |
+| 77 | rt-supply-5 | Documented automatic Go toolchains and advisory update locks. Changing Go's default selection policy is deferred. |
+
 ## Decisions left open
+
+- Whether the generic egress example should require deployment-specific destination allowlists.
+- Whether Go should default to the bundled compiler even for projects requiring a newer toolchain.
 
 - Whether to disable Vim recovery files by default, trading recovery for reduced content retention.
 - Whether to adopt a Python lint policy and which tool to use.
@@ -104,6 +115,24 @@ This table tracks the 77 entries reviewed at commit `b87d7b5`. Duplicate entries
 
 ## Validation
 
-Regression tests cover launcher argument rejection, malformed MCP markers, isolated Python, release authorization source selection, and slow webhook headers and bodies. Tests against the original source reproduce their failures. Shell lint and existing launcher tests run for this batch.
+| Check | Result |
+|---|---|
+| Complete native arm64 container suite | 272 passed, zero failures, using a fresh temporary image. |
+| Host Python unit suite | 305 tests passed, 31 platform-dependent skips. |
+| Linux-specific unit modules | Passed on the image Python, including doctor, seeding, concurrency, reset, startup paths and atomic stamps. |
+| Host launcher tests | 75 passed. |
+| Real launcher lifecycle | 18 passed. |
+| Build script tests | 12 passed. |
+| Fetch tests | 65 passed. |
+| Manifest tests | 49 passed. |
+| Shellcheck and shfmt | Passed, including the POSIX profile. |
+| Local actionlint 1.7.11 | Passed all workflow files. |
+| Independent pinned Trivy secret scan | Passed on the exported fresh image, exit 0. |
+| Missing-image checks | Exit 1 as expected, zero passing checks. The added Python-isolation test also fails without an image. |
+| Python isolation runtime regression | Fails on the old image; passes on the fixed image while preserving intentional user Python startup. |
+
+The first complete container run had one stale expectation for passthrough-on. After updating that expectation, the complete suite passed. The initial sandboxed unit run could not create local sockets; unit runs with loopback sockets allowed passed.
+
+No Kubernetes deployment, GitHub policy change, release publication, full cross-architecture build, slow custom-UID build or BuildKit layer reproducibility run was performed. The optional network-install workflow has not been executed in GitHub Actions. These are separate from the local validations above.
 
 Sources for the implementation contracts: [checkout ref selection](https://github.com/actions/checkout#usage), [Python isolation](https://docs.python.org/3/using/cmdline.html#cmdoption-I), [socket shutdown](https://docs.python.org/3/library/socket.html#socket.socket.shutdown), and the linked security and release documentation.

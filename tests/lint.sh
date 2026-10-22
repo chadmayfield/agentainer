@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 RUNTIME=${RUNTIME:-podman}
 IMAGE=${IMAGE:-localhost/agentainer:dev}
 # shellcheck disable=SC2016 # the script runs in the container's bash
-"$RUNTIME" run --rm -v "$PWD:/src:ro" -w /src --entrypoint bash "$IMAGE" -c '
+"$RUNTIME" run --rm --pull=never -v "$PWD:/src:ro" -w /src --entrypoint bash "$IMAGE" -c '
 set -euo pipefail
 files=()
 while IFS= read -r f; do

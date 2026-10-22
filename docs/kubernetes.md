@@ -81,7 +81,7 @@ Both keys are optional. [Configuration](configuration.md) describes both files; 
 
 ## Network policy
 
-[`agentainer/networkpolicy.yaml`](../deploy/kubernetes/agentainer/networkpolicy.yaml) allows the agent pod only DNS (port 53) and outbound TCP 443. It is off by default; add it to that folder's `kustomization.yaml` to use it, with a CNI that enforces NetworkPolicy. Without it, the agent pod can reach any address, including your cloud provider's instance metadata address (`169.254.169.254`) if the cluster allows it.
+[`agentainer/networkpolicy.yaml`](../deploy/kubernetes/agentainer/networkpolicy.yaml) allows the agent pod only DNS (port 53) and outbound TCP 443. Both UDP and TCP 53, and TCP 443, are allowed to every destination, including internal services and arbitrary DNS servers. This is a port restriction, not an internet-only allowlist. Restrict DNS selectors and pod/service/node ranges for the actual cluster before treating it as host or internal-service isolation. NetworkPolicy and address translation behavior depend on the CNI ([Kubernetes policy semantics](https://kubernetes.io/docs/concepts/services-networking/network-policies/)). It is off by default; add it to that folder's `kustomization.yaml` to use it, with a CNI that enforces NetworkPolicy. Without it, the agent pod can reach any address, including your cloud provider's instance metadata address (`169.254.169.254`) if the cluster allows it.
 
 ## Upgrading and removing
 

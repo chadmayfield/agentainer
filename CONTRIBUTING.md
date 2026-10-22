@@ -95,3 +95,5 @@ Without the variable and secret, the workflow uses `GITHUB_TOKEN`. If the variab
 Do not open a public issue. See [SECURITY.md](SECURITY.md).
 
 The release concurrency group retains one running job and one pending job. A third queued release replaces the pending one under GitHub's default policy. Check all pushed tags and rerun any canceled release workflow. Larger queues are documented by GitHub, but compatibility with the pinned actionlint is not verified ([concurrency](https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency)).
+
+The manual [optional tooling workflow](.github/workflows/optional-tooling.yml) builds the selected source and runs networked language-server and Playwright installation checks on both architectures. It has read-only repository permission and is separate from required pull-request CI. It has not been run in GitHub Actions until the workflow is available on the default branch.

@@ -6,7 +6,10 @@
 L="$(cd "$(dirname "$0")/../.." && pwd)/bin/agentainer"
 T=$(cd "$(mktemp -d)" && pwd -P) # resolved, as the launcher resolves paths
 trap 'rm -rf "$T"' EXIT INT TERM
-printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' >"$T/podman"
+cat >"$T/podman" <<'EOF'
+#!/bin/sh
+if [ "$1" = inspect ]; then echo 1; else printf '%s\n' "$@"; fi
+EOF
 cp "$T/podman" "$T/docker"
 chmod +x "$T/podman" "$T/docker"
 export AGENTAINER_ENV_FILE=/nonexistent
@@ -150,7 +153,7 @@ run_part=$(ins update 2>/dev/null | sed -n '/^run$/,$p')
 has_line "update without --sudo keeps no-new-privileges" "no-new-privileges=true" "$run_part"
 has_line "update defaults to the agentainer container" "agentainer" "$run_part"
 : >"$T/labels/old"
-assert_contains "update refuses a container without labels" "agentainer down old" "$(ins update old 2>&1 || true)"
+assert_contains "update refuses a container without labels" "inspect it before recreating it" "$(ins update old 2>&1 || true)"
 assert_eq "update without labels changes nothing" "" "$(ins update old 2>/dev/null || true)"
 printf '%s\n' "$p.dir=$T/gone" "$p.image=example.com/i:2" "$p.sudo=0" "$p.home=h" "$p.env-file=" >"$T/labels/gone"
 assert_contains "update with a missing DIR fails" "no longer exists" "$(ins update gone 2>&1 || true)"

@@ -18,7 +18,7 @@ class ResetTests(unittest.TestCase):
             home = t / "home"
             tools = home / ".agentainer/tools"
             (tools / "bin").mkdir(parents=True)
-            (tools / "bin/original").touch()
+            (tools / "bin/original").write_text("first tool contents\n")
             bindir = t / "bin"
             bindir.mkdir()
             date = bindir / "date"
@@ -65,7 +65,7 @@ exec /bin/mv "$@"
                 out, err = a.communicate(timeout=5)
                 self.assertEqual(a.returncode, 0, out + err)
                 wait_file("movingB")
-                (tools / "bin/second").touch()
+                (tools / "bin/second").write_text("second tool contents\n")
                 (t / "releaseB").touch()
                 out, err = b.communicate(timeout=5)
                 self.assertEqual(b.returncode, 0, out + err)
@@ -74,6 +74,8 @@ exec /bin/mv "$@"
                 self.assertTrue(serialized, "the second reset moved files before the first finished")
                 self.assertEqual(sorted(x.name for backup in backups for x in (backup / "bin").iterdir()),
                                  ["original", "second"])
+                self.assertEqual(sorted(path.read_text() for backup in backups for path in (backup / "bin").iterdir()),
+                                 ["first tool contents\n", "second tool contents\n"])
                 self.assertFalse(any((backup / "tools").exists() for backup in backups))
                 self.assertTrue((tools / "bin").is_dir())
             finally:

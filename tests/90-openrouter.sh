@@ -22,6 +22,24 @@ assert_contains "codex default model is an OpenRouter id" 'model="~openai/gpt-so
 assert_eq "user args come last and intact" "exec|two words" "$(printf '%s\n' "$out" | tail -2 | paste -sd '|' -)"
 assert_absent "codex argv has no key" "$out" 'model_provider="openrouter"' sk-or-test
 
+assert_eq "agentainer-agents rejects an unknown argument" "rc=2" \
+	"$(run_in --network none -- sh -c 'agentainer-agents unknown >/dev/null 2>&1; echo rc=$?')"
+assert_eq "agentainer-agents reports a missing user file" "rc=2" \
+	"$(run_in --network none -- sh -c 'HOME=/tmp/no-agentainer-home agentainer-agents diff >/dev/null 2>&1; echo rc=$?')"
+assert_eq "agentainer-tools rejects an unknown command" "rc=2" \
+	"$(run_in --network none -- sh -c 'agentainer-tools unknown >/dev/null 2>&1; echo rc=$?')"
+
+for option in flag config; do
+	doctor=$(run_in --network none -e OPENROUTER_API_KEY=sk-or-test -- sh -c '
+if [ "$1" = flag ]; then
+  openrouter-codex -m example/override doctor --json 2>/dev/null
+else
+  openrouter-codex -c "model=\"example/override\"" doctor --json 2>/dev/null
+fi' sh "$option")
+	assert_eq "user model override works through $option" "example/override" \
+		"$(printf '%s' "$doctor" | python3 -c 'import json,sys; print(json.load(sys.stdin)["checks"]["config.load"]["details"]["model"])' 2>&1)"
+done
+
 # End to end against a local fake endpoint: the key reaches the Authorization header.
 hdr=$(run_in --network none -e OPENROUTER_API_KEY=sk-or-e2e --entrypoint sh -- -c '
 	cat > /tmp/srv.py <<"EOF"

@@ -15,7 +15,7 @@ for t in .codex/AGENTS.md .gemini/AGENTS.md .config/opencode/AGENTS.md; do
 		"$(run_in $H -- agentainer-entrypoint readlink "/home/agent/$t")"
 done
 assert_contains "Claude imports it" "@~/.agentainer/AGENTS.md" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.claude/CLAUDE.md)"
-assert_contains "Claude loads both instruction files" "claude-md-and-agents-md" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.claude/settings.json)"
+assert_contains "Claude settings enable both instruction files" "claude-md-and-agents-md" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.claude/settings.json)"
 assert_contains "Codex stores credentials in a file" 'cli_auth_credentials_store = "file"' "$(run_in $H -- agentainer-entrypoint cat /home/agent/.codex/config.toml)"
 assert_contains "OpenCode updates disabled" '"update": "disable"' "$(run_in $H -- agentainer-entrypoint cat /home/agent/.config/opencode/opencode.json)"
 # The agents themselves accept the seeded configs (OpenCode drops unknown keys silently).

@@ -1,4 +1,4 @@
-# Optional. Add it to kustomization.yaml to allow only DNS and outbound HTTPS.
+# Optional. Add it to kustomization.yaml to allow DNS ports and TCP 443 to every destination.
 # NetworkPolicy matches IPs, ports and labels, not domain names.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
