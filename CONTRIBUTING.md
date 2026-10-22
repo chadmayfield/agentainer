@@ -18,7 +18,7 @@ You need Podman or Docker.
 ```sh
 scripts/build.sh                            # builds localhost/agentainer:dev for your architecture
 sh tests/run.sh                             # container tests against that image
-sh tests/lint.sh                            # shellcheck and shfmt, run from the image
+sh tests/lint.sh                            # shellcheck, shfmt and Ruff, run from the image
 python3 -m unittest discover -s tests/unit  # unit tests, no container needed
 sh tests/14-unit-linux.sh                   # image Python and Linux-only unit modules
 sh tests/host/test-launcher.sh              # launcher tests, no container needed
@@ -105,3 +105,9 @@ The `release` environment requires the maintainer's approval and permits only `v
 An active tag ruleset blocks updates and deletion of `v*` tags, without bypass actors. It permits new tags. Correct a released version by creating a new version, rather than replacing its tag ([ruleset rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets)). Branch administrator enforcement remains unchanged.
 
 Fork pull-request workflows require approval for all external contributors. Review their proposed changes before approving execution ([fork workflow approval](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/approve-runs-from-forks)).
+
+### Python linting
+
+`sh tests/lint.sh` runs Ruff from the built image alongside shellcheck and shfmt. CI runs the same command in each architecture's image job. Rebuild the image after changing its Ruff pin. No host Ruff installation is required.
+
+[`ruff.toml`](ruff.toml) selects only Pyflakes `F` rules. [`scripts/lint-python.py`](scripts/lint-python.py) includes `.py` files and Python shebang commands in the source directories, including `build/` and extensionless runtime commands. It excludes dependency and cache directories. Explicit file arguments prevent Ruff's default exclusion of `build/` from hiding those scripts ([Ruff file discovery](https://docs.astral.sh/ruff/configuration/#python-file-discovery), [Pyflakes rules](https://docs.astral.sh/ruff/rules/#pyflakes-f)).

@@ -325,6 +325,13 @@ def r_uv():
         "AMD64": lambda v: "uv-x86_64-unknown-linux-gnu.tar.gz", "ARM64": lambda v: "uv-aarch64-unknown-linux-gnu.tar.gz"})
 
 
+def r_ruff():
+    # Official release binaries and per-asset checksums: https://github.com/astral-sh/ruff/releases
+    return github_tool("RUFF", "astral-sh/ruff", {
+        "AMD64": lambda v: "ruff-x86_64-unknown-linux-gnu.tar.gz",
+        "ARM64": lambda v: "ruff-aarch64-unknown-linux-gnu.tar.gz"})
+
+
 def r_trivy():
     out = github_tool("TRIVY", "aquasecurity/trivy", {
         "AMD64": lambda v: "trivy_%s_Linux-64bit.tar.gz" % v,
@@ -536,7 +543,7 @@ def r_buildkit():
                                       fetch_json("https://hub.docker.com/v2/repositories/moby/buildkit/tags/%s" % tag))}
 
 
-RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_trivy, r_curlie, r_golangci,
+RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_curlie, r_golangci,
              r_kubectl, r_helm, r_tea, r_claude, r_codex, r_agy, r_opencode, r_k8s_images, r_buildkit]
 
 

@@ -71,6 +71,13 @@ ARG TRIVY_SHA256_AMD64
 ARG TRIVY_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh trivy
 
+FROM fetch AS ruff
+ARG TARGETARCH
+ARG RUFF_VERSION
+ARG RUFF_SHA256_AMD64
+ARG RUFF_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh ruff
+
 FROM fetch AS curlie
 ARG TARGETARCH
 ARG CURLIE_VERSION
@@ -215,6 +222,7 @@ COPY --from=rust /opt/cargo /opt/cargo
 COPY --from=yq /usr/local/bin/yq /usr/local/bin/yq
 COPY --from=gh /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=uv /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
+COPY --from=ruff /usr/local/bin/ruff /usr/local/bin/ruff
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY --from=curlie /usr/local/bin/curlie /usr/local/bin/curlie
 COPY --from=golangci-lint /usr/local/bin/golangci-lint /usr/local/bin/golangci-lint

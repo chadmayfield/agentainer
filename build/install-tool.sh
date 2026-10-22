@@ -141,6 +141,12 @@ uv)
 	tar -xzf uv.tgz
 	install -m 0755 "uv-${TRIPLE}-unknown-linux-gnu/uv" "uv-${TRIPLE}-unknown-linux-gnu/uvx" /usr/local/bin/
 	;;
+ruff)
+	# https://github.com/astral-sh/ruff/releases
+	sh $F "https://github.com/astral-sh/ruff/releases/download/${RUFF_VERSION}/ruff-${TRIPLE}-unknown-linux-gnu.tar.gz" sha256 "$(pin RUFF_SHA256)" ruff.tgz
+	tar -xzf ruff.tgz
+	install -m 0755 "ruff-${TRIPLE}-unknown-linux-gnu/ruff" /usr/local/bin/ruff
+	;;
 trivy)
 	sh $F "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" sha256 "$(pin TRIVY_SHA256)" trivy.tgz
 	tar -xzf trivy.tgz trivy

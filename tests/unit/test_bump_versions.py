@@ -48,6 +48,18 @@ class EnvFileTests(unittest.TestCase):
 
 
 class ParserTests(unittest.TestCase):
+    def test_ruff_resolver_selects_both_official_archives_and_verifies_publisher(self):
+        names = ["ruff-x86_64-unknown-linux-gnu.tar.gz", "ruff-aarch64-unknown-linux-gnu.tar.gz"]
+        release = {"tag_name": "0.17.1", "assets": [
+            {"name": name, "digest": "sha256:" + letter * 64}
+            for name, letter in zip(names, "ab")]}
+        with patch.object(bv, "gh_latest", return_value=release), \
+                patch.object(bv, "verify_asset", return_value=True) as verify:
+            pins = bv.r_ruff()
+        self.assertEqual(pins, {"RUFF_VERSION": "0.17.1", "RUFF_SHA256_AMD64": "a" * 64,
+                                "RUFF_SHA256_ARM64": "b" * 64})
+        self.assertEqual([call.args[2] for call in verify.call_args_list], names)
+
     def test_bsd_and_per_asset_published_checksums(self):
         checksum = "a" * 64
         for filename, contents in (("checksums-bsd", "SHA256 (tool.tar.gz) = " + checksum),

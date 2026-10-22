@@ -1,0 +1,4 @@
+# Pyflakes checks catch code errors without imposing formatting.
+# https://docs.astral.sh/ruff/rules/#pyflakes-f
+[lint]
+select = ["F"]

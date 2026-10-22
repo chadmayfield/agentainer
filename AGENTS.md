@@ -25,7 +25,7 @@ Agentainer is one public container image that bundles four AI coding agents (Cla
 ```sh
 scripts/build.sh                            # build localhost/agentainer:dev
 sh tests/run.sh [tests/NN-name.sh ...]      # container tests
-sh tests/lint.sh                            # shellcheck and shfmt
+sh tests/lint.sh                            # shellcheck, shfmt and Ruff
 python3 -m unittest discover -s tests/unit
 sh tests/14-unit-linux.sh                   # image Python and Linux-only unit modules
 sh tests/host/test-launcher.sh

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs shellcheck and shfmt from the built image over every shell file in the repo.
+# Runs shellcheck, shfmt and Ruff from the built image over repository sources.
 set -eu
 cd "$(dirname "$0")/.."
 RUNTIME=${RUNTIME:-podman}
@@ -22,4 +22,5 @@ shellcheck -x -s bash rootfs/etc/agentainer/home/.bashrc rootfs/etc/agentainer/h
 shfmt -ln bash -d rootfs/etc/agentainer/home/.bashrc rootfs/etc/agentainer/home/.config/agentainer/shell-theme.bash
 shellcheck -x -s sh rootfs/etc/agentainer/home/.profile
 shfmt -ln posix -d rootfs/etc/agentainer/home/.profile
+python3 scripts/lint-python.py
 echo "lint ok"'
