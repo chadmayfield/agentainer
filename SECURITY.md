@@ -22,6 +22,6 @@ Fixes ship in new releases; older images are not rebuilt under the same version.
 
 ## Known limits
 
-[docs/security.md](docs/security.md) lists what the container does and does not isolate. The main points: every credential passed to the container is readable by every process in it, the agents can change the code you mount, and the ContainerSSH webhook uses plain HTTP inside the cluster unless you turn on TLS.
+[docs/security.md](docs/security.md) lists what the container does and does not isolate. Every supplied credential is available to container code, and agents can modify mounted files that the host later executes. The example ContainerSSH webhook serves plain HTTP. TLS requires server-side changes or a TLS-terminating proxy; there is no webhook TLS switch.
 
 Each release lists its trivy findings in the release notes and attaches the full reports ([docs/security.md](docs/security.md#vulnerability-reports)).

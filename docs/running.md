@@ -110,6 +110,8 @@ With sudo on, an agent can change anything in the container, including the agent
 
 ## Other options
 
+A forwarded SSH agent lets container processes request signatures with its loaded keys. Use a dedicated agent containing only the keys required for this session. See [credential exposure](security.md#what-the-container-isolates).
+
 - SSH agent on a Linux host: add `-v "$SSH_AUTH_SOCK:/run/ssh-agent.sock" -e SSH_AUTH_SOCK=/run/ssh-agent.sock`. `ssh-agent` refuses a client whose UID differs from its own unless the client is root (`uid mismatch` in [ssh-agent.c](https://github.com/openssh/openssh-portable/blob/master/ssh-agent.c)), so the container user must have the UID of the user who started the agent:
   - Rootless Podman with keep-id, as the launcher runs it, maps your host UID to the container user ([podman-run](https://docs.podman.io/en/latest/markdown/podman-run.1.html)). Not verified with an SSH agent.
   - Rootful Docker runs the container user as UID 1000. If your UID is different, build your own image with `--uid` as described in [File ownership](#file-ownership).

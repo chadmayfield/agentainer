@@ -10,6 +10,17 @@ import bump_versions as bv  # noqa: E402
 
 
 class EnvFileTests(unittest.TestCase):
+    def test_resolver_downgrade_preserves_the_pin_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "versions.env")
+            original = "HELM_VERSION=4.3.1\n"
+            with open(path, "w") as file:
+                file.write(original)
+            rc = bv.main(["--file", path], resolvers=[lambda: {"HELM_VERSION": "3.22.1"}])
+            self.assertNotEqual(rc, 0)
+            with open(path) as file:
+                self.assertEqual(file.read(), original)
+
     def test_round_trip_keeps_comments_and_order(self):
         text = "# header\nA=1\n\n# note\nB=2\n"
         lines = bv.parse_env(text)

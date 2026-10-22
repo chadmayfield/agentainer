@@ -8,12 +8,16 @@ import argparse
 import datetime
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import tempfile
 import sys
 import urllib.parse
 import urllib.request
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "rootfs/usr/local/lib/agentainer"))
+from release_version import version_key
 
 ARCHES = {"AMD64": "amd64", "ARM64": "arm64"}
 AGY_MANIFEST = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_{arch}.json"
@@ -107,6 +111,28 @@ def render_env(lines, updates):
 
 # ---- HTTP -----------------------------------------------------------------
 
+class HTTPSRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep downloads on HTTPS and credentials on the origin that received them.
+
+    https://docs.python.org/3/library/urllib.request.html#urllib.request.HTTPRedirectHandler
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urlsplit(newurl)
+        if target.scheme != "https":
+            raise urllib.error.HTTPError(newurl, code, "redirect requires HTTPS", headers, fp)
+        result = super().redirect_request(req, fp, code, msg, headers, newurl)
+        origin = urllib.parse.urlsplit(req.full_url)
+        if result is not None and (origin.hostname, origin.port or 443) != (target.hostname, target.port or 443):
+            result.remove_header("Authorization")
+        return result
+
+
+def open_https(request):
+    if urllib.parse.urlsplit(request.full_url).scheme != "https":
+        raise LookupFailed("download requires HTTPS")
+    return urllib.request.build_opener(HTTPSRedirectHandler()).open(request, timeout=60)
+
 def fetch(url, accept=None):
     headers = {"User-Agent": "agentainer-bump"}
     if accept:
@@ -115,7 +141,7 @@ def fetch(url, accept=None):
     if token and url.startswith("https://api.github.com/"):
         headers["Authorization"] = "Bearer " + token
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r:
+        with open_https(urllib.request.Request(url, headers=headers)) as r:
             return r.read().decode()
     except Exception as e:  # noqa: BLE001 - report any network error the same way
         raise LookupFailed("%s: %s" % (url, e))
@@ -124,7 +150,7 @@ def fetch(url, accept=None):
 def fetch_bytes(url):
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "agentainer-bump"})
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with open_https(req) as r:
             return r.read()
     except Exception as e:  # noqa: BLE001 - report any network error the same way
         raise LookupFailed("%s: %s" % (url, e))
@@ -512,6 +538,14 @@ def main(argv=None, resolvers=None):
             print("bump_versions: refusing to write %s" % why, file=sys.stderr)
         return 1
     old = values(lines)
+    for key, value in updates.items():
+        if key.endswith("_VERSION") and key in old and old[key] != value:
+            try:
+                if version_key(strip_v(value)) < version_key(strip_v(old[key])):
+                    raise ValueError("resolver would downgrade %s" % key)
+            except ValueError as error:
+                print("bump_versions: %s; pins unchanged" % error, file=sys.stderr)
+                return 1
     for k in sorted(updates):
         if old.get(k) != updates[k]:
             print("%s: %s -> %s" % (k, old.get(k, "(new)"), updates[k]))

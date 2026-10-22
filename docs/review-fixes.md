@@ -15,7 +15,22 @@ This table tracks the 77 entries reviewed at commit `b87d7b5`. Duplicate entries
 | 9 | RT-1 | Reject incomplete, reversed or duplicated managed markers without modifying user TOML. |
 | 10 | RT-ESCAPE-1 | Image-owned Python commands and the startup version helper use isolated Python. |
 
+| 11 | rt-host-3 | Arbitrary tmux pane passthrough is disabled; opt-in and terminal risks are documented. |
+| 12 | BUILD-1 | Resolver redirects require HTTPS and drop authorization across origins. |
+| 13 | BUILD-2 | Claude manifest citation refers to the version pin rather than a stale literal. |
+| 14 | BUILD-4 | Downgrades are refused before writing any pins. Major-line restrictions remain a policy decision. |
+| 15 | BUILD-5 | Deferred. No incompatible base/snapshot pair has been reproduced. |
+| 16 | DC-4 | Documented default queue cancellation and reruns. Local actionlint 1.7.11 rejects queue: max; pinned 1.7.12 support is not verified. |
+| 17 | DOC-2 | Corrected with entry 5. |
+| 18 | DOC-3 | Documented signing access through forwarded SSH agents. |
+| 19 | DOC-4 | Clarified that server-side TLS requires additional implementation. |
+| 20 | DOC-5 | Added the explicit Codex API-key login step to the env example. |
+
 ## Decisions left open
+
+- Whether to restrict major-version updates in addition to refusing downgrades.
+- Whether to change snapshot selection after reproducing a base/snapshot mismatch.
+- Whether to upgrade actionlint and enable a larger release queue after verifying the pinned version.
 
 - Whether to configure release-tag restrictions and protected publication environments in GitHub.
 - Whether to replace the stable-only latest defaults before the first stable release.
