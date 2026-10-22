@@ -103,6 +103,12 @@ case "$cmd" in
 up | attach | shell | start | update | down | status | doctor) ;;
 *) usage ;;
 esac
+case "$cmd" in
+start | attach | shell | down | update)
+	[ "$#" -le 1 ] || usage
+	case "${1:-agentainer}" in -*) usage ;; esac
+	;;
+esac
 R=$(runtime)
 if [ -z "$R" ]; then
 	echo "agentainer: neither podman nor docker found" >&2

@@ -63,6 +63,8 @@ With no `--publish` option, the launcher publishes no ports. Change the mappings
 
 ## Without the launcher
 
+Before the first stable release, replace `:latest` in the command below with an available prerelease tag, such as `:0.1.0-dev.20261019.1`. The registry has no `latest` manifest until a stable release publishes it ([release policy](versions.md#releases)).
+
 ```sh
 docker run -d --name agentainer --hostname agentainer \
   --security-opt no-new-privileges=true \

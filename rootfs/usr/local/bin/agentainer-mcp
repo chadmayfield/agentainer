@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """agentainer-mcp sync [--if-changed]|list: apply ~/.agentainer/mcp.json to every agent.
 
 Only servers this tool added (recorded in ~/.agentainer/mcp-managed.json) are ever
@@ -272,8 +272,10 @@ def codex_outside_block(text):
     """The file without agentainer's marked block."""
     b = text.find(MARK_BEGIN)
     e = text.find(MARK_END, b + 1) if b >= 0 else -1
-    if b < 0 or e < 0:
+    if b < 0 and e < 0 and MARK_END not in text:
         return text
+    if text.count(MARK_BEGIN) != 1 or text.count(MARK_END) != 1 or e < b:
+        raise ValueError("invalid agentainer MCP markers; leave the file untouched")
     return text[:b].rstrip("\n") + "\n" + text[e + len(MARK_END):].lstrip("\n")
 
 

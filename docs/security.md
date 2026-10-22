@@ -10,11 +10,14 @@ To report a vulnerability in Agentainer itself, follow [SECURITY.md](../SECURITY
 
 ## What the container isolates
 
-The container keeps agents away from host files outside the mounts, host credentials you do not pass in, and other host processes.
+The container restricts direct filesystem and process access through its mounts and namespaces. Writable mounts, shared home files and reachable host services can let container code affect the host.
 
 It does not isolate:
 
 - The code you mount. Agents can change or delete it.
+- Host execution of mounted files. Git configuration and hooks, generated executables, editor tasks and project scripts can run as your host user after an agent changes them. Review these files before running host commands, or use a separate host clone. Disabling Git hooks alone does not disable every execution path ([Git configuration](https://git-scm.com/docs/git-config)).
+- Host network services. On the tested macOS Podman machine, `host.containers.internal` reached a temporary service bound to host loopback. This does not establish the behavior of every runtime. Authenticate sensitive host services; use an offline network when network access is unnecessary ([Podman networking](https://docs.podman.io/en/latest/markdown/podman-run.1.html)).
+- Shared home volumes. Every container using the same home trusts its shell startup files, agent settings and installed tools. Use different homes for different trust levels. Enabling sudo in a later container also grants its startup code access to container root.
 - Outbound network access, unless you use the NetworkPolicy in Kubernetes ([docs/kubernetes.md](kubernetes.md#network-policy)).
 - Credentials. **Every variable in the env file or Secret is readable by every process in the container**: all four agents, the tools they run, and MCP servers. Pass only the keys you need, and prefer narrowly scoped tokens.
 - The host kernel. This is a container, not a VM.

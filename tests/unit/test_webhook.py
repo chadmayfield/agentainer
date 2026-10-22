@@ -172,6 +172,29 @@ class ConcurrencyLimitTests(unittest.TestCase):
         finally:
             c.close()
 
+    def test_trickling_headers_and_body_cannot_retain_worker_slots(self):
+        import time
+        handler = self.server.RequestHandlerClass
+        with mock.patch.object(handler, "request_timeout", 0.25, create=True):
+            for prefix in (b"POST /password HTTP/1.0\r\nX-Slow: ",
+                           b"POST /password HTTP/1.0\r\nContent-Length: 1000\r\n\r\n"):
+                clients = [socket.create_connection(("127.0.0.1", self.port)) for _ in range(2)]
+                self.idle.extend(clients)
+                for client in clients:
+                    client.sendall(prefix)
+                deadline = time.monotonic() + 0.7
+                while time.monotonic() < deadline:
+                    for client in clients:
+                        try:
+                            client.sendall(b" ")
+                        except OSError:
+                            pass
+                    time.sleep(0.04)
+                self.assertEqual(self.status(), 200, "trickle retained every worker beyond its deadline")
+                for client in clients:
+                    client.close()
+                self.idle = []
+
     def test_connections_beyond_the_limit_get_503(self):
         import socket
         import time

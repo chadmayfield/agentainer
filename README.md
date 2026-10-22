@@ -21,6 +21,7 @@ Development prereleases have explicit version tags, such as `0.1.0-dev.20261019.
 mkdir -p ~/.config/agentainer
 cp env.example ~/.config/agentainer/env
 chmod 600 ~/.config/agentainer/env      # then fill in the keys you use
+export AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261019.1
 bin/agentainer up ~/code                 # ~/code becomes /workspace
 bin/agentainer attach                    # tmux session "main"
 ```

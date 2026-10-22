@@ -46,7 +46,7 @@ if [ -f "$f" ]; then
 	if [ -f "$canon" ] && [ ! -L "$canon" ]; then mine=$(sha256sum "$canon" | cut -d' ' -f1); fi
 	if [ "$mine" = "$new" ]; then
 		:
-	elif [ -n "$mine" ] && python3 /usr/local/lib/agentainer/release_version.py newer-default "$ver" "$mine" "$f"; then
+	elif [ -n "$mine" ] && python3 -I /usr/local/lib/agentainer/release_version.py newer-default "$ver" "$mine" "$f"; then
 		# The file still matches an earlier, older image default, so the user never edited
 		# it. A unique temp file keeps the swap atomic; the file keeps its mode.
 		tmp=$(mktemp "$HOME/.agentainer/.AGENTS.md.XXXXXX")

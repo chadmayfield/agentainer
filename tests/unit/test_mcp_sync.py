@@ -279,6 +279,19 @@ class SyncTests(SyncBase):
         self.assertEqual(self.json_servers("agy")["web"]["headers"], {"X-Static": "1"})
 
 class RobustnessTests(SyncBase):
+    def test_invalid_managed_markers_leave_user_bytes_untouched(self):
+        self.write_mcp({"sample": {"command": "echo"}})
+        for markers in (mcp.MARK_BEGIN, mcp.MARK_END,
+                        mcp.MARK_END + "\n" + mcp.MARK_BEGIN,
+                        mcp.MARK_BEGIN + "\n" + mcp.MARK_BEGIN + "\n" + mcp.MARK_END):
+            with self.subTest(markers=markers):
+                original = 'model = "mine"\n' + markers + '\n[profiles.mine]\nmodel = "keep-me"\n'
+                with open(self.codex_path(), "w") as file:
+                    file.write(original)
+                for _ in range(2):
+                    self.assertNotEqual(self.sync(), 0)
+                    self.assertEqual(self.read(".codex", "config.toml"), original)
+
     def codex_path(self):
         os.makedirs(os.path.join(self.home, ".codex"), exist_ok=True)
         return os.path.join(self.home, ".codex", "config.toml")

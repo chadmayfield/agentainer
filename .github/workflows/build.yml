@@ -338,7 +338,11 @@ jobs:
       prerelease: ${{ steps.ver.outputs.prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with: {fetch-depth: 0}
+        # Authorization code comes from main, never from the candidate tag.
+        # https://github.com/actions/checkout#usage
+        with:
+          ref: main
+          fetch-depth: 0
       - id: ver
         name: Version from the merged release branch
         shell: bash

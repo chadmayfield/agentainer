@@ -58,7 +58,28 @@ def echo(req):
 
 def make_handler(s):
     class Handler(BaseHTTPRequestHandler):
-        timeout = 10  # seconds per socket read, so a stalled client cannot hold a thread
+        timeout = 10
+        request_timeout = 10
+
+        def handle(self):
+            # A whole-request deadline interrupts buffered header and body reads even
+            # when the client keeps sending within the socket timeout.
+            def expire():
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+            deadline = threading.Timer(self.request_timeout, expire)
+            deadline.daemon = True
+            deadline.start()
+            try:
+                super().handle()
+            except (ConnectionError, socket.timeout):
+                # A disconnected client needs no response or traceback.
+                return
+            finally:
+                deadline.cancel()
 
         def _reply(self, code, body):
             data = json.dumps(body).encode()

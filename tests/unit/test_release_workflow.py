@@ -100,6 +100,7 @@ else:
         version_job = workflow.split("\n  version:\n", 1)[1].split("\n  publish:\n", 1)[0]
         self.assertIn("refs/tags/v", version_job)
         self.assertIn("scripts/check_release_tag.py", version_job)
+        self.assertIn("ref: main", version_job, "candidate tags must not supply their own authorization code")
 
     def test_attestation_sits_between_signing_and_promotion(self):
         workflow = (ROOT / ".github/workflows/build.yml").read_text()

@@ -42,7 +42,7 @@ Releases use [Semantic Versioning](https://semver.org/). Stable versions have th
 
 Versions below `1.0.0` are initial development, without a stable compatibility promise. Agentainer's public interfaces are its launcher commands, documented environment variables, configuration paths and persistent-home upgrade behavior. Bundled tool versions remain separate in `versions.env`.
 
-A release requires a maintainer-signed annotated `v<version>` tag on the matching release merge in `main`. The tag signature must match the repository variable `RELEASE_SIGNING_FINGERPRINT`. A branch merge alone does not publish ([release procedure](../CONTRIBUTING.md#releases)). Each release publishes `ghcr.io/chadmayfield/agentainer` for amd64 and arm64:
+A release requires a maintainer-signed annotated `v<version>` tag on the matching release merge in `main`. The tag signature must match the repository variable `RELEASE_SIGNING_FINGERPRINT`. The version job checks out `main` to run its authorization code, so a candidate tag cannot replace its signature gate. Protect `main` and release-tag creation in repository settings. A branch merge alone does not publish ([release procedure](../CONTRIBUTING.md#releases)). Each release publishes `ghcr.io/chadmayfield/agentainer` for amd64 and arm64:
 
 - tagged with the version and `sha-<commit>`, with `latest` reserved for stable releases;
 - signed with cosign keyless signing, the index and each architecture's image;
