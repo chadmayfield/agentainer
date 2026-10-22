@@ -92,6 +92,20 @@ ARG TEA_SHA256_AMD64
 ARG TEA_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh tea
 
+FROM fetch AS kubectl
+ARG TARGETARCH
+ARG KUBECTL_VERSION
+ARG KUBECTL_SHA256_AMD64
+ARG KUBECTL_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh kubectl
+
+FROM fetch AS helm
+ARG TARGETARCH
+ARG HELM_VERSION
+ARG HELM_SHA256_AMD64
+ARG HELM_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh helm
+
 FROM fetch AS claude
 ARG TARGETARCH
 ARG CLAUDE_CODE_VERSION
@@ -203,6 +217,8 @@ COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY --from=curlie /usr/local/bin/curlie /usr/local/bin/curlie
 COPY --from=golangci-lint /usr/local/bin/golangci-lint /usr/local/bin/golangci-lint
 COPY --from=tea /usr/local/bin/tea /usr/local/bin/tea
+COPY --from=kubectl /usr/local/bin/kubectl /usr/local/bin/kubectl
+COPY --from=helm /usr/local/bin/helm /usr/local/bin/helm
 COPY --from=claude /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=codex /opt/codex /opt/codex
 COPY --from=agy /usr/local/bin/agy /usr/local/bin/agy
@@ -276,5 +292,7 @@ ENV AGENTAINER_TOOLS=ephemeral \
 
 USER agent
 WORKDIR /workspace
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+	CMD ["/usr/local/bin/agentainer-healthcheck"]
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/agentainer-entrypoint"]
 CMD ["sleep", "infinity"]

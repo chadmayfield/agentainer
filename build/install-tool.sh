@@ -163,6 +163,17 @@ tea)
 	xz -d tea.xz
 	install -m 0755 tea /usr/local/bin/tea
 	;;
+kubectl)
+	# https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
+	sh $F "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" sha256 "$(pin KUBECTL_SHA256)" kubectl
+	install -m 0755 kubectl /usr/local/bin/kubectl
+	;;
+helm)
+	# https://helm.sh/docs/intro/install/#from-the-binary-releases
+	sh $F "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" sha256 "$(pin HELM_SHA256)" helm.tgz
+	tar -xzf helm.tgz "linux-${TARGETARCH}/helm"
+	install -m 0755 "linux-${TARGETARCH}/helm" /usr/local/bin/helm
+	;;
 claude)
 	# The native Claude Code binary from Anthropic's release host, the file the native
 	# installer downloads (https://claude.ai/install.sh). The pinned SHA-256 comes from

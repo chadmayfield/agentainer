@@ -287,6 +287,34 @@ def r_golangci():
         "ARM64": lambda v: "golangci-lint-%s-linux-arm64.tar.gz" % v})
 
 
+def r_kubectl():
+    # https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
+    tag = fetch("https://dl.k8s.io/release/stable.txt").strip()
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+        raise LookupFailed("kubectl: stable release must be a version tag")
+    out = {"KUBECTL_VERSION": tag[1:]}
+    for up, arch in ARCHES.items():
+        out["KUBECTL_SHA256_" + up] = parse_checksum_file(fetch(
+            "https://dl.k8s.io/release/%s/bin/linux/%s/kubectl.sha256" % (tag, arch)))
+    return out
+
+
+def r_helm():
+    # https://helm.sh/docs/intro/install/#from-the-binary-releases
+    release = gh_latest("helm/helm")
+    tag = release["tag_name"]
+    if release.get("prerelease") or release.get("draft") or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+        raise LookupFailed("helm: latest release must be a stable version tag")
+    out = {"HELM_VERSION": tag[1:]}
+    for up, arch in ARCHES.items():
+        name = "helm-%s-linux-%s.tar.gz" % (tag, arch)
+        parts = fetch("https://get.helm.sh/" + name + ".sha256sum").split()
+        if len(parts) != 2 or parts[1].lstrip("*") != name or not HEX64.fullmatch(parts[0]):
+            raise LookupFailed("helm: invalid or mismatched checksum for " + name)
+        out["HELM_SHA256_" + up] = parts[0]
+    return out
+
+
 def codex_asset(triple):
     # The complete package (bin/codex, codex-code-mode-host, rg, bwrap, codex-package.json).
     # The interactive CLI refuses to start from the bare binary ("this CLI has no complete
@@ -450,7 +478,7 @@ def r_buildkit():
 
 
 RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_trivy, r_curlie, r_golangci,
-             r_tea, r_claude, r_codex, r_agy, r_opencode, r_k8s_images, r_buildkit]
+             r_kubectl, r_helm, r_tea, r_claude, r_codex, r_agy, r_opencode, r_k8s_images, r_buildkit]
 
 
 def main(argv=None, resolvers=None):

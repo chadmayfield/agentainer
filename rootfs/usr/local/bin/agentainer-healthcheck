@@ -1,0 +1,11 @@
+#!/bin/sh
+# Inspect local readiness without running agents or reading their configuration.
+fail() {
+	printf 'agentainer: health check failed: %s\n' "$1" >&2
+	exit 1
+}
+
+[ -f /var/lib/agentainer/ready ] && [ ! -L /var/lib/agentainer/ready ] || fail 'startup incomplete'
+[ -n "${HOME:-}" ] && [ -d "$HOME" ] && [ -r "$HOME" ] && [ -w "$HOME" ] && [ -x "$HOME" ] || fail 'home permissions'
+[ -L /var/lib/agentainer/active ] && [ -d /var/lib/agentainer/active ] &&
+	[ -r /var/lib/agentainer/active ] && [ -x /var/lib/agentainer/active ] || fail 'tools directory unavailable'

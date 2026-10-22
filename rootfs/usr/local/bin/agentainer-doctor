@@ -28,6 +28,7 @@ PROBES = (
     ("go", ["version"]), ("rustc", ["--version"]), ("cargo", ["--version"]),
     ("cmake", ["--version"]), ("ninja", ["--version"]),
     ("pkg-config", ["--version"]), ("psql", ["--version"]),
+    ("kubectl", ["version", "--client=true", "--output=json"]), ("helm", ["version", "--short"]),
 )
 AGENTS = ("claude", "codex", "agy", "opencode")
 

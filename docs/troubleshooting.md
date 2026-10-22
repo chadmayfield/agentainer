@@ -30,6 +30,13 @@ Login validity, agent-specific setting semantics, model access, MCP server conne
 
 ## Common problems
 
+**The container reports `starting` or `unhealthy`.**
+Inspect `.State.Health` as described in [container health](running.md#container-health). A new container can remain `starting` while its entrypoint runs. Failures report `startup incomplete`, `home permissions` or `tools directory unavailable`, without printing environment values. Check the container's startup logs and home mount permissions, then run `agentainer doctor` for broader checks. A repaired container becomes `healthy` on its next successful probe. This probe does not test agent authentication or network access.
+
+An older image without a health check may show `starting` on Podman 5.3.2 with an empty `.Config.Healthcheck` object and no probe log. That empty configuration is not a running startup check. Podman initializes `starting` when a non-null health-check object exists ([Podman source](https://github.com/containers/podman/blob/v5.3.2/libpod/container_internal.go#L1291-L1300)).
+
+In local verification, a Podman 6.0.1 macOS client with a 5.3.2 VM server also omitted the command when creating a container from an image that defined one. The matching 5.3.2 CLI inside the VM inherited and ran it. With that client/server pair, an explicit `--health-cmd=/usr/local/bin/agentainer-healthcheck` on a raw `podman run` supplied the missing command. Use this only with an image that includes the probe. The launcher does not add that override ([Podman health command option](https://docs.podman.io/en/v5.3.2/markdown/podman-run.1.html#health-cmd-command)).
+
 **`sudo: The "no new privileges" flag is set, which prevents sudo from running as root.`**
 sudo is off by default. Recreate the container with `bin/agentainer up --sudo`, or leave out `--security-opt no-new-privileges=true` from a raw `docker run` or `podman run` ([docs/running.md](running.md#sudo)).
 

@@ -69,6 +69,21 @@ With Podman, use the same commands and add `--userns=keep-id:uid=1000,gid=1000`.
 - The whole home directory `/home/agent` is one volume. Logins, settings and `AGENTS.md` live there and survive a new container. Containers that use the same volume share logins, and two containers running the same agent write the same files.
 - The `ping_group_range` sysctl lets `ping` work without the `NET_RAW` capability. It names only GID 1000: with Podman's keep-id the GID map is not contiguous, and a wider range breaks.
 
+## Container health
+
+The image runs [`agentainer-healthcheck`](../rootfs/usr/local/bin/agentainer-healthcheck) every 30 seconds, with a five-second timeout, a 180-second startup grace period and three consecutive failures before `unhealthy`. These settings use the [Dockerfile `HEALTHCHECK` instruction](https://docs.docker.com/reference/dockerfile/#healthcheck), supported by [Podman](https://docs.podman.io/en/v5.3.2/markdown/podman-run.1.html#health-start-period-period).
+
+The probe checks the entrypoint's completion marker, home-directory read/write/search permissions and the active tools symlink's readable, searchable directory target. Startup clears the previous marker, including after a container restart. The probe reads no agent settings or credentials, runs no agents, changes no home files and makes no network requests. It checks access permissions, not whether the disk has free space or every tool works. Use [`agentainer doctor`](troubleshooting.md#offline-diagnostics) for broader diagnostics.
+
+Inspect the status and recent probe results from the host:
+
+```sh
+podman inspect --format '{{json .State.Health}}' agentainer
+docker inspect --format '{{json .State.Health}}' agentainer
+```
+
+Health status reports readiness; it does not restart the container automatically. Docker ends startup grace after the first successful probe; Podman 5.3.2 continues suppressing failure counts until the grace deadline ([Podman source](https://github.com/containers/podman/blob/v5.3.2/libpod/healthcheck.go#L127-L136)). Older published images without this check require an image update and container recreation. Kubernetes does not use image health checks; pod probes must be configured separately ([Kubernetes probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)).
+
 ## sudo
 
 The image has passwordless sudo, and `--security-opt no-new-privileges=true` turns it off ([Docker reference](https://docs.docker.com/reference/cli/docker/container/run/)). `agentainer up --sudo` leaves that option out.

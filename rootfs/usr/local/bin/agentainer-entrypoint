@@ -27,6 +27,11 @@ if [ -z "${AGENTAINER_QUIET:-}" ]; then
 	if [ "$#" -gt 0 ] && [ "$*" != "sleep infinity" ]; then AGENTAINER_QUIET=1; else AGENTAINER_QUIET=0; fi
 fi
 
+# A stopped container retains its writable layer, including the previous marker.
+if [ -d /var/lib/agentainer ]; then
+	rm -f /var/lib/agentainer/ready || exit 1
+fi
+
 # Each step runs in a subshell with set -e. This relies on /bin/sh being dash, which
 # applies set -e inside sourced files, functions and pipelines here; bash does not when
 # the subshell is an if condition. Steps that must fail also use explicit "return 1".

@@ -103,6 +103,28 @@ psql --no-psqlrc --no-password --set ON_ERROR_STOP=1 --file ./migration.sql
 
 `--no-psqlrc` skips startup customizations. `--no-password` prevents an unattended script from waiting for a password prompt. `ON_ERROR_STOP=1` stops on SQL errors and returns exit code 3; connection failures return 2. Check the exit code in automation. Stopping does not undo earlier committed statements. Follow the project's transaction strategy. See the [psql reference](https://www.postgresql.org/docs/current/app-psql.html).
 
+## Kubernetes and Helm clients
+
+The image includes pinned `kubectl` and Helm release binaries for amd64 and arm64. Their versions and the projects' published SHA-256 checksums live in [`versions.env`](../versions.env). Each tool has its own build stage; the scheduled version updater resolves its stable release and both checksums. See [kubectl binary installation](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/) and [Helm binary installation](https://helm.sh/docs/intro/install/#from-the-binary-releases).
+
+Inspect client versions without contacting a cluster:
+
+```sh
+kubectl version --client=true --output=json
+helm version --short
+```
+
+Local rendering also works without a cluster:
+
+```sh
+kubectl kustomize ./deploy/kubernetes
+helm template example-release ./path/to/chart
+```
+
+`kubectl kustomize` reads the local kustomization, and `helm template` renders the local chart. Remote bases, chart dependencies or template options can introduce downloads or cluster access; follow the project's instructions. Agentainer's tests use local fixtures with networking disabled and no kubeconfig. See [kubectl kustomize](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_kustomize/) and [Helm template](https://helm.sh/docs/helm/helm_template/).
+
+Cluster credentials are not included. Supply a kubeconfig at runtime only when you intend to allow cluster access, and check that kubectl is within one minor version of the API server ([kubectl version skew](https://kubernetes.io/releases/version-skew-policy/#kubectl)). Cloud authentication helpers and cloud CLIs are not bundled. Helm 4 is the current stable major selected by the upstream release API; projects requiring Helm 3 must use a compatible custom setup ([Helm releases](https://github.com/helm/helm/releases)).
+
 ## Persistence
 
 `.venv` and `node_modules` live with the project under the workspace mount. `AGENTAINER_TOOLS=persist` controls supported user-wide tool installations separately. See [customization](customization.md#project-dependencies-and-installed-tools) for recreation and runtime-change guidance. A persistent home does not preserve dependencies installed only in a container's writable layer.

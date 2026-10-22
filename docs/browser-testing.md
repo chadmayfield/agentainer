@@ -4,6 +4,8 @@ Install Playwright in the project that needs it. Agentainer supplies Node.js and
 
 ## Allow OS dependency installation
 
+An agent can run the project installation, browser download and smoke test below. It cannot install missing OS libraries under the default launcher security settings. Have the user enable sudo for that setup or supply a custom image with the libraries already installed. Browser binaries must match the project's Playwright version; downloading a browser alone does not supply its OS dependencies ([Playwright browser requirements](https://playwright.dev/docs/browsers)).
+
 Playwright's Linux libraries need root access. The launcher's default security settings block sudo, so create a container with `--sudo` when installing these libraries. Select an available image as described in [running Agentainer](running.md), then run this from the repository root for a separate browser-testing home:
 
 ```sh
