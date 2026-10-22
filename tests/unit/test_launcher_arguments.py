@@ -9,6 +9,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class NameArgumentsTests(unittest.TestCase):
+    def test_explicit_missing_env_file_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.launch(Path(directory), directory)
+            self.assertIn("env file does not exist", result.stderr)
+
     def launch(self, base, *args, **extra):
         engine = base / "engine"
         engine.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')

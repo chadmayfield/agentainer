@@ -49,6 +49,8 @@ ssh dev@<containerssh service address>
 - Each login runs tmux with `TERM=xterm-256color`. ContainerSSH does not pass the client's environment to the pod in this setup, and tmux will not start without `TERM`.
 - ContainerSSH sends an SSH keepalive every 30 seconds, so load balancer and NAT idle timers do not drop a quiet session.
 
+The agent pod has startup and readiness probes with a three-minute startup allowance. They execute the image's local health command; legacy images fall back to the active-tools link. These checks do not detect every hung agent. A liveness policy needs a separate responsiveness and recovery contract ([probe semantics](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)).
+
 ## Limits
 
 - Each webhook request has a ten-second deadline covering headers and body. The webhook runs at most 16 handler threads and one deadline timer per handler. Excess connections receive HTTP 503. To preserve that response during an in-flight upload, it drains at most 16 rejected sockets without blocking or adding threads. Each drain has an 80 KiB byte budget and a one-second deadline checked by the server's polling loop. Further excess connections close immediately ([implementation](../deploy/kubernetes/auth-webhook/webhook.py), [HTTP connection teardown](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6)).

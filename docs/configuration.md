@@ -89,7 +89,7 @@ In a hand check, Codex and Antigravity listed a synced server's tools, and `clau
 | `ephemeral` (default) | `/var/lib/agentainer/tools` | No |
 | `persist` | `~/.agentainer/tools` | Yes |
 
-Image tools come first on `PATH`, so an installed tool never hides an image tool. When the image changes and persisted tools exist, the entrypoint warns; `agentainer-tools reset` moves them to a dated backup. Resets share a lock and reserve unique backup paths across containers. `agentainer-tools status` shows the mode and what is installed.
+Image tools come first on `PATH`, so an installed tool never hides an image tool. When the image changes and persisted tools exist, the entrypoint warns; `agentainer-tools reset` moves them to a dated backup. Resets share a lock and reserve unique backup paths across containers. `agentainer-tools status` shows the effective mode, selected root, and entries in `bin`, `npm/bin` and `python/bin`. It does not inventory every package or cache.
 
 Ubuntu's Python refuses `pip install` outside a virtual environment, `pip install --user` included (PEP 668), so use `uv`, `pipx` or a venv. `PYTHONUSERBASE` points into the same tools root, but plain `pip` never installs there.
 

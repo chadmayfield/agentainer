@@ -14,7 +14,7 @@ status)
 	*) mode=unknown ;;
 	esac
 	printf 'mode: %s\nroot: %s\n' "$mode" "$root"
-	ls "$active/bin" "$active/npm/bin" 2>/dev/null || true
+	ls "$active/bin" "$active/npm/bin" "$active/python/bin" 2>/dev/null || true
 	;;
 reset)
 	mkdir -p "$HOME/.agentainer"

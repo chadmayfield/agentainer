@@ -7,7 +7,9 @@ Agentainer is one container image with four AI coding agents and a shared set of
 - Tools: git, gh, Go, Rust, Python with uv and pipx, Node.js, GCC/G++, CMake, Ninja, pkg-config, psql, kubectl, Helm, ripgrep, jq, yq, shellcheck, trivy and more. `/etc/agentainer/versions.json` in the image lists every version.
 - Platforms: `linux/amd64` and `linux/arm64`. On amd64 the agents also start on CPUs without AVX2; CI checks this on every build.
 
-Agents see only what you mount and the credentials you pass in, and the same image and tools run everywhere.
+Agents can modify mounted files, use supplied credentials and reach network services. See the [security limits](docs/security.md).
+
+This checkout documents the current source. The published prerelease `0.1.0-dev.20261019.1` predates `agentainer-doctor`, health checks, CMake, Ninja, pkg-config, psql, kubectl and Helm. Build the current source to use those additions; they require a subsequent release before they are available from GHCR ([release policy](docs/versions.md#releases)).
 
 ## Quick start
 

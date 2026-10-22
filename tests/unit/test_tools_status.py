@@ -16,6 +16,8 @@ class ToolsStatusTests(unittest.TestCase):
             state.mkdir()
             persistent = base / ".agentainer/tools"
             persistent.mkdir(parents=True)
+            (persistent / "python/bin").mkdir(parents=True)
+            (persistent / "python/bin/python-user-tool").touch()
             active = state / "active"
             active.symlink_to(persistent)
             script = base / "tools"
@@ -28,3 +30,4 @@ class ToolsStatusTests(unittest.TestCase):
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("mode: persist\nroot: " + str(persistent), result.stdout)
+            self.assertIn("python-user-tool", result.stdout)

@@ -94,7 +94,7 @@ Export the same `RUSTUP_HOME` in each session that uses these tools, or add the 
 
 The examples select current upstream releases at installation time. Record `gopls version`, `npm list --global --depth=0` and `rust-analyzer --version` with your setup instructions. Select explicit upstream versions when reproducing an installation. The scheduled Agentainer version bump does not update these user-installed tools.
 
-After an image architecture or runtime change, validate or reinstall persisted tools. `agentainer-tools reset` moves supported Go/npm tool roots aside; the separate `$HOME/.agentainer/rustup` directory is outside that reset. See [customization](customization.md#project-dependencies-and-installed-tools).
+After an image architecture or runtime change, validate or reinstall persisted tools. `agentainer-tools reset` moves all persisted tool roots aside, including Go, npm, cargo, uv, pipx and the Python user base; the separate `$HOME/.agentainer/rustup` directory is outside that reset. See [customization](customization.md#project-dependencies-and-installed-tools).
 
 The optional integration check installs servers and a TypeScript 6 fallback project in a disposable persistent home, checks actual LSP initialization and document symbols, rejects a fake server and recreates the container with networking disabled:
 

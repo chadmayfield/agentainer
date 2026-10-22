@@ -131,7 +131,7 @@ create() {
 	fi
 	# An absolute path, so the runtime bind-mounts it instead of creating a named volume.
 	# CDPATH is cleared so "code" means ./code, and cd prints nothing.
-	dir=$(CDPATH='' cd -- "$3" 2>/dev/null && pwd -P) || {
+	dir=$(CDPATH='' cd -- "$3" >/dev/null 2>&1 && pwd -P) || {
 		echo "agentainer: no such directory: $3" >&2
 		exit 1
 	}
@@ -148,6 +148,9 @@ create() {
 	esac
 	# The env file is recorded as an absolute path, so update finds it from any directory.
 	envf=""
+	if [ "${AGENTAINER_ENV_FILE+x}" = x ] && [ -n "$ENV_FILE" ] && [ ! -f "$ENV_FILE" ]; then
+		echo "agentainer: warning: env file does not exist or is not a regular file: $ENV_FILE" >&2
+	fi
 	if [ -f "$ENV_FILE" ]; then
 		envf=$(CDPATH='' cd -- "$(dirname -- "$ENV_FILE")" && pwd -P)/$(basename -- "$ENV_FILE")
 	fi

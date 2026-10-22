@@ -59,7 +59,21 @@ This table tracks the 77 entries reviewed at commit `b87d7b5`. Duplicate entries
 | 49 | BUILD-9 | Same documented sudo policy and deferred architecture decision as entry 29. |
 | 50 | DC-5 | Disabled checkout credential persistence in build jobs. The bump resolve job already disables it; push jobs retain it intentionally. |
 
+| 51 | DC-6 | Corrected the attest action comment to the verified exact version. |
+| 52 | DC-7 | Deferred. Branch review and administrator policies require a maintainer decision; no repository settings changed. |
+| 53 | DC-8 | Added startup/readiness probes with legacy-image fallback. Liveness responsiveness and recovery remain a separate decision. |
+| 54 | DOC-10 | Listed optional networked, health, release and visual checks in contributor instructions. |
+| 55 | DOC-6 | Corrected reset/status descriptions and included Python executable entries in status. |
+| 56 | DOC-8 | Marked current-source additions as absent from the published prerelease. No release was published. |
+| 57 | DOC-9 | Independent scanning is implemented and documented with entry 41. |
+| 58 | LAUNCH-10 | Warn for an explicitly supplied missing or nonregular env file. |
+| 59 | LAUNCH-3 | Runnable prerelease selection and latest limits are covered with entry 7. |
+| 60 | LAUNCH-6 | Suppressed cd output when resolving workspace paths under dash. |
+
 ## Decisions left open
+
+- Which branch review, administrator enforcement and Actions approval settings to require.
+- What agent responsiveness a Kubernetes liveness probe should measure, and whether restart can recover it.
 
 - Whether to impose a release-age delay, how long it should be, and which publisher signatures should be required.
 

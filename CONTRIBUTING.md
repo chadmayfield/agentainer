@@ -28,6 +28,11 @@ sh tests/host/test-manifests.sh             # Kubernetes manifest tests (kubectl
 sh tests/host/test-launcher-integration.sh  # real engine, existing local image
 sh tests/host/test-build-uid.sh             # slow: builds a full image with --uid 1001 --gid 20
 python3 tests/host/test-layer-repro.py      # slow: two clean tool builds, configured Buildx
+python3 tests/host/test-healthcheck.py      # also invoked by tests/58-healthcheck.sh
+python3 tests/host/test-language-tooling.py --image localhost/agentainer:dev  # slow, network
+python3 tests/host/test-playwright-setup.py --image localhost/agentainer:dev  # slow, network
+# Release verification arguments: docs/versions.md#verifying-a-release-before-use
+# Optional terminal screenshots: tests/visual/README.md
 ```
 
 With Docker, prefix the commands with `RUNTIME=docker`. `IMAGE=<name>` tests another image.
