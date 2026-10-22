@@ -6,7 +6,7 @@
 
 | Command | What it does |
 |---|---|
-| `agentainer up [--name N] [--sudo] [--image I] [--] [DIR]` | Starts a detached container. DIR defaults to the current directory and becomes `/workspace`. |
+| `agentainer up [--name N] [--sudo] [--image I] [--publish MAPPING ...] [--] [DIR]` | Starts a detached container. DIR defaults to the current directory and becomes `/workspace`. |
 | `agentainer attach [N]` | Runs `tmux new-session -A -s main` in the container |
 | `agentainer shell [N]` | Opens a bash login shell |
 | `agentainer start [N]` | Starts a stopped container, for example after the host or the Podman machine restarts |
@@ -25,13 +25,29 @@ N defaults to `agentainer`. These variables override the launcher's defaults:
 
 For a host directory instead of the default named home volume, set `AGENTAINER_HOME_VOLUME` to an existing directory such as `"$HOME/.config/agentainer/home"`. Both mount at `/home/agent`. [Customizing Agentainer](customization.md) covers setup, your own dotfiles and separate test homes.
 
-`up` records its options (DIR, image, sudo setting, home volume and the env file's absolute path) as container labels, and `update` reads them back:
+`up` records its options (DIR, image, sudo setting, home volume, published ports and the env file's absolute path) as container labels, and `update` reads them back:
 
 - `update` changes nothing when the pull fails, when DIR or the env file no longer exists, or when the container was not made by `up`.
 - After pulling, `update` renames the previous container to `cx-agentainer-backup-N` and stops it. It removes that backup only after replacement startup succeeds. A creation or startup failure restores the previous container and its running or stopped state. Home and workspace changes made by the replacement are not rolled back.
 - Startup may take up to 180 seconds. New images signal entrypoint completion; older images fall back to checking the tools link. If the launcher is killed before it can restore a failed update, inspect `cx-agentainer-backup-N` before retrying. It refuses to overwrite an existing backup. These operations use [Docker rename](https://docs.docker.com/reference/cli/docker/container/rename/) and [Podman rename](https://docs.podman.io/en/latest/markdown/podman-rename.1.html).
 - `update` pulls from a registry, so it cannot update a container that runs an image you built locally (`localhost/...`). Use `agentainer down` and `agentainer up --image ...` for those.
 - DIR must not contain `:`, because `-v` splits its value at `:`. Rename the directory to remove `:`.
+
+## Development server ports
+
+Repeat `--publish` or `-p` before DIR to publish development servers to the host:
+
+```sh
+bin/agentainer up --publish 3000:3000 --publish 8080:8000 "$HOME/code"
+```
+
+Each mapping is `[IPv4:]HOST_PORT:CONTAINER_PORT[/tcp|udp]`. Omitting the address selects `127.0.0.1`, and omitting the protocol selects TCP. The example maps host ports 3000 and 8080 to container ports 3000 and 8000. Open `http://127.0.0.1:8080` on the host for a server listening on container port 8000. The server must listen on the container's network interface, for example `0.0.0.0`, rather than only its own loopback address ([Docker publishing](https://docs.docker.com/engine/network/port-publishing/), [Podman publishing](https://docs.podman.io/en/latest/markdown/podman-run.1.html)).
+
+For UDP, use a mapping such as `--publish 5353:5353/udp`. An explicit bind address changes host access; `--publish 0.0.0.0:3000:3000` binds all host IPv4 interfaces. For a remote engine, the bind address belongs to the engine host. With a local VM, reachability also depends on the runtime's port forwarding.
+
+The launcher accepts individual ports from 1 through 65535 and optional numeric IPv4 addresses. IPv6, port ranges and automatically assigned host ports require a direct runtime command. `--publish=3000:3000` and `-p3000:3000` are also accepted. It validates mappings before creating a container and validates recorded mappings before pulling an update. `update` keeps the mappings; a restored backup retains its own original mapping. Containers created by older launchers without a ports label continue to publish no ports.
+
+With no `--publish` option, the launcher publishes no ports. Change the mappings by recreating the container with the desired `up` options; the persistent home stays in place.
 
 ## Without the launcher
 

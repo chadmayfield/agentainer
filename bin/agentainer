@@ -8,13 +8,15 @@ LABEL=io.github.chadmayfield.agentainer=1
 # up stores its options in labels with this prefix, so update can recreate the container.
 OPT=io.github.chadmayfield.agentainer
 update_token=""
+ports=""
 
 usage() {
 	cat >&2 <<'EOF'
-usage: agentainer up [--name N] [--sudo] [--image I] [--] [DIR]
+usage: agentainer up [--name N] [--sudo] [--image I] [--publish MAPPING ...] [--] [DIR]
        agentainer attach [N] | shell [N] | start [N] | update [N] | down [N] | status
 If a container already exists, use "agentainer down N" first (your home volume is kept).
 update pulls the image and recreates N with the options and DIR of its "up".
+--publish (-p): [IPv4:]HOST_PORT:CONTAINER_PORT[/tcp|udp]; defaults to 127.0.0.1 and tcp.
 EOF
 	exit 2
 }
@@ -38,6 +40,60 @@ run() {
 	} >&2
 	[ "${AGENTAINER_DRY_RUN:-0}" = 1 ] || "$@"
 }
+
+# Canonical single-port mappings keep labels unambiguous and never become shell code.
+# Runtime syntax: https://docs.docker.com/engine/network/port-publishing/
+normalize_publish() {
+	printf '%s\n' "$1" | LC_ALL=C awk '
+NR == 1 { value = $0 }
+END {
+  if (NR != 1) exit 1
+  count = split(value, protocol, "/")
+  if (count > 2) exit 1
+  transport = count == 1 ? "tcp" : protocol[2]
+  if (transport != "tcp" && transport != "udp") exit 1
+  count = split(protocol[1], fields, ":")
+  if (count == 2) {
+    address = "127.0.0.1"; host = fields[1]; container = fields[2]
+  } else if (count == 3) {
+    address = fields[1]; host = fields[2]; container = fields[3]
+  } else exit 1
+  if (split(address, octets, ".") != 4) exit 1
+  address = ""
+  for (i = 1; i <= 4; i++) {
+    if (octets[i] !~ /^[0-9]+$/ || length(octets[i]) > 3 || octets[i] + 0 > 255) exit 1
+    address = address (i == 1 ? "" : ".") (octets[i] + 0)
+  }
+  if (host !~ /^[0-9]+$/ || container !~ /^[0-9]+$/) exit 1
+  if (length(host) > 5 || length(container) > 5) exit 1
+  if (host + 0 < 1 || host + 0 > 65535 || container + 0 < 1 || container + 0 > 65535) exit 1
+  printf "%s:%d:%d/%s", address, host, container, transport
+}'
+}
+
+add_publish() {
+	mapping=$(normalize_publish "$1") || {
+		echo "agentainer: invalid port mapping; use [IPv4:]HOST_PORT:CONTAINER_PORT[/tcp|udp] with ports 1-65535" >&2
+		exit 2
+	}
+	ports="${ports:+$ports,}$mapping"
+}
+
+# Read the comma-separated label without word splitting or evaluating its contents.
+normalize_port_list() (
+	case "$1" in
+	'' | '<no value>') return 0 ;;
+	,* | *, | *,,*) return 1 ;;
+	esac
+	rest=$1
+	separator=""
+	while [ -n "$rest" ]; do
+		mapping=$(normalize_publish "${rest%%,*}") || return 1
+		printf '%s%s' "$separator" "$mapping"
+		separator=,
+		case "$rest" in *,*) rest=${rest#*,} ;; *) rest="" ;; esac
+	done
+)
 
 cmd=${1:-}
 [ -n "$cmd" ] || usage
@@ -96,7 +152,7 @@ create() {
 	# and a wider range no longer contains the agent group after translation.
 	set -- "$R" run -d --name "$name" --hostname "$name" --label "$LABEL" \
 		--label "$OPT.dir=$dir" --label "$OPT.image=$IMAGE" --label "$OPT.sudo=$sudo" \
-		--label "$OPT.home=$home" --label "$OPT.env-file=$envf" \
+		--label "$OPT.home=$home" --label "$OPT.env-file=$envf" --label "$OPT.ports=$ports" \
 		-v "$home:/home/agent" -v "$dir:/workspace" -w /workspace \
 		--sysctl "net.ipv4.ping_group_range=1000 1000"
 	if [ "$sudo" != 1 ]; then set -- "$@" --security-opt no-new-privileges=true; fi
@@ -111,6 +167,11 @@ create() {
 		set -- "$@" --env-file "$envf"
 	fi
 	if [ -n "$update_token" ]; then set -- "$@" --label "$OPT.update=$update_token"; fi
+	rest=$ports
+	while [ -n "$rest" ]; do
+		set -- "$@" --publish "${rest%%,*}"
+		case "$rest" in *,*) rest=${rest#*,} ;; *) rest="" ;; esac
+	done
 	run "$@" "$IMAGE"
 }
 
@@ -175,6 +236,15 @@ up)
 			sudo=1
 			shift
 			;;
+		--publish | -p)
+			[ "$#" -ge 2 ] || usage
+			add_publish "$2"
+			shift 2
+			;;
+		--publish=* | -p?*)
+			case "$1" in --publish=*) add_publish "${1#*=}" ;; *) add_publish "${1#-p}" ;; esac
+			shift
+			;;
 		--)
 			shift
 			break
@@ -197,6 +267,11 @@ update)
 	fi
 	dir=$(label "$name" dir) && sudo=$(label "$name" sudo) &&
 		HOME_VOLUME=$(label "$name" home) && ENV_FILE=$(label "$name" env-file) || exit 1
+	ports=$(label "$name" ports) || exit 1
+	ports=$(normalize_port_list "$ports") || {
+		echo "agentainer: invalid recorded port mapping; nothing changed" >&2
+		exit 1
+	}
 	IMAGE=$img
 	[ -d "$dir" ] || {
 		echo "agentainer: $name was created for $dir, which no longer exists; nothing changed" >&2
