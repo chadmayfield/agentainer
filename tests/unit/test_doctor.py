@@ -29,6 +29,12 @@ def load_doctor():
 
 
 class DoctorCommandTests(unittest.TestCase):
+    def test_native_and_postgresql_tools_have_version_probes(self):
+        probes = dict(load_doctor().PROBES)
+        for name in ("cmake", "ninja", "pkg-config", "psql"):
+            with self.subTest(name=name):
+                self.assertEqual(probes.get(name), ["--version"])
+
     def test_help_succeeds_without_checking_the_host(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "--help"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)

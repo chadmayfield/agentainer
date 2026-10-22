@@ -9,6 +9,7 @@ bubblewrap
 build-essential
 ca-certificates
 cloc
+cmake
 curl
 diffutils
 eza
@@ -30,6 +31,7 @@ libimage-exiftool-perl
 make
 nano
 netcat-openbsd
+ninja-build
 nodejs
 npm
 openssh-client
@@ -37,6 +39,8 @@ oras
 patch
 pgcli
 pipx
+pkg-config
+postgresql-client
 procps
 python3
 python3-pip

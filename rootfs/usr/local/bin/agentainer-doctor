@@ -18,7 +18,7 @@ except ImportError:
     tomllib = None
 
 # These version commands are exercised in tests/20-tools-apt.sh,
-# tests/30-tools-upstream.sh and tests/40-agents.sh.
+# tests/25-build-tools.sh, tests/30-tools-upstream.sh and tests/40-agents.sh.
 PROBES = (
     ("claude", ["--version"]), ("codex", ["--version"]),
     ("agy", ["--version"]), ("opencode", ["--version"]),
@@ -26,6 +26,8 @@ PROBES = (
     ("python3", ["--version"]), ("node", ["--version"]),
     ("npm", ["--version"]), ("uv", ["--version"]),
     ("go", ["version"]), ("rustc", ["--version"]), ("cargo", ["--version"]),
+    ("cmake", ["--version"]), ("ninja", ["--version"]),
+    ("pkg-config", ["--version"]), ("psql", ["--version"]),
 )
 AGENTS = ("claude", "codex", "agy", "opencode")
 

@@ -18,7 +18,7 @@ The command reports `ok`, `warn` or `fail` for:
 - The tools mode, active symlink target and tool-root write access.
 - Syntax of the five seeded agent settings files listed in [default configuration](defaults.md#agent-configurations).
 - Shared MCP input validation, ownership metadata, interrupted writes and the last successful input-hash stamp. An active sync produces a warning instead of reading partially updated state.
-- Version-command execution for the four agents and nine core tools, listed in [`agentainer-doctor`](../rootfs/usr/local/bin/agentainer-doctor).
+- Version-command execution for the four agents and the core tools listed in [`agentainer-doctor`](../rootfs/usr/local/bin/agentainer-doctor).
 
 Settings checks respect `CLAUDE_CONFIG_DIR` ([Claude settings](https://code.claude.com/docs/en/settings#find-or-create-your-settings-files)), `CODEX_HOME` ([Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference)) and `XDG_CONFIG_HOME` for OpenCode. The OpenCode path override was checked with the bundled CLI's `opencode debug paths`. Missing settings files and OpenCode JSONC files produce warnings; invalid JSON/TOML or unreadable files fail. This checks home settings syntax, not the full precedence of project, profile and managed settings.
 

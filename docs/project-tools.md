@@ -70,6 +70,31 @@ npm test
 
 The `packageManager` field records the project's expected package-manager version. Running plain `npm` uses the executable on `PATH`; the field alone does not switch it. Check `npm --version` against the project's requirement. Corepack documents version selection for npm, pnpm and Yarn in its [project configuration](https://github.com/nodejs/corepack#when-authoring-packages). Follow an existing pnpm or Yarn project's setup rather than creating an npm lockfile beside its own lockfile.
 
+## Native builds
+
+The image includes GCC, G++, Make, CMake, Ninja and pkg-config. For an existing CMake project that supports Ninja:
+
+```sh
+cmake -S . -B build -G Ninja
+cmake --build build
+```
+
+`-S` selects the source directory and `-B` keeps generated files in a separate build directory. `-G Ninja` selects the Ninja generator. See the [CMake command reference](https://cmake.org/cmake/help/latest/manual/cmake.1.html) and [Ninja manual](https://ninja-build.org/manual.html).
+
+pkg-config reads installed `.pc` metadata to supply compiler and linker flags. It does not install libraries. Project-specific headers and libraries remain optional dependencies; follow the project's setup instructions. See [Ubuntu's pkg-config manual](https://manpages.ubuntu.com/manpages/resolute/man1/pkg-config.1.html). The package list is [`build/apt-packages.txt`](../build/apt-packages.txt); the existing `APT_SNAPSHOT` pin in [`versions.env`](../versions.env) selects their versions.
+
+## PostgreSQL scripts
+
+Use `pgcli` for interactive work and `psql` for scripts. The image includes the client, not a PostgreSQL server. Configure the connection using your project's runtime environment or PostgreSQL service file. Supply credentials at runtime through a protected password file, never in a command-line connection URL. See [connection environment variables](https://www.postgresql.org/docs/current/libpq-envars.html), [service files](https://www.postgresql.org/docs/current/libpq-pgservice.html) and [password files](https://www.postgresql.org/docs/current/libpq-pgpass.html).
+
+Run a project's SQL file after configuring its connection:
+
+```sh
+psql --no-psqlrc --no-password --set ON_ERROR_STOP=1 --file ./migration.sql
+```
+
+`--no-psqlrc` skips startup customizations. `--no-password` prevents an unattended script from waiting for a password prompt. `ON_ERROR_STOP=1` stops on SQL errors and returns exit code 3; connection failures return 2. Check the exit code in automation. Stopping does not undo earlier committed statements. Follow the project's transaction strategy. See the [psql reference](https://www.postgresql.org/docs/current/app-psql.html).
+
 ## Persistence
 
 `.venv` and `node_modules` live with the project under the workspace mount. `AGENTAINER_TOOLS=persist` controls supported user-wide tool installations separately. See [customization](customization.md#project-dependencies-and-installed-tools) for recreation and runtime-change guidance. A persistent home does not preserve dependencies installed only in a container's writable layer.

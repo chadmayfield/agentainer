@@ -4,7 +4,7 @@ Agentainer is one container image with four AI coding agents and a shared set of
 
 - Agents: [Claude Code](https://code.claude.com/docs/en/setup), [Codex CLI](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/docs/overview?tab=cli) (`agy`) and [OpenCode v2](https://opencode.ai/v2/docs).
 - Base: Ubuntu 26.04 LTS, pinned by digest, with apt packages from the [Ubuntu snapshot service](https://documentation.ubuntu.com/server/how-to/software/snapshot-service/) at a pinned date.
-- Tools: git, gh, Go, Rust, Python with uv and pipx, Node.js, ripgrep, jq, yq, shellcheck, trivy and more. `/etc/agentainer/versions.json` in the image lists every version.
+- Tools: git, gh, Go, Rust, Python with uv and pipx, Node.js, GCC/G++, CMake, Ninja, pkg-config, psql, ripgrep, jq, yq, shellcheck, trivy and more. `/etc/agentainer/versions.json` in the image lists every version.
 - Platforms: `linux/amd64` and `linux/arm64`. On amd64 the agents also start on CPUs without AVX2; CI checks this on every build.
 
 Agents see only what you mount and the credentials you pass in, and the same image and tools run everywhere.
@@ -35,7 +35,7 @@ Start an agent in a tmux window (`claude`, `codex`, `agy` or `opencode`). Close 
 | Signing in to each agent, which Claude login wins, GitHub tokens | [docs/logins.md](docs/logins.md) |
 | Seeded shell, Git, tmux, Vim, EditorConfig, agent settings and Ayu-inspired Agentainer colors | [docs/defaults.md](docs/defaults.md) |
 | Your own configs, bind-mounted homes, separate test homes and custom images | [docs/customization.md](docs/customization.md) |
-| Project-local Python tests and linting, JavaScript tooling and lockfiles | [docs/project-tools.md](docs/project-tools.md) |
+| Python tests and linting, JavaScript tooling, native builds and PostgreSQL scripts | [docs/project-tools.md](docs/project-tools.md) |
 | Optional plugins for Claude Code, Codex, OpenCode and Antigravity | [docs/plugins.md](docs/plugins.md) |
 | The shared `AGENTS.md`, MCP servers, tools that agents install, OpenRouter | [docs/configuration.md](docs/configuration.md) |
 | Kubernetes with ContainerSSH | [docs/kubernetes.md](docs/kubernetes.md) |
