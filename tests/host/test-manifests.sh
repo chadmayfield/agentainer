@@ -12,6 +12,10 @@ fi
 pass "kustomize renders"
 q() { printf '%s\n' "$out" | "$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" "$1"; }
 sts='select(.kind=="StatefulSet")'
+assert_eq "startup probe permits three minutes" "5 36" \
+	"$(q "$sts.spec.template.spec.containers[0].startupProbe | (.periodSeconds | tostring) + \" \" + (.failureThreshold | tostring)")"
+assert_eq "readiness probe executes local checks" "sh" \
+	"$(q "$sts.spec.template.spec.containers[0].readinessProbe.exec.command[0]")"
 assert_eq "runAsNonRoot" "true" "$(q "$sts.spec.template.spec.securityContext.runAsNonRoot")"
 assert_eq "fsGroupChangePolicy" "OnRootMismatch" "$(q "$sts.spec.template.spec.securityContext.fsGroupChangePolicy")"
 assert_eq "ping sysctl" "net.ipv4.ping_group_range" "$(q "$sts.spec.template.spec.securityContext.sysctls[0].name")"

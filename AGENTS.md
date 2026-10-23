@@ -25,8 +25,9 @@ Agentainer is one public container image that bundles four AI coding agents (Cla
 ```sh
 scripts/build.sh                            # build localhost/agentainer:dev
 sh tests/run.sh [tests/NN-name.sh ...]      # container tests
-sh tests/lint.sh                            # shellcheck and shfmt
+sh tests/lint.sh                            # shellcheck, shfmt and Ruff
 python3 -m unittest discover -s tests/unit
+sh tests/14-unit-linux.sh                   # image Python and Linux-only unit modules
 sh tests/host/test-launcher.sh
 sh tests/host/test-build-script.sh
 sh tests/host/test-fetch.sh
@@ -34,6 +35,11 @@ sh tests/host/test-manifests.sh
 sh tests/host/test-launcher-integration.sh  # real engine, existing local image
 sh tests/host/test-build-uid.sh             # slow: full build with --uid 1001 --gid 20
 python3 tests/host/test-layer-repro.py      # slow: two clean tool builds, configured Buildx
+python3 tests/host/test-healthcheck.py      # also invoked by tests/58-healthcheck.sh
+python3 tests/host/test-language-tooling.py --image localhost/agentainer:dev  # slow, network
+python3 tests/host/test-playwright-setup.py --image localhost/agentainer:dev  # slow, network
+# Release verification arguments: docs/versions.md#verifying-a-release-before-use
+# Optional terminal screenshots: tests/visual/README.md
 ```
 
 Check each command's exit code directly. Piping into `tail` or `grep` hides a failure.
@@ -65,7 +71,7 @@ Check each command's exit code directly. Piping into `tail` or `grep` hides a fa
 
 ## Image and runtime
 
-- Image-owned files live outside `/home/agent`.
+- Image-owned files live outside `/home/agent`. Initial, agent-owned `.profile` and `.bashrc` seed copies are the exception, so a newly created named home volume receives shell defaults. They become user files and startup does not replace them.
 - The entrypoint never replaces a user's file with the image's copy; it only adds files that are missing. Exceptions, each limited to what it manages: `~/.agentainer/AGENTS.md` follows a new image default when the user never edited it; `agentainer-mcp sync` edits only the MCP servers it added; `gh auth setup-git` and the git identity step write `~/.gitconfig`; the OpenCode step runs `opencode service set disabled true` only when `~/.config/opencode/service.json` does not exist yet, which creates that file.
 - Containers may share one home volume. Anything that writes to it must cope with another container doing the same at the same time (unique temp files, `flock`).
 - Shell scripts are POSIX sh unless they need bash, and must pass `shellcheck` and `shfmt`. `/bin/sh` in the image is dash.

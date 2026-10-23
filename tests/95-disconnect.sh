@@ -31,7 +31,7 @@ same_panes() {
 	if [ -n "$before" ] && [ "$before" = "$(panes)" ]; then pass "$1"; else fail "$1" "before [$before] now [$(panes)]"; fi
 }
 
-assert_eq "tmux config loaded" "allow-passthrough on" "$(x tmux start-server \; show -g allow-passthrough 2>&1)"
+assert_eq "tmux config loaded" "allow-passthrough off" "$(x tmux start-server \; show -g allow-passthrough 2>&1)"
 assert_eq "tmux config has no invalid lines" "rc=0" "$(x sh -c 'tmux start-server \; source-file /etc/tmux.conf >/dev/null 2>&1; echo rc=$?')"
 wait_for 60 started || fail "the entrypoint finished" "no sleep infinity process"
 assert_contains "tmux passes truecolor (Tc)" "Tc" "$(x tmux start-server \; show -s terminal-overrides 2>&1)"

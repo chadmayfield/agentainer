@@ -1,0 +1,26 @@
+name: optional tooling
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  setup:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-26.04, ubuntu-26.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      RUNTIME: docker
+      IMAGE: localhost/agentainer:dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the selected source
+        run: sh scripts/build.sh
+      - name: Install and verify language tooling
+        run: python3 tests/host/test-language-tooling.py --runtime docker --image "$IMAGE"
+      - name: Install and verify Playwright
+        run: python3 tests/host/test-playwright-setup.py --runtime docker --image "$IMAGE"

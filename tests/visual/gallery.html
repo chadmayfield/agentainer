@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentainer color review</title>
+<style>
+/*__FONT__*/
+:root {
+  color-scheme: light dark;
+  --page: #faf8f2; --text: #272b30; --muted: #5c6269; --accent: #805500;
+  --link: #005f87; --panel: #f0ede5; --button: #e7e3d9; --hover: #ddd8cb; --border: #b9b3a5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #111; --text: #bfbdb6; --muted: #aaa; --accent: #e6b450;
+    --link: #59c2ff; --panel: #171717; --button: #202020; --hover: #292929; --border: #333;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text); font: 16px/1.6 system-ui, sans-serif; }
+main { max-width: 1320px; margin: auto; padding: 32px 24px 64px; }
+h1, h2 { color: var(--accent); font-weight: 600; line-height: 1.3; }
+h1 { margin-bottom: 8px; }
+h2 { font-size: 20px; }
+a { color: var(--link); }
+small, .metadata { color: var(--muted); }
+nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; margin: 24px 0; padding: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+.nav-group { display: grid; grid-template-columns: 48px minmax(0, 1fr); align-items: baseline; gap: 12px; }
+.nav-label { color: var(--accent); font-size: 13px; font-weight: 600; }
+.nav-links { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+nav a { padding: 2px 9px; background: var(--button); border: 1px solid var(--border); border-radius: 4px; font-size: 13px; line-height: 1.5; text-decoration: none; }
+nav a:hover, nav a:focus-visible { color: var(--accent); background: var(--hover); border-color: var(--accent); }
+nav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 760px) { nav { grid-template-columns: minmax(0, 1fr); } }
+section { margin: 36px 0; }
+figure { margin: 0; width: fit-content; max-width: 100%; overflow-x: auto; background: black; border: 1px solid var(--border); border-radius: 6px; }
+figure img { display: block; max-width: 100%; width: auto; height: auto; }
+.terminal { padding: 12px; width: max-content; background: #000; }
+.palette { display: flex; flex-wrap: wrap; gap: 12px; }
+.swatch { border: 1px solid var(--border); border-left: 20px solid var(--color); padding: 2px 8px; }
+/*__XTERM_CSS__*/
+</style>
+</head>
+<body><main>
+<h1>Agentainer color review</h1>
+<p>Agentainer colors, inspired by Ayu. Review readability, selections, file types, diff colors, and the distinct Vim and tmux status bars.</p>
+<ul class="metadata">__METADATA__</ul>
+<p>Captured from actual tools in an isolated container with generic files. Browser rendering uses a fixed font and an Ayu-inspired reference ANSI palette. Your terminal's ANSI colors and font rendering may differ, especially for bat. The tmux clock and sample timestamps are fixed.</p>
+<div class="palette">
+<span class="swatch" style="--color:#000000">Black</span>
+<span class="swatch" style="--color:#202020">Charcoal</span>
+<span class="swatch" style="--color:#bfbdb6">Text</span>
+<span class="swatch" style="--color:#e6b450">Amber</span>
+<span class="swatch" style="--color:#aad94c">Added</span>
+<span class="swatch" style="--color:#f07178">Removed</span>
+<span class="swatch" style="--color:#253340">Vim status</span>
+</div>
+<nav aria-label="Screenshots">__NAV__</nav>
+__CARDS__
+<p><small>Screenshots are review artifacts.</small></p>
+</main>
+__RENDERER__
+</body></html>

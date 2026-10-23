@@ -5,8 +5,8 @@ resources:
   - service.yaml
   - statefulset.yaml
   # - networkpolicy.yaml
-# Pin the image here: set newTag to a release (for example 2026.10.20) or digest to an
-# image digest. "latest" follows every release and pulls on each pod start.
+# Set newTag to a published SemVer release, or replace it with digest: sha256:...
+# "latest" follows only the highest stable release and is absent before the first one.
 images:
   - name: ghcr.io/chadmayfield/agentainer
     newTag: latest

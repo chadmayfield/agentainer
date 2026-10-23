@@ -1,11 +1,13 @@
 import importlib.util
 import json
 import os
+import socket
 import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 
 HERE = os.path.dirname(__file__)
 spec = importlib.util.spec_from_file_location(
@@ -26,6 +28,11 @@ CERT = "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5
 
 
 class WebhookTests(unittest.TestCase):
+    def test_non_utf8_key_comment_does_not_disable_valid_keys(self):
+        with tempfile.NamedTemporaryFile("wb") as file:
+            file.write(KEY.encode() + b" invalid-comment-\xe9\n")
+            file.flush()
+            self.assertIn(" ".join(KEY.split()[:2]), webhook.load_keys(file.name))
     @classmethod
     def setUpClass(cls):
         cls.keys = tempfile.NamedTemporaryFile("w", delete=False)
@@ -41,6 +48,7 @@ class WebhookTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
+        cls.server.server_close()
         os.unlink(cls.keys.name)
 
     def post(self, path, body):
@@ -169,6 +177,29 @@ class ConcurrencyLimitTests(unittest.TestCase):
         finally:
             c.close()
 
+    def test_trickling_headers_and_body_cannot_retain_worker_slots(self):
+        import time
+        handler = self.server.RequestHandlerClass
+        with mock.patch.object(handler, "request_timeout", 0.25, create=True):
+            for prefix in (b"POST /password HTTP/1.0\r\nX-Slow: ",
+                           b"POST /password HTTP/1.0\r\nContent-Length: 1000\r\n\r\n"):
+                clients = [socket.create_connection(("127.0.0.1", self.port)) for _ in range(2)]
+                self.idle.extend(clients)
+                for client in clients:
+                    client.sendall(prefix)
+                deadline = time.monotonic() + 0.7
+                while time.monotonic() < deadline:
+                    for client in clients:
+                        try:
+                            client.sendall(b" ")
+                        except OSError:
+                            pass
+                    time.sleep(0.04)
+                self.assertEqual(self.status(), 200, "trickle retained every worker beyond its deadline")
+                for client in clients:
+                    client.close()
+                self.idle = []
+
     def test_connections_beyond_the_limit_get_503(self):
         import socket
         import time
@@ -195,6 +226,78 @@ class ConcurrencyLimitTests(unittest.TestCase):
         while self.status() != 200 and time.time() < deadline:
             time.sleep(0.1)
         self.assertEqual(self.status(), 200)
+
+
+class OverloadCloseTests(unittest.TestCase):
+    def setUp(self):
+        self.server = webhook.BoundedServer(("127.0.0.1", 0), lambda *args: None, max_workers=1)
+        self.addCleanup(self.server.server_close)
+        self.server._slots.acquire()
+        self.addCleanup(self.server._slots.release)
+
+    def reject(self):
+        client, accepted = socket.socketpair()
+        self.addCleanup(client.close)
+        self.addCleanup(accepted.close)
+        client.settimeout(2)
+        self.server.process_request(accepted, ("127.0.0.1", 0))
+        response = b""
+        while True:
+            data = client.recv(4096)
+            if not data:
+                break
+            response += data
+        self.assertEqual(response, webhook.BUSY)
+        return client, accepted
+
+    def test_inflight_upload_survives_early_503(self):
+        client, accepted = self.reject()
+        # Model separate HTTP header/body writes still in flight after an early reply.
+        client.sendall(b"POST /password HTTP/1.1\r\nContent-Length: 2\r\n\r\n")
+        self.server.service_actions()
+        client.sendall(b"{}")
+        client.shutdown(socket.SHUT_WR)
+        self.server.service_actions()
+        self.assertEqual(accepted.fileno(), -1)
+
+    def test_idle_rejection_is_nonblocking_and_expires(self):
+        with mock.patch.object(webhook.time, "monotonic", return_value=100):
+            client, accepted = self.reject()
+            self.assertFalse(accepted.getblocking())
+            self.server.service_actions()
+            self.assertNotEqual(accepted.fileno(), -1)
+        with mock.patch.object(webhook.time, "monotonic", return_value=102):
+            self.server.service_actions()
+        self.assertEqual(accepted.fileno(), -1)
+
+    def test_rejection_sockets_are_capped_without_starting_threads(self):
+        with mock.patch("threading.Thread", side_effect=AssertionError("unexpected worker")):
+            first, retained = self.reject()
+            second, overflow = self.reject()
+        self.assertNotEqual(retained.fileno(), -1)
+        self.assertEqual(overflow.fileno(), -1)
+
+    def test_upload_drain_has_a_byte_limit(self):
+        with mock.patch.object(webhook.time, "monotonic", return_value=100):
+            client, accepted = self.reject()
+            remaining = webhook.MAX_REJECT_DRAIN
+            # Feed chunks so the check does not depend on the OS socket-buffer size.
+            while remaining:
+                size = min(4096, remaining)
+                client.sendall(b"x" * size)
+                self.server.service_actions()
+                remaining -= size
+        self.assertEqual(accepted.fileno(), -1)
+
+    def test_server_close_releases_idle_rejections(self):
+        client, accepted = self.reject()
+        self.assertNotEqual(accepted.fileno(), -1)
+        self.server.server_close()
+        self.assertEqual(accepted.fileno(), -1)
+
+    def test_bind_failure_preserves_the_socket_error(self):
+        with self.assertRaises(OSError):
+            webhook.BoundedServer(self.server.server_address, lambda *args: None, max_workers=1)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,13 @@ def run_block(start, end=None):
     text = (ROOT / ".github/workflows/build.yml").read_text().split(start, 1)[1]
     if end:
         text = text.split(end, 1)[0]
-    return textwrap.dedent(text.split("        run: |\n", 1)[1])
+    lines = text.split("        run: |\n", 1)[1].splitlines(keepends=True)
+    body = []
+    for line in lines:
+        if line.strip() and not line.startswith("          "):
+            break
+        body.append(line)
+    return textwrap.dedent("".join(body))
 
 
 class WorkflowVersionTests(unittest.TestCase):
@@ -100,6 +106,7 @@ else:
         version_job = workflow.split("\n  version:\n", 1)[1].split("\n  publish:\n", 1)[0]
         self.assertIn("refs/tags/v", version_job)
         self.assertIn("scripts/check_release_tag.py", version_job)
+        self.assertIn("ref: main", version_job, "candidate tags must not supply their own authorization code")
 
     def test_attestation_sits_between_signing_and_promotion(self):
         workflow = (ROOT / ".github/workflows/build.yml").read_text()
@@ -114,3 +121,14 @@ else:
         self.assertNotIn("continue-on-error", block)
         self.assertIn("--verify-tag", workflow)
         self.assertNotIn('--target "$SHA"', workflow)
+
+    def test_publication_waits_for_environment_approval_after_signature_verification(self):
+        workflow = (ROOT / ".github/workflows/build.yml").read_text()
+        approval = workflow.split("\n  authorize-release:\n", 1)[1].split("\n  publish:\n", 1)[0]
+        self.assertIn("needs: version", approval)
+        self.assertIn("environment: release", approval)
+        self.assertIn("permissions: {}", approval)
+        publish = workflow.split("\n  publish:\n", 1)[1].split("\n  release:\n", 1)[0]
+        self.assertIn("needs: [version, authorize-release]", publish)
+        self.assertNotIn("if: always()", publish)
+        self.assertNotIn("continue-on-error", approval)

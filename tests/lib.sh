@@ -23,14 +23,14 @@ run_in() {
 		echo "run_in: missing --" >&2
 		return 2
 	}
-	"$RUNTIME" run --rm ${PLATFORM:+--platform "$PLATFORM"} "$@"
+	"$RUNTIME" run --rm --pull=never ${PLATFORM:+--platform "$PLATFORM"} "$@"
 }
 
 # run_bg NAME [runtime run options...]: start a detached test container (respects PLATFORM).
 run_bg() {
 	_name=$1
 	shift
-	"$RUNTIME" run -d ${PLATFORM:+--platform "$PLATFORM"} --name "$_name" "$@" "$IMAGE" >/dev/null
+	"$RUNTIME" run -d --pull=never ${PLATFORM:+--platform "$PLATFORM"} --name "$_name" "$@" "$IMAGE" >/dev/null
 }
 
 pass() {

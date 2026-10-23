@@ -12,6 +12,14 @@ Put API keys and tokens in the env file (`~/.config/agentainer/env`, mode 600; s
 
 Sources: [Claude authentication](https://code.claude.com/docs/en/authentication), [Codex auth](https://learn.chatgpt.com/docs/auth), [Antigravity install](https://antigravity.google/docs/install.md), [OpenCode v2 providers](https://opencode.ai/v2/docs/cli/providers), [gh environment](https://cli.github.com/manual/gh_help_environment), [gh auth setup-git](https://cli.github.com/manual/gh_auth_setup-git), [gh auth login](https://cli.github.com/manual/gh_auth_login).
 
+The env file uses the engine's `NAME=value` format, not shell syntax. Do not quote values, use `export`, put spaces around `=`, or append comments to a value. A bare name imports that variable from the launching host environment ([Podman env files](https://docs.podman.io/en/latest/markdown/podman-run.1.html), [Docker env files](https://docs.docker.com/reference/cli/docker/container/run/#env)).
+
+## Contents
+
+- [Which Claude login wins](#which-claude-login-wins)
+- [GitHub and git](#github-and-git)
+- [Credential exposure](#credential-exposure)
+
 ## Which Claude login wins
 
 When several credentials are present, Claude Code uses the first one in this order ([authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence)):

@@ -46,7 +46,7 @@ if [ -f "$f" ]; then
 	if [ -f "$canon" ] && [ ! -L "$canon" ]; then mine=$(sha256sum "$canon" | cut -d' ' -f1); fi
 	if [ "$mine" = "$new" ]; then
 		:
-	elif [ -n "$mine" ] && python3 /usr/local/lib/agentainer/release_version.py newer-default "$ver" "$mine" "$f"; then
+	elif [ -n "$mine" ] && python3 -I /usr/local/lib/agentainer/release_version.py newer-default "$ver" "$mine" "$f"; then
 		# The file still matches an earlier, older image default, so the user never edited
 		# it. A unique temp file keeps the swap atomic; the file keeps its mode.
 		tmp=$(mktemp "$HOME/.agentainer/.AGENTS.md.XXXXXX")
@@ -61,4 +61,6 @@ fi
 # Record this image's default with its version once. A line with a version is added even
 # when the hash is already listed without one, so a later older image can compare.
 line="$new${ver:+ $ver}"
-if ! grep -qxF "$line" "$f" 2>/dev/null; then printf '%s\n' "$line" >>"$f"; fi
+if ! grep -qxF "$line" "$f" 2>/dev/null; then
+	(printf '%s\n' "$line" >>"$f") 2>/dev/null || warn "cannot record the AGENTS.md default version; leaving the ledger alone"
+fi

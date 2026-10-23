@@ -41,6 +41,20 @@ spec:
             # The capability list is untested.
             # allowPrivilegeEscalation: true
             # capabilities: {drop: [ALL], add: [SETUID, SETGID, AUDIT_WRITE]}
+          # Legacy images expose only the active-tools link; newer images provide
+          # the local readiness command. Neither check measures agent responsiveness.
+          startupProbe:
+            exec:
+              command: [sh, -ec, 'if test -x /usr/local/bin/agentainer-healthcheck; then exec /usr/local/bin/agentainer-healthcheck; else test -L /var/lib/agentainer/active && test -d /var/lib/agentainer/active; fi']
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            exec:
+              command: [sh, -ec, 'if test -x /usr/local/bin/agentainer-healthcheck; then exec /usr/local/bin/agentainer-healthcheck; else test -L /var/lib/agentainer/active && test -d /var/lib/agentainer/active; fi']
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:  # example values
             requests: {cpu: 500m, memory: 1Gi}
             limits: {cpu: "4", memory: 8Gi}

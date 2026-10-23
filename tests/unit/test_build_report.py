@@ -13,6 +13,20 @@ spec.loader.exec_module(br)
 
 
 class BuildReportTests(unittest.TestCase):
+    def test_major_updates_request_acknowledgement_without_blocking(self):
+        old = self.write("HELM_VERSION=3.9.0\nGO_VERSION=1.26.0\nUV_VERSION=0.12.0\n")
+        new = self.write("HELM_VERSION=4.0.0\nGO_VERSION=1.27.0\nUV_VERSION=0.13.0\n")
+        out = br.major_updates(old, new)
+        self.assertIn("### Major-version upgrades", out)
+        self.assertIn("| HELM_VERSION | 3.9.0 | 4.0.0 |", out)
+        self.assertIn("- [ ]", out)
+        self.assertNotIn("GO_VERSION", out)
+        self.assertNotIn("UV_VERSION", out)
+
+    def test_minor_update_has_no_major_notice(self):
+        self.assertEqual(br.major_updates(self.write("GO_VERSION=1.26.0\n"),
+                                         self.write("GO_VERSION=1.27.0\n")), "")
+
     def write(self, text):
         f = tempfile.NamedTemporaryFile("w", delete=False)
         f.write(text)

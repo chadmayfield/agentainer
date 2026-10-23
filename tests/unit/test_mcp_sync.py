@@ -92,6 +92,21 @@ class SyncBase(unittest.TestCase):
 
 
 class SyncTests(SyncBase):
+    def test_sync_restricts_files_that_receive_literal_credentials(self):
+        for relative, text in ((".codex/config.toml", 'model = "mine"\n'),
+                               (".config/opencode/opencode.json", "{}\n")):
+            path = os.path.join(self.home, relative)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as file:
+                file.write(text)
+            os.chmod(path, 0o644)
+        self.write_mcp({"sample": {"command": "echo", "env": {"TOKEN": "fake-literal"}}})
+        self.assertEqual(self.sync(), 0)
+        for relative in (".codex/config.toml", ".config/opencode/opencode.json"):
+            path = os.path.join(self.home, relative)
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+            self.assertIn("fake-literal", self.read(*relative.split("/")))
+
     def test_startup_skips_unchanged_successful_input_but_direct_sync_runs(self):
         self.write_mcp({"fs": {"command": "example"}})
         with mock.patch.object(mcp, "write_atomic", wraps=mcp.write_atomic) as writes:
@@ -134,10 +149,10 @@ class SyncTests(SyncBase):
         self.write_mcp({"web": {"url": "https://mcp.example.com", "headers": {"X-Key": "literal-secret-123"}}})
         original = mcp.write_atomic
 
-        def fail(path, text):
+        def fail(path, text, **kwargs):
             if path == os.path.join(self.home, ".claude.json"):
                 raise OSError("bad config: " + text)
-            return original(path, text)
+            return original(path, text, **kwargs)
 
         err = io.StringIO()
         with mock.patch.object(mcp, "write_atomic", side_effect=fail):
@@ -279,6 +294,19 @@ class SyncTests(SyncBase):
         self.assertEqual(self.json_servers("agy")["web"]["headers"], {"X-Static": "1"})
 
 class RobustnessTests(SyncBase):
+    def test_invalid_managed_markers_leave_user_bytes_untouched(self):
+        self.write_mcp({"sample": {"command": "echo"}})
+        for markers in (mcp.MARK_BEGIN, mcp.MARK_END,
+                        mcp.MARK_END + "\n" + mcp.MARK_BEGIN,
+                        mcp.MARK_BEGIN + "\n" + mcp.MARK_BEGIN + "\n" + mcp.MARK_END):
+            with self.subTest(markers=markers):
+                original = 'model = "mine"\n' + markers + '\n[profiles.mine]\nmodel = "keep-me"\n'
+                with open(self.codex_path(), "w") as file:
+                    file.write(original)
+                for _ in range(2):
+                    self.assertNotEqual(self.sync(), 0)
+                    self.assertEqual(self.read(".codex", "config.toml"), original)
+
     def codex_path(self):
         os.makedirs(os.path.join(self.home, ".codex"), exist_ok=True)
         return os.path.join(self.home, ".codex", "config.toml")
@@ -456,6 +484,15 @@ class RobustnessTests(SyncBase):
 
 
 class WriteAtomicTests(unittest.TestCase):
+    def test_literal_credentials_make_existing_config_private(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "config.toml")
+            with open(path, "w") as file:
+                file.write("original")
+            os.chmod(path, 0o644)
+            mcp.write_atomic(path, "fake literal", private=True)
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+
     def tmpdir(self):
         d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, d)

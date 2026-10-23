@@ -4,12 +4,39 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"))
 import bump_versions as bv  # noqa: E402
 
 
 class EnvFileTests(unittest.TestCase):
+    def test_failed_publisher_verification_preserves_pins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "versions.env")
+            original = "UV_VERSION=0.13.0\n"
+            with open(path, "w") as file:
+                file.write(original)
+            release = {"tag_name": "0.13.1", "assets": [
+                {"name": "uv-test.tar.gz", "digest": "sha256:" + "a" * 64}]}
+            with patch.object(bv, "gh_latest", return_value=release), \
+                    patch.object(bv, "verify_asset", side_effect=bv.VerificationFailed("wrong signer")):
+                resolver = lambda: bv.github_tool("UV", "astral-sh/uv", {"AMD64": lambda v: "uv-test.tar.gz"})
+                self.assertNotEqual(bv.main(["--file", path], resolvers=[resolver]), 0)
+            with open(path) as file:
+                self.assertEqual(file.read(), original)
+
+    def test_resolver_downgrade_preserves_the_pin_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "versions.env")
+            original = "HELM_VERSION=4.3.1\n"
+            with open(path, "w") as file:
+                file.write(original)
+            rc = bv.main(["--file", path], resolvers=[lambda: {"HELM_VERSION": "3.22.1"}])
+            self.assertNotEqual(rc, 0)
+            with open(path) as file:
+                self.assertEqual(file.read(), original)
+
     def test_round_trip_keeps_comments_and_order(self):
         text = "# header\nA=1\n\n# note\nB=2\n"
         lines = bv.parse_env(text)
@@ -21,6 +48,54 @@ class EnvFileTests(unittest.TestCase):
 
 
 class ParserTests(unittest.TestCase):
+    def test_abtop_resolver_checks_both_published_archive_checksums(self):
+        names = ["abtop-x86_64-unknown-linux-gnu.tar.xz", "abtop-aarch64-unknown-linux-gnu.tar.xz"]
+        assets = []
+        responses = {}
+        for name, letter in zip(names, "ab"):
+            assets.extend([{"name": name, "digest": "sha256:" + letter * 64},
+                           {"name": name + ".sha256", "browser_download_url": "https://example.com/" + name}])
+            responses["https://example.com/" + name] = letter * 64 + " *" + name + "\n"
+        release = {"tag_name": "v0.5.5", "assets": assets}
+        with patch.object(bv, "gh_latest", return_value=release) as latest, \
+                patch.object(bv, "fetch", side_effect=responses.__getitem__) as fetched, \
+                patch.object(bv, "verify_asset", return_value=False):
+            pins = bv.r_abtop()
+        latest.assert_called_once_with("graykode/abtop")
+        self.assertEqual(fetched.call_count, 2)
+        self.assertEqual(pins, {"ABTOP_VERSION": "0.5.5", "ABTOP_SHA256_AMD64": "a" * 64,
+                                "ABTOP_SHA256_ARM64": "b" * 64})
+        self.assertIn(bv.r_abtop, bv.RESOLVERS)
+
+    def test_ruff_resolver_selects_both_official_archives_and_verifies_publisher(self):
+        names = ["ruff-x86_64-unknown-linux-gnu.tar.gz", "ruff-aarch64-unknown-linux-gnu.tar.gz"]
+        release = {"tag_name": "0.17.1", "assets": [
+            {"name": name, "digest": "sha256:" + letter * 64}
+            for name, letter in zip(names, "ab")]}
+        with patch.object(bv, "gh_latest", return_value=release), \
+                patch.object(bv, "verify_asset", return_value=True) as verify:
+            pins = bv.r_ruff()
+        self.assertEqual(pins, {"RUFF_VERSION": "0.17.1", "RUFF_SHA256_AMD64": "a" * 64,
+                                "RUFF_SHA256_ARM64": "b" * 64})
+        self.assertEqual([call.args[2] for call in verify.call_args_list], names)
+
+    def test_bsd_and_per_asset_published_checksums(self):
+        checksum = "a" * 64
+        for filename, contents in (("checksums-bsd", "SHA256 (tool.tar.gz) = " + checksum),
+                                   ("tool.tar.gz.sha256", checksum + "  tool.tar.gz"),
+                                   ("codex-package_SHA256SUMS", checksum + "  tool.tar.gz")):
+            release = {"tag_name": "v1", "assets": [
+                {"name": "tool.tar.gz", "digest": "sha256:" + checksum},
+                {"name": filename, "browser_download_url": "https://example.com/sums"}]}
+            self.assertEqual(bv.asset_sha256(release, "tool.tar.gz", fetch_text=lambda url: contents), checksum)
+
+    def test_published_checksum_must_agree_with_asset_digest(self):
+        release = {"tag_name": "v1", "assets": [
+            {"name": "tool.tar.gz", "digest": "sha256:" + "a" * 64},
+            {"name": "checksums.txt", "browser_download_url": "https://example.com/checksums.txt"}]}
+        with self.assertRaises(bv.LookupFailed):
+            bv.asset_sha256(release, "tool.tar.gz", fetch_text=lambda url: "b" * 64 + "  tool.tar.gz\n")
+
     def test_buildkit_skips_frontend_tags_and_prereleases(self):
         releases = [
             {"tag_name": "dockerfile/1.28.0", "prerelease": False},

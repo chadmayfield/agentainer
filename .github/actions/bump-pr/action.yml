@@ -31,7 +31,9 @@ runs:
         set -u
         printf '%s' "$PATCH" | base64 -d >"$RUNNER_TEMP/bump.patch"
         printf '%s' "$CHANGES" | base64 -d >"$RUNNER_TEMP/changes.txt"
+        git show HEAD:versions.env >"$RUNNER_TEMP/old-versions.env"
         git apply --index "$RUNNER_TEMP/bump.patch"
+        python3 scripts/build_report.py major "$RUNNER_TEMP/old-versions.env" versions.env >"$RUNNER_TEMP/major.md"
         b="bump/$(date -u +%Y-%m-%d)-$RUN"
         if [ -n "$APP_SLUG" ]; then
           # The App's bot user, as the create-github-app-token README sets it up.
@@ -45,7 +47,7 @@ runs:
         git switch -c "$b"
         git commit -m "chore: version bump"
         git push origin "$b"
-        { echo "Automated pin update. Review and merge by hand."; echo; echo '```'; cat "$RUNNER_TEMP/changes.txt"; echo '```'; } >"$RUNNER_TEMP/body.md"
+        { echo "Automated pin update. Review and merge by hand."; echo; cat "$RUNNER_TEMP/major.md"; echo '```'; cat "$RUNNER_TEMP/changes.txt"; echo '```'; } >"$RUNNER_TEMP/body.md"
         gh pr create --base develop --head "$b" --title "Version bump $(date -u +%Y-%m-%d)" --body-file "$RUNNER_TEMP/body.md"
         if [ -z "$APP_SLUG" ]; then
           echo "::notice::Opened with GITHUB_TOKEN: approve the CI run on the pull request with \"Approve workflows to run\"."

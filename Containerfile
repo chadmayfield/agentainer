@@ -71,12 +71,26 @@ ARG TRIVY_SHA256_AMD64
 ARG TRIVY_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh trivy
 
+FROM fetch AS ruff
+ARG TARGETARCH
+ARG RUFF_VERSION
+ARG RUFF_SHA256_AMD64
+ARG RUFF_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh ruff
+
 FROM fetch AS curlie
 ARG TARGETARCH
 ARG CURLIE_VERSION
 ARG CURLIE_SHA256_AMD64
 ARG CURLIE_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh curlie
+
+FROM fetch AS abtop
+ARG TARGETARCH
+ARG ABTOP_VERSION
+ARG ABTOP_SHA256_AMD64
+ARG ABTOP_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh abtop
 
 FROM fetch AS golangci-lint
 ARG TARGETARCH
@@ -91,6 +105,20 @@ ARG TEA_VERSION
 ARG TEA_SHA256_AMD64
 ARG TEA_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh tea
+
+FROM fetch AS kubectl
+ARG TARGETARCH
+ARG KUBECTL_VERSION
+ARG KUBECTL_SHA256_AMD64
+ARG KUBECTL_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh kubectl
+
+FROM fetch AS helm
+ARG TARGETARCH
+ARG HELM_VERSION
+ARG HELM_SHA256_AMD64
+ARG HELM_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh helm
 
 FROM fetch AS claude
 ARG TARGETARCH
@@ -121,6 +149,13 @@ ARG OPENCODE_INTEGRITY_AMD64
 ARG OPENCODE_INTEGRITY_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh opencode
 
+FROM fetch AS unslop
+ARG UNSLOP_COMMIT
+ARG UNSLOP_SHA256
+ARG UNSLOP_LICENSE_SHA256
+COPY build/install-unslop.sh /usr/local/lib/agentainer-build/install-unslop.sh
+RUN sh /usr/local/lib/agentainer-build/install-unslop.sh
+
 FROM ${BASE_IMAGE}
 
 ARG BASE_IMAGE
@@ -135,7 +170,6 @@ RUN [ -n "${BASH_VERSION:-}" ] && [[ $- == *e* ]] && set -o | grep -Eq '^pipefai
 	&& mkdir -p /usr/local/share/agentainer \
 	&& echo "bash ${BASH_VERSION} errexit pipefail" > /usr/local/share/agentainer/build-shell.txt
 
-COPY --from=certs /etc/ssl/certs/ca-certificates.crt /tmp/agentainer-build/ca.crt
 COPY build/apt-packages.txt build/check-apt-snapshot.py /tmp/agentainer-build/
 
 # apt packages from the pinned Ubuntu snapshot.
@@ -150,7 +184,10 @@ COPY build/apt-packages.txt build/check-apt-snapshot.py /tmp/agentainer-build/
 # - check-apt-snapshot.py fails the build if any installed version is not in the snapshot.
 # - The apt and dpkg logs hold build times and are removed.
 ARG APT_SNAPSHOT
-RUN test -n "${APT_SNAPSHOT}" \
+# The bootstrap bundle is available only during this RUN, outside final image layers.
+# https://docs.docker.com/reference/dockerfile/#run---mounttypebind
+RUN --mount=type=bind,from=certs,source=/etc/ssl/certs/ca-certificates.crt,target=/tmp/agentainer-build/ca.crt \
+    test -n "${APT_SNAPSHOT}" \
 	&& export DEBIAN_FRONTEND=noninteractive \
 	&& printf 'Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute resolute-updates resolute-backports\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\nSnapshot: %s\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\nSnapshot: %s\n' "${APT_SNAPSHOT}" "${APT_SNAPSHOT}" > /etc/apt/sources.list.d/ubuntu.sources \
 	&& APT="apt-get -o Acquire::https::CAInfo=/tmp/agentainer-build/ca.crt -o APT::Get::Always-Include-Phased-Updates=true" \
@@ -199,16 +236,22 @@ COPY --from=rust /opt/cargo /opt/cargo
 COPY --from=yq /usr/local/bin/yq /usr/local/bin/yq
 COPY --from=gh /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=uv /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
+COPY --from=ruff /usr/local/bin/ruff /usr/local/bin/ruff
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY --from=curlie /usr/local/bin/curlie /usr/local/bin/curlie
+COPY --from=abtop /usr/local/bin/abtop /usr/local/bin/abtop
 COPY --from=golangci-lint /usr/local/bin/golangci-lint /usr/local/bin/golangci-lint
 COPY --from=tea /usr/local/bin/tea /usr/local/bin/tea
+COPY --from=kubectl /usr/local/bin/kubectl /usr/local/bin/kubectl
+COPY --from=helm /usr/local/bin/helm /usr/local/bin/helm
 COPY --from=claude /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=codex /opt/codex /opt/codex
 COPY --from=agy /usr/local/bin/agy /usr/local/bin/agy
 COPY --from=opencode /usr/local/bin/opencode /usr/local/bin/opencode
+COPY --from=unslop /usr/local/share/agentainer/skills/unslop /usr/local/share/agentainer/skills/unslop
 
 ENV RUSTUP_HOME=/opt/rustup \
+	GOTOOLCHAIN=local \
 	PATH=/usr/local/go/bin:/opt/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 COPY versions.env /usr/local/share/agentainer/versions.env
@@ -251,8 +294,9 @@ ENV DISABLE_UPDATES=1 \
 	CLAUDE_CODE_TMUX_TRUECOLOR=1
 
 # Named volumes copy the image's /home/agent on first use, so it carries the same
-# .profile the entrypoint seeds into an empty PVC.
+# shell defaults the entrypoint seeds into an empty PVC.
 RUN install -m 0644 -o agent -g "${AGENT_GID}" /etc/agentainer/home/.profile /home/agent/.profile \
+	&& install -m 0644 -o agent -g "${AGENT_GID}" /etc/agentainer/home/.bashrc /home/agent/.bashrc \
 	&& rm -rf /tmp/agentainer-build \
 	&& install -d -o agent -g "${AGENT_GID}" /var/lib/agentainer /var/lib/agentainer/tools \
 	&& install -d /etc/agentainer/home /etc/agentainer/seed
@@ -275,5 +319,7 @@ ENV AGENTAINER_TOOLS=ephemeral \
 
 USER agent
 WORKDIR /workspace
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+	CMD ["/usr/local/bin/agentainer-healthcheck"]
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/agentainer-entrypoint"]
 CMD ["sleep", "infinity"]

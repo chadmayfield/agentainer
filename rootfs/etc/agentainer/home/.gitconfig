@@ -1,0 +1,59 @@
+# Generic Agentainer Git defaults.
+# Reference: https://git-scm.com/docs/git-config
+[core]
+    editor = vim
+    excludesFile = ~/.config/git/ignore
+    pager = less -FRSX
+[color]
+    ui = auto
+# Agentainer RGB colors, inspired by Ayu. Git emits them only when color.ui or the command enables color.
+[color "diff"]
+    context = "#bfbdb6"
+    meta = "#e6b450" bold
+    frag = "#e6b450"
+    old = "#f07178"
+    new = "#aad94c"
+    whitespace = "#000000" "#f07178"
+[color "status"]
+    added = "#aad94c"
+    changed = "#e6b450"
+    untracked = "#e6b450"
+    unmerged = "#f07178" bold
+    branch = "#59c2ff"
+[color "branch"]
+    current = "#e6b450" bold
+    local = "#bfbdb6"
+    remote = "#95e6cb"
+[color "decorate"]
+    branch = "#e6b450" bold
+    remoteBranch = "#59c2ff"
+    tag = "#d2a6ff"
+[init]
+    defaultBranch = main
+[user]
+    useConfigOnly = true
+    # name = Your Name
+    # email = you@example.com
+    # signingKey = YOUR_GPG_KEY_FINGERPRINT
+
+# Make your GPG signing key available before enabling signing.
+#[gpg]
+#    format = openpgp
+#[commit]
+#    gpgSign = true
+#[tag]
+#    gpgSign = true
+
+[alias]
+    br = branch
+    co = checkout
+    ci = commit
+    st = status
+    df = diff
+    summary = log --oneline
+    graph = log --graph --oneline --decorate
+    changes = log --oneline --reverse
+    lg = "log --graph --abbrev-commit --decorate --format=format:'%C(bold #e6b450)%h%C(reset) - %C(#59c2ff)(%ar)%C(reset) %C(#bfbdb6)%s%C(reset) %C(#747474)- %an%C(reset)%C(auto)%d%C(reset)'"
+
+[push]
+    default = simple

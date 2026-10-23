@@ -13,3 +13,14 @@ updates:
     # time to be found and pulled before a pull request picks it up.
     cooldown:
       default-days: 7
+  # Test-only npm dependencies. Options follow the same reference linked above.
+  - package-ecosystem: npm
+    directory: /tests/visual
+    target-branch: develop
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      visual-test-dependencies:
+        patterns: ["*"]

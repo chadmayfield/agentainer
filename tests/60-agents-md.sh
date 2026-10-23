@@ -15,7 +15,7 @@ for t in .codex/AGENTS.md .gemini/AGENTS.md .config/opencode/AGENTS.md; do
 		"$(run_in $H -- agentainer-entrypoint readlink "/home/agent/$t")"
 done
 assert_contains "Claude imports it" "@~/.agentainer/AGENTS.md" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.claude/CLAUDE.md)"
-assert_contains "Claude loads both instruction files" "claude-md-and-agents-md" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.claude/settings.json)"
+assert_contains "Claude settings enable both instruction files" "claude-md-and-agents-md" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.claude/settings.json)"
 assert_contains "Codex stores credentials in a file" 'cli_auth_credentials_store = "file"' "$(run_in $H -- agentainer-entrypoint cat /home/agent/.codex/config.toml)"
 assert_contains "OpenCode updates disabled" '"update": "disable"' "$(run_in $H -- agentainer-entrypoint cat /home/agent/.config/opencode/opencode.json)"
 # The agents themselves accept the seeded configs (OpenCode drops unknown keys silently).
@@ -29,8 +29,17 @@ assert_contains "Codex stores auth in a file" '"auth storage mode": "File"' "$do
 # and keeps the approval prompts.
 assert_contains "Codex filesystem sandbox is off" '"filesystem sandbox": "unrestricted"' "$doctor"
 assert_contains "Codex still asks for approval" '"approval policy": "OnRequest"' "$doctor"
-assert_contains "Codex reads the symlinked AGENTS.md" "Agentainer environment" \
-	"$(run_in $H --network none -- sh -c 'cd /tmp && codex debug prompt-input hi 2>/dev/null')"
+prompt=$(run_in $H --network none -- sh -c 'cd /tmp && codex debug prompt-input hi 2>/dev/null')
+assert_contains "Codex reads the symlinked AGENTS.md" "Agentainer environment" "$prompt"
+assert_contains "Codex receives the image-owned unslop skill reference" "/usr/local/share/agentainer/skills/unslop/SKILL.md" "$prompt"
+assert_eq "skill and license match their pins" "UNSLOP_VERIFIED" \
+	"$(run_in $H --network none -- sh -ec '
+. /usr/local/share/agentainer/versions.env
+cd /usr/local/share/agentainer/skills/unslop
+printf "%s  SKILL.md\n%s  LICENSE\n" "$UNSLOP_SHA256" "$UNSLOP_LICENSE_SHA256" | sha256sum -c >/dev/null
+test "$(stat -c "%U %a" SKILL.md)" = "root 644"
+test "$(stat -c "%U %a" LICENSE)" = "root 644"
+echo UNSLOP_VERIFIED')"
 # A fresh home: no volume, so every first-start step runs.
 assert_absent "a fresh start prints no warnings" "$(run_in -- echo STARTED 2>&1)" STARTED warning changed
 assert_contains "default AGENTS.md describes the container" "/workspace" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.agentainer/AGENTS.md)"
@@ -55,6 +64,10 @@ run_in $H --entrypoint sh -- -c 'rm -f ~/.gemini/AGENTS.md && ln -s /nonexistent
 out=$(run_in $H -- readlink /home/agent/.gemini/AGENTS.md 2>&1)
 assert_contains "keeps a dangling user symlink" "/nonexistent" "$out"
 assert_contains "warns about a dangling symlink" "points to a missing file" "$out"
+
+# Independent default-upgrade checks use a fresh home without the conflict fixtures.
+"$RUNTIME" volume rm -f "$VOL" >/dev/null
+"$RUNTIME" volume create "$VOL" >/dev/null
 
 # An unedited file (it matches an earlier image default) follows a new default, with one
 # line, when the image is a release. A hash-only line counts as an unknown, older version.

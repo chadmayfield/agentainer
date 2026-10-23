@@ -2,20 +2,30 @@
 """Resolve the latest upstream pins and rewrite versions.env.
 
 Every value comes from the upstream source named in its resolver. Any failure
-stops the run and leaves the file unchanged. Standard library only.
+stops the run and leaves the file unchanged. Uses the Python standard library
+and the publisher verification CLIs documented in docs/versions.md.
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import tempfile
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
+from verify_upstream import VerificationFailed, verify_asset
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "rootfs/usr/local/lib/agentainer"))
+from release_version import version_key
 
 ARCHES = {"AMD64": "amd64", "ARM64": "arm64"}
+# Manifest paths come from DOWNLOAD_BASE_URL and MANIFEST_URL in the official installer:
+# https://antigravity.google/cli/install.sh
 AGY_MANIFEST = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_{arch}.json"
 AGY_KEYS = ("version", "url", "sha512")
 AGY_HOST = "storage.googleapis.com"
@@ -37,6 +47,7 @@ VALUE_PATTERNS = [
     (r"(BASE_IMAGE|[A-Z0-9_]+_IMAGE)", IMAGE_REF),
     (r"APT_SNAPSHOT", r"[0-9]{8}T[0-9]{6}Z"),
     (r"SOURCE_DATE_EPOCH", r"[0-9]{1,12}"),
+    (r"UNSLOP_COMMIT", r"[0-9a-f]{40}"),
     (r"[A-Z0-9_]+_VERSION", r"v?[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.-]+)?"),
     (r"[A-Z0-9_]+_SHA256(_[A-Z0-9]+)?", r"[0-9a-f]{64}"),
     (r"[A-Z0-9_]+_SHA512(_[A-Z0-9]+)?", r"[0-9a-f]{128}"),
@@ -107,6 +118,28 @@ def render_env(lines, updates):
 
 # ---- HTTP -----------------------------------------------------------------
 
+class HTTPSRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep downloads on HTTPS and credentials on the origin that received them.
+
+    https://docs.python.org/3/library/urllib.request.html#urllib.request.HTTPRedirectHandler
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urlsplit(newurl)
+        if target.scheme != "https":
+            raise urllib.error.HTTPError(newurl, code, "redirect requires HTTPS", headers, fp)
+        result = super().redirect_request(req, fp, code, msg, headers, newurl)
+        origin = urllib.parse.urlsplit(req.full_url)
+        if result is not None and (origin.hostname, origin.port or 443) != (target.hostname, target.port or 443):
+            result.remove_header("Authorization")
+        return result
+
+
+def open_https(request):
+    if urllib.parse.urlsplit(request.full_url).scheme != "https":
+        raise LookupFailed("download requires HTTPS")
+    return urllib.request.build_opener(HTTPSRedirectHandler()).open(request, timeout=60)
+
 def fetch(url, accept=None):
     headers = {"User-Agent": "agentainer-bump"}
     if accept:
@@ -115,7 +148,7 @@ def fetch(url, accept=None):
     if token and url.startswith("https://api.github.com/"):
         headers["Authorization"] = "Bearer " + token
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r:
+        with open_https(urllib.request.Request(url, headers=headers)) as r:
             return r.read().decode()
     except Exception as e:  # noqa: BLE001 - report any network error the same way
         raise LookupFailed("%s: %s" % (url, e))
@@ -124,7 +157,7 @@ def fetch(url, accept=None):
 def fetch_bytes(url):
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "agentainer-bump"})
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with open_https(req) as r:
             return r.read()
     except Exception as e:  # noqa: BLE001 - report any network error the same way
         raise LookupFailed("%s: %s" % (url, e))
@@ -172,27 +205,41 @@ def parse_rustup_release(text):
 
 
 def asset_sha256(release, name, fetch_text=None):
-    """SHA-256 of a release asset: GitHub's per-asset digest, or else the line for
-    this asset in the release's own *checksums.txt file (older releases have no digest)."""
+    """Require published SHA-256 files to agree with GitHub's asset digest.
+
+    Projects use GNU checksum lists, BSD SHA256 lists, or per-asset .sha256 files.
+    GitHub's server-computed digest is a fallback only when no such file exists.
+    """
     tag = release.get("tag_name")
     assets = release.get("assets", [])
-    match = [a for a in assets if a["name"] == name]
-    if not match:
-        raise LookupFailed("%s: asset %s not found" % (tag, name))
+    match = [asset for asset in assets if asset["name"] == name]
+    if len(match) != 1:
+        raise LookupFailed("%s: asset %s missing or ambiguous" % (tag, name))
     digest = match[0].get("digest") or ""
-    if digest.startswith("sha256:"):
-        value = digest.split(":", 1)[1]
-        if not HEX64.match(value):
-            raise LookupFailed("%s: asset %s has a malformed digest %r" % (tag, name, digest))
-        return value
-    sums = [a for a in assets if a["name"].endswith("checksums.txt")]
-    if sums:
-        text = (fetch_text or fetch)(sums[0]["browser_download_url"])
+    value = digest.split(":", 1)[1] if digest.startswith("sha256:") else ""
+    if digest and (not digest.startswith("sha256:") or not HEX64.fullmatch(value)):
+        raise LookupFailed("%s: malformed asset digest" % tag)
+    files = [asset for asset in assets if asset["name"] == name + ".sha256"]
+    if not files:
+        files = [asset for asset in assets if asset["name"].endswith(("checksums.txt", "SHA256SUMS"))
+                 or asset["name"] in ("sha256.sum", "checksums-bsd")]
+    published = set()
+    for asset in files:
+        text = (fetch_text or fetch)(asset["browser_download_url"])
         for line in text.splitlines():
             parts = line.split()
-            if len(parts) == 2 and parts[1].lstrip("*") == name and re.match(r"^[0-9a-f]{64}$", parts[0]):
-                return parts[0]
-    raise LookupFailed("%s: no sha256 for asset %s (no digest, not in a checksums file)" % (tag, name))
+            if len(parts) == 2 and parts[1].lstrip("*") == name and HEX64.fullmatch(parts[0]):
+                published.add(parts[0])
+            bsd = re.fullmatch(r"SHA256\s+\(" + re.escape(name) + r"\) = ([0-9a-f]{64})", line)
+            if bsd:
+                published.add(bsd.group(1))
+    if files:
+        if len(published) != 1 or (digest and value not in published):
+            raise LookupFailed("%s: missing or conflicting published sha256 for %s" % (tag, name))
+        return published.pop()
+    if digest:
+        return value
+    raise LookupFailed("%s: no sha256 for asset %s" % (tag, name))
 
 
 def parse_checksum_file(text):
@@ -253,7 +300,16 @@ def github_tool(prefix, repo, names):
     ver = strip_v(rel["tag_name"])
     out = {prefix + "_VERSION": ver}
     for up, fn in names.items():
-        out["%s_SHA256_%s" % (prefix, up)] = asset_sha256(rel, fn(ver))
+        name = fn(ver)
+        checksum = asset_sha256(rel, name)
+        try:
+            supported = verify_asset(repo, rel, name, checksum, fetch_bytes)
+        except VerificationFailed as error:
+            raise LookupFailed(str(error)) from error
+        if not supported:
+            print("%s: publisher signature verification not verified; retaining checksum checks" % repo,
+                  file=sys.stderr)
+        out["%s_SHA256_%s" % (prefix, up)] = checksum
     return out
 
 
@@ -271,9 +327,44 @@ def r_uv():
         "AMD64": lambda v: "uv-x86_64-unknown-linux-gnu.tar.gz", "ARM64": lambda v: "uv-aarch64-unknown-linux-gnu.tar.gz"})
 
 
+def r_ruff():
+    # Official release binaries and per-asset checksums: https://github.com/astral-sh/ruff/releases
+    return github_tool("RUFF", "astral-sh/ruff", {
+        "AMD64": lambda v: "ruff-x86_64-unknown-linux-gnu.tar.gz",
+        "ARM64": lambda v: "ruff-aarch64-unknown-linux-gnu.tar.gz"})
+
+
 def r_trivy():
-    return github_tool("TRIVY", "aquasecurity/trivy", {
-        "AMD64": lambda v: "trivy_%s_Linux-64bit.tar.gz" % v, "ARM64": lambda v: "trivy_%s_Linux-ARM64.tar.gz" % v})
+    out = github_tool("TRIVY", "aquasecurity/trivy", {
+        "AMD64": lambda v: "trivy_%s_Linux-64bit.tar.gz" % v,
+        "ARM64": lambda v: "trivy_%s_Linux-ARM64.tar.gz" % v})
+    tag = out["TRIVY_VERSION"]
+    out["TRIVY_SCANNER_IMAGE"] = hub_ref("aquasec/trivy", tag, fetch_json(
+        "https://hub.docker.com/v2/repositories/aquasec/trivy/tags/" + tag))
+    return out
+
+
+def r_abtop():
+    # Official release binaries and per-asset checksums: https://github.com/graykode/abtop/releases
+    return github_tool("ABTOP", "graykode/abtop", {
+        "AMD64": lambda v: "abtop-x86_64-unknown-linux-gnu.tar.xz",
+        "ARM64": lambda v: "abtop-aarch64-unknown-linux-gnu.tar.xz"})
+
+
+def r_unslop():
+    # The pstack directory includes the skill and its license. Source files have no
+    # published checksums, so compute both from the same immutable upstream commit.
+    # https://github.com/cursor/plugins/tree/main/pstack
+    commits = fetch_json('https://api.github.com/repos/cursor/plugins/commits?path=pstack&per_page=1')
+    if not commits or not isinstance(commits[0], dict):
+        raise LookupFailed('unslop: no upstream commit')
+    commit = commits[0].get('sha', '')
+    if not isinstance(commit, str) or not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise LookupFailed('unslop: expected a full lowercase commit SHA')
+    base = 'https://raw.githubusercontent.com/cursor/plugins/' + commit + '/pstack/'
+    return {'UNSLOP_COMMIT': commit,
+            'UNSLOP_SHA256': hashlib.sha256(fetch_bytes(base + 'skills/unslop/SKILL.md')).hexdigest(),
+            'UNSLOP_LICENSE_SHA256': hashlib.sha256(fetch_bytes(base + 'LICENSE')).hexdigest()}
 
 
 def r_curlie():
@@ -285,6 +376,34 @@ def r_golangci():
     return github_tool("GOLANGCI_LINT", "golangci/golangci-lint", {
         "AMD64": lambda v: "golangci-lint-%s-linux-amd64.tar.gz" % v,
         "ARM64": lambda v: "golangci-lint-%s-linux-arm64.tar.gz" % v})
+
+
+def r_kubectl():
+    # https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
+    tag = fetch("https://dl.k8s.io/release/stable.txt").strip()
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+        raise LookupFailed("kubectl: stable release must be a version tag")
+    out = {"KUBECTL_VERSION": tag[1:]}
+    for up, arch in ARCHES.items():
+        out["KUBECTL_SHA256_" + up] = parse_checksum_file(fetch(
+            "https://dl.k8s.io/release/%s/bin/linux/%s/kubectl.sha256" % (tag, arch)))
+    return out
+
+
+def r_helm():
+    # https://helm.sh/docs/intro/install/#from-the-binary-releases
+    release = gh_latest("helm/helm")
+    tag = release["tag_name"]
+    if release.get("prerelease") or release.get("draft") or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+        raise LookupFailed("helm: latest release must be a stable version tag")
+    out = {"HELM_VERSION": tag[1:]}
+    for up, arch in ARCHES.items():
+        name = "helm-%s-linux-%s.tar.gz" % (tag, arch)
+        parts = fetch("https://get.helm.sh/" + name + ".sha256sum").split()
+        if len(parts) != 2 or parts[1].lstrip("*") != name or not HEX64.fullmatch(parts[0]):
+            raise LookupFailed("helm: invalid or mismatched checksum for " + name)
+        out["HELM_SHA256_" + up] = parts[0]
+    return out
 
 
 def codex_asset(triple):
@@ -449,8 +568,8 @@ def r_buildkit():
                                       fetch_json("https://hub.docker.com/v2/repositories/moby/buildkit/tags/%s" % tag))}
 
 
-RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_trivy, r_curlie, r_golangci,
-             r_tea, r_claude, r_codex, r_agy, r_opencode, r_k8s_images, r_buildkit]
+RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_abtop, r_unslop, r_curlie, r_golangci,
+             r_kubectl, r_helm, r_tea, r_claude, r_codex, r_agy, r_opencode, r_k8s_images, r_buildkit]
 
 
 def main(argv=None, resolvers=None):
@@ -484,6 +603,14 @@ def main(argv=None, resolvers=None):
             print("bump_versions: refusing to write %s" % why, file=sys.stderr)
         return 1
     old = values(lines)
+    for key, value in updates.items():
+        if key.endswith("_VERSION") and key in old and old[key] != value:
+            try:
+                if version_key(strip_v(value)) < version_key(strip_v(old[key])):
+                    raise ValueError("resolver would downgrade %s" % key)
+            except ValueError as error:
+                print("bump_versions: %s; pins unchanged" % error, file=sys.stderr)
+                return 1
     for k in sorted(updates):
         if old.get(k) != updates[k]:
             print("%s: %s -> %s" % (k, old.get(k, "(new)"), updates[k]))

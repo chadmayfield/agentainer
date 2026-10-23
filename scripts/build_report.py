@@ -3,6 +3,7 @@
 
   build_report.py versions VERSIONS.json     pinned versions and key apt packages
   build_report.py pins OLD.env NEW.env       versions.env lines that changed (empty if none)
+  build_report.py major OLD.env NEW.env      major-version review notice (empty if none)
   build_report.py layers TOTAL_BYTES         image size and largest layers; reads
                                              `docker history --human=false --no-trunc
                                              --format '{{.Size}}\t{{.CreatedBy}}'` on stdin
@@ -86,6 +87,28 @@ def pins(old_path, new_path):
     return "\n".join(lines) + "\n\n"
 
 
+def major_updates(old_path, new_path):
+    """Ask for review when a version's leading number increases."""
+    old, new = read_env(old_path), read_env(new_path)
+    rows = []
+    for key in sorted(set(old) & set(new)):
+        if not key.endswith("_VERSION"):
+            continue
+        before = re.fullmatch(r"v?([0-9]+)\.[0-9]+\.[0-9]+(?:[-+].*)?", old[key])
+        after = re.fullmatch(r"v?([0-9]+)\.[0-9]+\.[0-9]+(?:[-+].*)?", new[key])
+        if before and after and int(after[1]) > int(before[1]):
+            rows.append("| %s | %s | %s |" % (key, cell(old[key]), cell(new[key])))
+    if not rows:
+        return ""
+    return "\n".join([
+        "### Major-version upgrades", "",
+        "Review upstream compatibility and migration notes before merging.", "",
+        "| Pin | Before | After |", "|---|---|---|", *rows, "",
+        "- [ ] I reviewed and accept these major-version upgrades.", "",
+        "This acknowledgement records maintainer review; CI does not enforce the checkbox.", "",
+    ]) + "\n"
+
+
 def layers(stream, total):
     rows = []
     for line in stream:
@@ -147,6 +170,8 @@ def main(argv):
             out = versions(args[0])
         elif cmd == "pins" and len(args) == 2:
             out = pins(args[0], args[1])
+        elif cmd == "major" and len(args) == 2:
+            out = major_updates(args[0], args[1])
         elif cmd == "layers" and len(args) == 1:
             out = layers(sys.stdin, int(args[0]))
         elif cmd == "tests" and len(args) == 2:

@@ -17,8 +17,9 @@ fi
 printf '%s\n' "$@"
 EOF
 chmod +x "$T/podman"
+cp "$T/podman" "$T/docker"
 # stdout holds the build arguments; stderr holds the trace and warnings.
-build() { STUB_SERVER=$1 PATH="$T:$PATH" RUNTIME=podman sh "$B" 2>"$T/err"; }
+build() { STUB_SERVER=$1 PATH="$T:$PATH" RUNTIME=podman "$B" 2>"$T/err"; }
 has_line() { # NAME EXACT-LINE OUTPUT
 	if printf '%s\n' "$3" | grep -qxF -- "$2"; then pass "$1"; else fail "$1" "no line [$2] in [$3]"; fi
 }
@@ -45,4 +46,9 @@ assert_contains "unknown server version warns" "file times" "$(cat "$T/err")"
 out=$(build 5.6.0)
 has_line "pins the Containerfile declares are passed" "GO_VERSION=$(sed -n 's/^GO_VERSION=//p' "$(dirname "$B")/../versions.env")" "$out"
 assert_absent "pins the Containerfile does not declare are left out" "$out" "--format" "CONTAINERSSH_IMAGE=" "SOURCE_DATE_EPOCH="
+
+out=$(PATH="$T:$PATH" RUNTIME=docker "$B" 2>"$T/err")
+has_line "Docker builds keep Docker media types for Podman health checks" "--output=type=image,oci-mediatypes=false" "$out"
+has_line "local Docker builds disable incompatible inline attestations" "--provenance=false" "$out"
+assert_absent "Docker builds get no Podman options" "$out" "build" "--format" "--source-date-epoch" "--rewrite-timestamp"
 finish

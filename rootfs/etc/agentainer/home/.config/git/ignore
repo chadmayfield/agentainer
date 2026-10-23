@@ -1,0 +1,8 @@
+# Editor recovery files and OS metadata. See https://git-scm.com/docs/gitignore
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+.*.swp
+.*.swo
+*~

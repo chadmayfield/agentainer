@@ -6,8 +6,15 @@ set -eu
 active=/var/lib/agentainer/active
 case "${1:-status}" in
 status)
-	printf 'mode: %s\nroot: %s\n' "${AGENTAINER_TOOLS:-ephemeral}" "$(readlink "$active" 2>/dev/null || echo none)"
-	ls "$active/bin" "$active/npm/bin" 2>/dev/null || true
+	root=$(readlink "$active" 2>/dev/null || echo none)
+	case "$root" in
+	"$HOME/.agentainer/tools") mode=persist ;;
+	/var/lib/agentainer/tools) mode=ephemeral ;;
+	none) mode=uninitialized ;;
+	*) mode=unknown ;;
+	esac
+	printf 'mode: %s\nroot: %s\n' "$mode" "$root"
+	ls "$active/bin" "$active/npm/bin" "$active/python/bin" 2>/dev/null || true
 	;;
 reset)
 	mkdir -p "$HOME/.agentainer"

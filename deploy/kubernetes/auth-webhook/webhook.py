@@ -8,8 +8,10 @@ Standard library only. Formats follow ContainerSSH v0.6.0 containerssh-authconfi
 """
 import json
 import os
+import socket
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # The key types sshd(8) of OpenSSH 10.4 lists under AUTHORIZED_KEYS FILE FORMAT. Certificate types
@@ -24,6 +26,8 @@ MAX_BODY = 64 * 1024
 # bounds memory under the Deployment's 128Mi limit when a client opens many idle
 # connections.
 MAX_WORKERS = 16
+REJECT_TIMEOUT = 1
+MAX_REJECT_DRAIN = MAX_BODY + 16 * 1024
 _BUSY_BODY = b'{"message": "too busy"}'
 BUSY = (b"HTTP/1.0 503 Service Unavailable\r\nContent-Type: application/json\r\n"
         b"Content-Length: %d\r\nConnection: close\r\n\r\n" % len(_BUSY_BODY) + _BUSY_BODY)
@@ -40,7 +44,7 @@ def load_keys(path):
     ("restrict ssh-ed25519 AAAA...") is skipped: the webhook cannot enforce from=,
     command= or restrict, and accepting the key without them would widen access."""
     keys = set()
-    with open(path) as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             parts = line.split()
             if len(parts) >= 2 and parts[0] in KEY_TYPES:
@@ -54,7 +58,28 @@ def echo(req):
 
 def make_handler(s):
     class Handler(BaseHTTPRequestHandler):
-        timeout = 10  # seconds per socket read, so a stalled client cannot hold a thread
+        timeout = 10
+        request_timeout = 10
+
+        def handle(self):
+            # A whole-request deadline interrupts buffered header and body reads even
+            # when the client keeps sending within the socket timeout.
+            def expire():
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+            deadline = threading.Timer(self.request_timeout, expire)
+            deadline.daemon = True
+            deadline.start()
+            try:
+                super().handle()
+            except (ConnectionError, socket.timeout):
+                # A disconnected client needs no response or traceback.
+                return
+            finally:
+                deadline.cancel()
 
         def _reply(self, code, body):
             data = json.dumps(body).encode()
@@ -112,20 +137,30 @@ def make_handler(s):
 
 class BoundedServer(ThreadingHTTPServer):
     """ThreadingHTTPServer that runs at most max_workers handler threads. A connection
-    beyond that gets a 503 and is closed right away instead of starting a thread."""
+    beyond that gets a 503 with bounded, nonblocking connection teardown."""
 
     def __init__(self, addr, handler, max_workers):
-        super().__init__(addr, handler)
         self._slots = threading.BoundedSemaphore(max_workers)
+        self._max_rejections = max_workers
+        self._rejections = {}
+        super().__init__(addr, handler)
 
     def process_request(self, request, client_address):
+        self.service_actions()
         if not self._slots.acquire(blocking=False):
             try:
                 request.settimeout(1)
                 request.sendall(BUSY)
+                # Keep reading after the reply so in-flight uploads do not erase
+                # the 503 through a TCP reset (RFC 9112, section 9.6).
+                request.shutdown(socket.SHUT_WR)
+                if len(self._rejections) < self._max_rejections:
+                    request.setblocking(False)
+                    self._rejections[request] = (time.monotonic() + REJECT_TIMEOUT, MAX_REJECT_DRAIN)
+                    return
             except OSError:
                 pass
-            self.shutdown_request(request)
+            self.close_request(request)
             return
         try:
             super().process_request(request, client_address)
@@ -138,6 +173,40 @@ class BoundedServer(ThreadingHTTPServer):
             super().process_request_thread(request, client_address)
         finally:
             self._slots.release()
+
+    def service_actions(self):
+        # serve_forever calls this between accepts and on its poll interval.
+        # Both the socket count and bytes read per socket stay bounded, without
+        # adding handler threads or waiting for a stalled uploader.
+        now = time.monotonic()
+        for request, (deadline, remaining) in tuple(self._rejections.items()):
+            close = now >= deadline
+            if not close:
+                try:
+                    while remaining:
+                        data = request.recv(min(4096, remaining))
+                        if not data:
+                            close = True
+                            break
+                        remaining -= len(data)
+                    if remaining == 0:
+                        close = True
+                except BlockingIOError:
+                    pass
+                except OSError:
+                    close = True
+            if close:
+                del self._rejections[request]
+                self.close_request(request)
+            else:
+                self._rejections[request] = (deadline, remaining)
+        super().service_actions()
+
+    def server_close(self):
+        for request in self._rejections:
+            self.close_request(request)
+        self._rejections.clear()
+        super().server_close()
 
 
 def make_server(addr, settings, max_workers=MAX_WORKERS):
