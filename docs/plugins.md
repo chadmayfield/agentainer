@@ -1,4 +1,4 @@
-# Optional agent plugins
+# Optional agent tools and plugins
 
 Run these commands inside Agentainer as the regular container user. Choose the plugins you want for each agent. The image does not install these optional plugins during its build or startup. Its existing built-in agent settings are described in [default configuration](defaults.md).
 
@@ -7,6 +7,7 @@ Keep the same persistent home when recreating the container to retain home-based
 ## Contents
 
 - [Recommended starting points](#recommended-starting-points)
+- [Token and context tools](#token-and-context-tools)
 - [Claude Code](#claude-code)
 - [Codex](#codex)
 - [OpenCode](#opencode)
@@ -29,6 +30,101 @@ Start with simplification and review. Add frontend and security workflows for th
 [Superpowers](https://github.com/obra/superpowers) is an optional workflow package for all four agents. It adds planning, test-driven development, debugging and verification skills. It also directs agents to invoke skills at the start of work, so expect broader workflow changes than a single cleanup skill. Choose it separately from the focused skills above. Follow your project's instructions and approval requirements when a workflow proposes commits or other actions.
 
 For more visual design guidance, [UI UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill#installation) provides palettes, typography and design-system tools. Its installation guide supports Codex, OpenCode and Antigravity. Keep its scripts and data with the skill; copying only its instructions is insufficient.
+
+## Token and context tools
+
+These tools solve different problems. Start with one in a separate test home, measure the result, and keep the original command output available when checking a failure. Automatic hooks change what agents execute or see; installing a package does not prove that those hooks work with Agentainer's pinned agents.
+
+| Tool | Purpose | Suggested use |
+|---|---|---|
+| [RTK](#rtk) | Filter command output before the model reads it | First trial for output-heavy builds and tests; enable each agent integration separately |
+| [context-mode](#context-mode) | Execute analysis through MCP tools and search indexed content | Optional trial for large logs, research and long sessions |
+| [Superpowers](#recommended-starting-points) | Planning, test-driven development, debugging and verification workflows | Choose for its development process; it is not a token compressor |
+| [Context7](#context7) | Retrieve library documentation and examples | Optional documentation lookup through its CLI or hosted MCP server |
+
+Do not enable all four across every agent as one setup step. RTK and context-mode can both intercept tools, while Superpowers changes the workflow. Check them independently before combining them. No token or billing savings from these tools have been measured in Agentainer.
+
+### RTK
+
+RTK filters shell-command output. Its [upstream guide](https://github.com/rtk-ai/rtk#how-savings-work) distinguishes reduced shell output from total input tokens or billing savings; its token counts are estimates. The current [editions](https://github.com/rtk-ai/rtk#what-you-install) include an Apache-2.0 `rtk-oss` build and a full build with additional licensed components. Start with the OSS edition for command filtering. Both editions install a binary named `rtk`; the API proxy is a separate component.
+
+Use upstream release binaries, not the unrelated package with the same name on crates.io. The [installer source](https://github.com/rtk-ai/rtk/blob/master/install.sh) supports `RTK_EDITION=oss` and an exact `RTK_VERSION`, checks the published SHA-256, and installs under `~/.local/bin` by default. Replace `vX.Y.Z` with an actual reviewed [release tag](https://github.com/rtk-ai/rtk/releases) before running these commands inside the container:
+
+```sh
+installer=$(mktemp)
+curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh -o "$installer"
+less "$installer"
+RTK_EDITION=oss RTK_VERSION=vX.Y.Z RTK_INSTALL_DIR="$HOME/.local/bin" sh "$installer"
+rm -f "$installer"
+export PATH="$PATH:$HOME/.local/bin"
+rtk --version
+rtk init --help
+```
+
+Review the downloaded installer before executing it. Installing the binary does not configure every agent. The upstream [agent table](https://github.com/rtk-ai/rtk#supported-ai-tools) documents these separate setup commands; choose only the integration you want:
+
+| Agent | Upstream setup command |
+|---|---|
+| Claude Code | `rtk init -g` |
+| Codex | `rtk init -g --codex` |
+| OpenCode | `rtk init -g --opencode` |
+| Antigravity CLI | `rtk init -g --agent antigravity` |
+
+RTK's [agent table](https://github.com/rtk-ai/rtk#supported-ai-tools) describes Codex command rewriting through `updatedInput`, while context-mode's [Codex guide](https://github.com/mksglu/context-mode) describes deny-only `PreToolUse` routing. Those upstream descriptions disagree. Actual rewriting behavior with the pinned Codex is not verified.
+
+Those integration commands have not been run against Agentainer's pinned agents. In particular, do not infer OpenCode V2 plugin compatibility from an upstream minimum version for older OpenCode. Inspect changes to existing hooks, settings and instructions before using the integration. Keep Agentainer's shared instructions and project `AGENTS.md` files. After restarting the chosen agent, check actual command interception and compare the result with the original output; `rtk gain` reports RTK's savings estimates. See the [installation guide](https://www.rtk-ai.app/docs/getting-started/installation/) for removal.
+
+### context-mode
+
+[context-mode](https://github.com/mksglu/context-mode) provides MCP execution and indexing tools, plus client-specific routing hooks. It stores session and indexed content locally. Its current [license](https://github.com/mksglu/context-mode/blob/main/LICENSE) is Elastic License 2.0. Review its configuration and retention behavior before indexing sensitive files.
+
+For an MCP-only trial, select a reviewed exact package version from [published npm metadata](https://registry.npmjs.org/context-mode). Replace `VERSION` below; do not run the placeholder literally:
+
+```sh
+npm install --global 'context-mode@VERSION'
+context-mode doctor
+```
+
+Merge this server into the existing `mcpServers` object in `~/.agentainer/mcp.json`, preserving its other entries:
+
+```json
+{
+  "mcpServers": {
+    "context-mode": {"command": "context-mode"}
+  }
+}
+```
+
+Stop agents that write their config files, then run `agentainer-mcp sync` as described in [MCP synchronization](configuration.md#mcp-servers). MCP-only registration exposes tools; it does not install routing hooks or establish session-continuity behavior. Use the [upstream installation guide](https://github.com/mksglu/context-mode) for the chosen client's full plugin setup, restart requirements and diagnostics. Do not copy its example instructions over an existing project or shared `AGENTS.md`.
+
+Codex's upstream setup includes hook feature flags and hook trust, and the Antigravity CLI setup differs from the Antigravity desktop IDE. These integrations, their permission behavior and their interaction with RTK are not verified in Agentainer. Confirm the tools are callable and the chosen hooks actually fire before relying on them. The existing OpenCode discovery limitations below still apply. Uninstalling the npm package alone does not describe how to remove client-specific plugin configuration; use the matching upstream removal instructions.
+
+### Context7
+
+[Context7](https://github.com/upstash/context7) retrieves library documentation and code examples. It is a documentation service, not a general command-output compressor. Its hosted MCP server avoids installing a local MCP server package. Queries go to the hosted service, so use public library names, versions and focused documentation questions rather than secrets.
+
+For the upstream setup flow, select an exact reviewed `ctx7` version from [published npm metadata](https://registry.npmjs.org/ctx7) and replace `VERSION`:
+
+```sh
+npx 'ctx7@VERSION' setup
+```
+
+The [setup guide](https://github.com/upstash/context7#installation) documents the Node.js requirement, OAuth flow and choice between CLI skills and MCP. To use Agentainer's shared MCP configuration instead, merge the following entry into its existing `mcpServers` object and provide `CONTEXT7_API_KEY` through the runtime env file:
+
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {"Authorization": "Bearer ${CONTEXT7_API_KEY}"}
+    }
+  }
+}
+```
+
+This endpoint and bearer-header format come from the [upstream client guide](https://github.com/upstash/context7/blob/master/docs/resources/all-clients.mdx). Follow [MCP synchronization](configuration.md#mcp-servers) before running `agentainer-mcp sync`. Antigravity does not receive headers containing environment references through that sync; configure authentication for it using its native client instructions. OpenCode discovery remains not verified. Do not assume that a shared entry establishes authentication in every agent.
+
+After restarting the client, verify that `resolve-library-id` and `query-docs` are available and complete a public-library lookup. Request documentation for the project's actual version and check the original source when accuracy matters. Authenticated use, coverage of particular libraries and cost effects have not been verified here. Remove generated setup with the matching `ctx7` CLI's `remove` command, or remove the manually managed server entry and re-sync. See the upstream [CLI guide](https://context7.com/docs/clients/cli) for the selected version's options.
 
 ## Claude Code
 
@@ -219,3 +315,5 @@ The following checks ran on 2026-10-21 with the agent versions pinned in [versio
 The pack checks used Superpowers revision [`b739a8a`](https://github.com/obra/superpowers/tree/b739a8af570e10a95898f2bdf6cec97467fa6c12) and agent-skills revision [`aeac41d`](https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d). The UI UX Pro Max check used the npm CLI release `2.15.0`. That installer also included auxiliary design skills; inspect its generated files before adding them to a project.
 
 Native command syntax was checked against the bundled CLIs' help. Recommended package names, sources and setup steps come from the linked upstream guides and skill files. Actual coding workflows, account connections, model costs, hook execution and approval delivery remain not verified. Installation checks do not establish plugin effectiveness or constitute a full security audit. These instructions do not install or enable anything until you run the installation commands or apply the plugin configuration.
+
+The RTK, context-mode and Context7 examples were checked against upstream documentation on 2026-10-22. Their installers, authentication, agent hooks and savings were not tested in Agentainer. These examples are not additions to the image or its startup defaults.

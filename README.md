@@ -41,7 +41,7 @@ Start an agent in a tmux window (`claude`, `codex`, `agy` or `opencode`). Close 
 | Python tests and linting, JavaScript tooling, native builds and PostgreSQL scripts | [docs/project-tools.md](docs/project-tools.md) |
 | Optional Playwright setup, persistent browser downloads and execution checks | [docs/browser-testing.md](docs/browser-testing.md) |
 | Optional Go, Rust, Python and TypeScript language servers | [docs/language-tooling.md](docs/language-tooling.md) |
-| Optional plugins for Claude Code, Codex, OpenCode and Antigravity | [docs/plugins.md](docs/plugins.md) |
+| Optional agent plugins, token/context tools and documentation lookup | [docs/plugins.md](docs/plugins.md) |
 | The shared `AGENTS.md`, MCP servers, tools that agents install, OpenRouter | [docs/configuration.md](docs/configuration.md) |
 | Kubernetes with ContainerSSH | [docs/kubernetes.md](docs/kubernetes.md) |
 | What the container isolates, and vulnerability reports | [docs/security.md](docs/security.md) |
