@@ -41,8 +41,9 @@ These tools solve different problems. Start with one in a separate test home, me
 | [context-mode](#context-mode) | Execute analysis through MCP tools and search indexed content | Optional trial for large logs, research and long sessions |
 | [Superpowers](#recommended-starting-points) | Planning, test-driven development, debugging and verification workflows | Choose for its development process; it is not a token compressor |
 | [Context7](#context7) | Retrieve library documentation and examples | Optional documentation lookup through its CLI or hosted MCP server |
+| [Neuledge Context](#neuledge-context-local-option) | Query a locally curated documentation collection | Optional local alternative to Context7 |
 
-Do not enable all four across every agent as one setup step. RTK and context-mode can both intercept tools, while Superpowers changes the workflow. Check them independently before combining them. No token or billing savings from these tools have been measured in Agentainer.
+Do not enable every tool across every agent as one setup step. RTK and context-mode can both intercept tools, while Superpowers changes the workflow. Check them independently before combining them. No token or billing savings from these tools have been measured in Agentainer.
 
 ### RTK
 
@@ -125,6 +126,38 @@ The [setup guide](https://github.com/upstash/context7#installation) documents th
 This endpoint and bearer-header format come from the [upstream client guide](https://github.com/upstash/context7/blob/master/docs/resources/all-clients.mdx). Follow [MCP synchronization](configuration.md#mcp-servers) before running `agentainer-mcp sync`. Antigravity does not receive headers containing environment references through that sync; configure authentication for it using its native client instructions. OpenCode discovery remains not verified. Do not assume that a shared entry establishes authentication in every agent.
 
 After restarting the client, verify that `resolve-library-id` and `query-docs` are available and complete a public-library lookup. Request documentation for the project's actual version and check the original source when accuracy matters. Authenticated use, coverage of particular libraries and cost effects have not been verified here. Remove generated setup with the matching `ctx7` CLI's `remove` command, or remove the manually managed server entry and re-sync. See the upstream [CLI guide](https://context7.com/docs/clients/cli) for the selected version's options.
+
+#### Neuledge Context: local option
+
+[Neuledge Context](https://github.com/neuledge/context) provides a local documentation collection you can tailor to a project. Its npm package is [`@neuledge/context`](https://github.com/neuledge/context/blob/main/packages/context/package.json), and its executable is `context`.
+
+Choose an exact reviewed version from [published npm metadata](https://registry.npmjs.org/@neuledge%2fcontext), replace `VERSION`, and run inside the container:
+
+```sh
+npm install --global '@neuledge/context@VERSION'
+context add /workspace --path docs --name project-docs
+context list
+context query project-docs 'configuration'
+```
+
+The [upstream CLI reference](https://github.com/neuledge/context/blob/main/packages/context/README.md#cli-reference) documents these commands. Adjust the source path and query to your project. It also supports Git repositories, websites and prebuilt registry packages. Packages reside in `~/.context/packages/` on the persistent home volume. Re-run `context add` when source documentation changes.
+
+For a collection limited to those installed project docs, merge this entry into the existing `mcpServers` object in `~/.agentainer/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "neuledge-context": {
+      "command": "context",
+      "args": ["serve", "--libs", "project-docs"]
+    }
+  }
+}
+```
+
+The upstream [`serve` reference](https://github.com/neuledge/context/blob/main/packages/context/README.md#context-serve) documents stdio transport and `--libs`, which restricts available packages and hides registry search/download tools. Installed documentation queries run locally; installation, registry discovery and remote-source imports require network access. The agent still sends retrieved content to its configured model.
+
+Follow [MCP synchronization](configuration.md#mcp-servers), preserving other entries and stopping agents that write their configuration before syncing. Restart the chosen agent and verify a `get_docs` lookup. Installation, offline behavior and compatibility with Agentainer's pinned agents are not verified. Nothing here installs the package or changes startup defaults.
 
 ## Claude Code
 
@@ -316,4 +349,4 @@ The pack checks used Superpowers revision [`b739a8a`](https://github.com/obra/su
 
 Native command syntax was checked against the bundled CLIs' help. Recommended package names, sources and setup steps come from the linked upstream guides and skill files. Actual coding workflows, account connections, model costs, hook execution and approval delivery remain not verified. Installation checks do not establish plugin effectiveness or constitute a full security audit. These instructions do not install or enable anything until you run the installation commands or apply the plugin configuration.
 
-The RTK, context-mode and Context7 examples were checked against upstream documentation on 2026-10-22. Their installers, authentication, agent hooks and savings were not tested in Agentainer. These examples are not additions to the image or its startup defaults.
+The RTK, context-mode, Context7 and Neuledge Context examples were checked against upstream documentation on 2026-10-22. Their installers, authentication, agent hooks and savings were not tested in Agentainer. These examples are not additions to the image or its startup defaults.
