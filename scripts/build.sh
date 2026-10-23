@@ -85,6 +85,10 @@ if [ "$RUNTIME" = podman ]; then
 	else
 		echo "build.sh: Podman server ${server:-of unknown version} is older than 5.6, so layer file times are not fixed and unchanged tools get new layer digests" >&2
 	fi
+elif [ "$RUNTIME" = docker ]; then
+	# Podman inherits HEALTHCHECK only from Docker-format manifests. Inline build
+	# attestations require OCI manifests, so local builds omit those attestations.
+	set -- "$@" --output=type=image,oci-mediatypes=false --provenance=false
 fi
 set -x
 "$RUNTIME" build -f Containerfile ${platform:+--platform "$platform"} "$@" \

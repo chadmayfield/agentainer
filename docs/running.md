@@ -86,7 +86,11 @@ With Podman, use the same commands and add `--userns=keep-id:uid=1000,gid=1000`.
 
 ## Container health
 
-The image runs [`agentainer-healthcheck`](../rootfs/usr/local/bin/agentainer-healthcheck) every 30 seconds, with a five-second timeout, a 180-second startup grace period and three consecutive failures before `unhealthy`. These settings use the [Dockerfile `HEALTHCHECK` instruction](https://docs.docker.com/reference/dockerfile/#healthcheck), supported by [Podman](https://docs.podman.io/en/v5.3.2/markdown/podman-run.1.html#health-start-period-period).
+The image defines [`agentainer-healthcheck`](../rootfs/usr/local/bin/agentainer-healthcheck) every 30 seconds, with a five-second timeout, a 180-second startup grace period and three consecutive failures before `unhealthy`. These settings use the [Dockerfile `HEALTHCHECK` instruction](https://docs.docker.com/reference/dockerfile/#healthcheck).
+
+Podman inherits image health checks only from Docker-format manifests, as its [container creation source](https://github.com/containers/podman/blob/v5.3.2/pkg/specgen/generate/container.go#L67-L87) shows. `scripts/build.sh` uses Docker format with both engines. Local Docker builds disable default inline provenance because attestations require OCI manifests ([exporter options](https://docs.docker.com/build/exporters/image-registry/), [attestation options](https://docs.docker.com/build/metadata/attestations/)).
+
+Release builds use a separate workflow with SBOM and provenance attestations. Podman does not inherit the health check from those OCI manifests. For a raw `podman run` with an image that includes this probe, supply `--health-cmd=/usr/local/bin/agentainer-healthcheck --health-interval=30s --health-timeout=5s --health-start-period=180s --health-retries=3` explicitly ([Podman options](https://docs.podman.io/en/v5.3.2/markdown/podman-run.1.html#health-cmd-command)). The launcher does not supply these overrides.
 
 The probe checks the entrypoint's completion marker, home-directory read/write/search permissions and the active tools symlink's readable, searchable directory target. Startup clears the previous marker, including after a container restart. The probe reads no agent settings or credentials, runs no agents, changes no home files and makes no network requests. It checks access permissions, not whether the disk has free space or every tool works. Use [`agentainer doctor`](troubleshooting.md#offline-diagnostics) for broader diagnostics.
 
