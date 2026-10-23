@@ -209,4 +209,10 @@ Terminal: 80 columns by 24 rows.
 
 ![tmux split panes at 80 columns terminal screenshot](screenshots/tmux-narrow.png)
 
+## ls file types
+
+GNU ls file colors, including special permissions. The final two rows illustrate the configured missing-target and block-device styles.
+
+![ls file types reference](screenshots/ls-colors.png)
+
 Screenshots are review artifacts.

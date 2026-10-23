@@ -35,7 +35,7 @@ The shell exports `LS_COLORS` from `~/.config/agentainer/shell-theme.bash`. It g
 
 Sockets use teal. Setuid executables and world-writable directories without the sticky bit use red on a muted dark red background. Setgid executables use amber on dark amber. Sticky shared directories use muted green on dark green; other sticky directories use teal on dark teal. These explicit RGB colors do not depend on the terminal's ANSI palette. The special permission styles override ordinary directory and executable colors.
 
-![GNU ls file types with the Agentainer palette](images/ls-colors.png)
+![GNU ls file types with the Agentainer palette](../artifacts/visual/screenshots/ls-colors.png)
 
 The screenshot shows actual GNU `ls` output with the image's tools and this checkout's defaults. The final two rows illustrate the configured missing-target and block-device styles. Ordinary source files and archives have no extension-specific colors. Existing homes retain their saved theme files; a rebuilt image seeds these defaults only when the files are missing.
 

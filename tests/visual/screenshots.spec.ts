@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { markdownGallery } from './markdown';
+import { fileTypesReference, markdownGallery } from './markdown';
 
 const output = path.resolve(__dirname, '../../artifacts/visual');
 const expectedIds = ['shell', 'eza', 'eza-tree', 'eza-broken', 'git-status', 'git-diff',
@@ -32,7 +32,7 @@ test('render all terminal states and publish an offline review gallery', async (
     'Terminal: 120 × 32 and narrow 80 × 24, JetBrains Mono 14px.',
   ];
   const navigationGroups = [
-    ['Shell', [['shell', 'Prompt and ls']]],
+    ['Shell', [['shell', 'Prompt and ls'], ['ls-colors', 'All file types']]],
     ['eza', [['eza', 'Listing'], ['eza-tree', 'Tree'], ['eza-broken', 'Broken link']]],
     ['Git', [['git-status', 'Status'], ['git-diff', 'Diff'], ['git-staged', 'Staged'], ['git-conflict', 'Conflict']]],
     ['bat', [['bat', 'Python'], ['bat-yaml', 'YAML']]],
@@ -132,16 +132,18 @@ ${xtermCss}
       cards.push(`<section id="${capture.id}">${heading}<figure><img alt="${escapeHtml(capture.title)} terminal screenshot" src="data:image/png;base64,${data}"></figure></section>`);
       await page.evaluate(() => (window as any).reviewTerminal.dispose());
     }
+    const reference = fs.readFileSync(path.join(output, 'screenshots', `${fileTypesReference.id}.png`));
+    cards.push(`<section id="${fileTypesReference.id}"><h2>${fileTypesReference.title}</h2><p>${fileTypesReference.description}</p><figure><img alt="${fileTypesReference.title} reference" src="data:image/png;base64,${reference.toString('base64')}"></figure></section>`);
     expect(errors).toEqual([]);
     // Validate the delivered page before replacing the last complete gallery.
     const gallery = html(cards.join('\n'));
     await page.setContent(gallery);
     await expect(page.locator('nav .nav-group')).toHaveCount(7);
     expect(await page.locator('nav a').evaluateAll(links => links.map(link => link.getAttribute('href'))))
-      .toEqual(expectedIds.map(id => `#${id}`));
+      .toEqual([expectedIds[0], fileTypesReference.id, ...expectedIds.slice(1)].map(id => `#${id}`));
     await expect(page.locator('ul.metadata > li')).toHaveCount(4);
     expect(gallery).not.toContain('Their generation does not mean a person has approved the appearance.');
-    await expect(page.locator('figure img')).toHaveCount(expectedIds.length);
+    await expect(page.locator('figure img')).toHaveCount(expectedIds.length + 1);
     const frameWidths = await page.locator('figure').evaluateAll(figures => figures.map(figure => ({
       frame: figure.getBoundingClientRect().width,
       image: figure.querySelector('img')!.getBoundingClientRect().width,
@@ -152,7 +154,7 @@ ${xtermCss}
       (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
     const markdown = markdownGallery(recording.captures, metadata);
     const links = [...markdown.matchAll(/^!\[.*\]\((screenshots\/[a-z0-9-]+\.png)\)$/gm)].map(match => match[1]);
-    expect(links).toEqual(expectedIds.map(id => `screenshots/${id}.png`));
+    expect(links).toEqual([...expectedIds, fileTypesReference.id].map(id => `screenshots/${id}.png`));
     for (const id of expectedIds) expect(fs.existsSync(path.join(staging, `${id}.png`))).toBe(true);
     fs.writeFileSync(path.join(staging, 'index.md'), markdown);
     const destination = path.join(output, 'screenshots');
@@ -195,4 +197,10 @@ test('Markdown keeps screenshot links relative and escapes captured text', () =>
   expect(markdown).not.toContain('Their generation does not mean a person has approved the appearance.');
   expect(() => markdownGallery([{ id: '../outside', title: 'Invalid',
     description: '', cols: 120, rows: 32 }], [])).toThrow('invalid screenshot identifier');
+});
+
+test('Markdown includes the standalone file-type reference', () => {
+  const markdown = markdownGallery([], []);
+  expect(markdown).toContain('](screenshots/ls-colors.png)');
+  expect(markdown).toContain('missing-target and block-device styles');
 });
