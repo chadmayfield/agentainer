@@ -342,6 +342,13 @@ def r_trivy():
     return out
 
 
+def r_abtop():
+    # Official release binaries and per-asset checksums: https://github.com/graykode/abtop/releases
+    return github_tool("ABTOP", "graykode/abtop", {
+        "AMD64": lambda v: "abtop-x86_64-unknown-linux-gnu.tar.xz",
+        "ARM64": lambda v: "abtop-aarch64-unknown-linux-gnu.tar.xz"})
+
+
 def r_curlie():
     return github_tool("CURLIE", "rs/curlie", {
         "AMD64": lambda v: "curlie_%s_linux_amd64.tar.gz" % v, "ARM64": lambda v: "curlie_%s_linux_arm64.tar.gz" % v})
@@ -543,7 +550,7 @@ def r_buildkit():
                                       fetch_json("https://hub.docker.com/v2/repositories/moby/buildkit/tags/%s" % tag))}
 
 
-RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_curlie, r_golangci,
+RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_abtop, r_curlie, r_golangci,
              r_kubectl, r_helm, r_tea, r_claude, r_codex, r_agy, r_opencode, r_k8s_images, r_buildkit]
 
 

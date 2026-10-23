@@ -95,9 +95,13 @@ class InfrastructureInstallerTests(unittest.TestCase):
             output.mkdir()
             payload = base / "payload"
             binary = b"#!/bin/sh\nprintf 'fixture\\n'\n"
-            if tool == "helm":
-                with tarfile.open(payload, "w:gz") as archive:
-                    member = tarfile.TarInfo("linux-" + arch + "/helm")
+            if tool in ("helm", "abtop"):
+                triple = "aarch64" if arch == "arm64" else "x86_64"
+                archive_mode = "w:gz" if tool == "helm" else "w:xz"
+                member_name = ("linux-" + arch + "/helm" if tool == "helm"
+                               else "abtop-" + triple + "-unknown-linux-gnu/abtop")
+                with tarfile.open(payload, archive_mode) as archive:
+                    member = tarfile.TarInfo(member_name)
                     member.size = len(binary)
                     archive.addfile(member, io.BytesIO(binary))
             else:
@@ -131,18 +135,22 @@ class InfrastructureInstallerTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual((output / tool).read_bytes(), binary)
                 self.assertEqual((output / tool).stat().st_mode & 0o777, 0o755)
-            expected = ("https://dl.k8s.io/release/v1.2.3/bin/linux/" + arch + "/kubectl"
-                        if tool == "kubectl" else "https://get.helm.sh/helm-v1.2.3-linux-" + arch + ".tar.gz")
+            if tool == "abtop":
+                expected = ("https://github.com/graykode/abtop/releases/download/v1.2.3/abtop-"
+                            + triple + "-unknown-linux-gnu.tar.xz")
+            else:
+                expected = ("https://dl.k8s.io/release/v1.2.3/bin/linux/" + arch + "/kubectl"
+                            if tool == "kubectl" else "https://get.helm.sh/helm-v1.2.3-linux-" + arch + ".tar.gz")
             self.assertEqual((base / "url").read_text().strip(), expected)
 
     def test_installs_verified_bytes_for_each_architecture(self):
-        for tool in ("kubectl", "helm"):
+        for tool in ("kubectl", "helm", "abtop"):
             for arch in ("amd64", "arm64"):
                 with self.subTest(tool=tool, arch=arch):
                     self.install(tool, arch)
 
-    def test_bad_checksums_cannot_install_either_tool(self):
-        for tool in ("kubectl", "helm"):
+    def test_bad_checksums_cannot_install_any_tool(self):
+        for tool in ("kubectl", "helm", "abtop"):
             for arch in ("amd64", "arm64"):
                 with self.subTest(tool=tool, arch=arch):
                     self.install(tool, arch, corrupt=True)

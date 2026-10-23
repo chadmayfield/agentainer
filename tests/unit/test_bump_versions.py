@@ -48,6 +48,25 @@ class EnvFileTests(unittest.TestCase):
 
 
 class ParserTests(unittest.TestCase):
+    def test_abtop_resolver_checks_both_published_archive_checksums(self):
+        names = ["abtop-x86_64-unknown-linux-gnu.tar.xz", "abtop-aarch64-unknown-linux-gnu.tar.xz"]
+        assets = []
+        responses = {}
+        for name, letter in zip(names, "ab"):
+            assets.extend([{"name": name, "digest": "sha256:" + letter * 64},
+                           {"name": name + ".sha256", "browser_download_url": "https://example.com/" + name}])
+            responses["https://example.com/" + name] = letter * 64 + " *" + name + "\n"
+        release = {"tag_name": "v0.5.5", "assets": assets}
+        with patch.object(bv, "gh_latest", return_value=release) as latest, \
+                patch.object(bv, "fetch", side_effect=responses.__getitem__) as fetched, \
+                patch.object(bv, "verify_asset", return_value=False):
+            pins = bv.r_abtop()
+        latest.assert_called_once_with("graykode/abtop")
+        self.assertEqual(fetched.call_count, 2)
+        self.assertEqual(pins, {"ABTOP_VERSION": "0.5.5", "ABTOP_SHA256_AMD64": "a" * 64,
+                                "ABTOP_SHA256_ARM64": "b" * 64})
+        self.assertIn(bv.r_abtop, bv.RESOLVERS)
+
     def test_ruff_resolver_selects_both_official_archives_and_verifies_publisher(self):
         names = ["ruff-x86_64-unknown-linux-gnu.tar.gz", "ruff-aarch64-unknown-linux-gnu.tar.gz"]
         release = {"tag_name": "0.17.1", "assets": [

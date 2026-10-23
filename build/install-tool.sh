@@ -152,6 +152,12 @@ trivy)
 	tar -xzf trivy.tgz trivy
 	install -m 0755 trivy /usr/local/bin/trivy
 	;;
+abtop)
+	# Official release archives: https://github.com/graykode/abtop/releases
+	sh $F "https://github.com/graykode/abtop/releases/download/v${ABTOP_VERSION}/abtop-${TRIPLE}-unknown-linux-gnu.tar.xz" sha256 "$(pin ABTOP_SHA256)" abtop.tar.xz
+	tar -xJf abtop.tar.xz "abtop-${TRIPLE}-unknown-linux-gnu/abtop"
+	install -m 0755 "abtop-${TRIPLE}-unknown-linux-gnu/abtop" /usr/local/bin/abtop
+	;;
 curlie)
 	sh $F "https://github.com/rs/curlie/releases/download/v${CURLIE_VERSION}/curlie_${CURLIE_VERSION}_linux_${TARGETARCH}.tar.gz" sha256 "$(pin CURLIE_SHA256)" curlie.tgz
 	tar -xzf curlie.tgz curlie

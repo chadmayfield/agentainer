@@ -85,6 +85,13 @@ ARG CURLIE_SHA256_AMD64
 ARG CURLIE_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh curlie
 
+FROM fetch AS abtop
+ARG TARGETARCH
+ARG ABTOP_VERSION
+ARG ABTOP_SHA256_AMD64
+ARG ABTOP_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh abtop
+
 FROM fetch AS golangci-lint
 ARG TARGETARCH
 ARG GOLANGCI_LINT_VERSION
@@ -225,6 +232,7 @@ COPY --from=uv /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
 COPY --from=ruff /usr/local/bin/ruff /usr/local/bin/ruff
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY --from=curlie /usr/local/bin/curlie /usr/local/bin/curlie
+COPY --from=abtop /usr/local/bin/abtop /usr/local/bin/abtop
 COPY --from=golangci-lint /usr/local/bin/golangci-lint /usr/local/bin/golangci-lint
 COPY --from=tea /usr/local/bin/tea /usr/local/bin/tea
 COPY --from=kubectl /usr/local/bin/kubectl /usr/local/bin/kubectl

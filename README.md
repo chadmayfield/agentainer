@@ -4,7 +4,7 @@ Agentainer is one container image with four AI coding agents and a shared set of
 
 - Agents: [Claude Code](https://code.claude.com/docs/en/setup), [Codex CLI](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/docs/overview?tab=cli) (`agy`) and [OpenCode v2](https://opencode.ai/v2/docs).
 - Base: Ubuntu 26.04 LTS, pinned by digest, with apt packages from the [Ubuntu snapshot service](https://documentation.ubuntu.com/server/how-to/software/snapshot-service/) at a pinned date.
-- Tools: git, gh, Go, Rust, Python with uv and pipx, Node.js, GCC/G++, CMake, Ninja, pkg-config, psql, kubectl, Helm, ripgrep, jq, yq, shellcheck, trivy and more. `/etc/agentainer/versions.json` in the image lists every version.
+- Tools: git, gh, Go, Rust, Python with uv and pipx, Node.js, GCC/G++, CMake, Ninja, pkg-config, psql, kubectl, Helm, abtop, ripgrep, jq, yq, shellcheck, trivy and more. `/etc/agentainer/versions.json` in the image lists every version.
 - Platforms: `linux/amd64` and `linux/arm64`. On amd64 the agents also start on CPUs without AVX2; CI checks this on every build.
 
 Agents can modify mounted files, use supplied credentials and reach network services. See the [security limits](docs/security.md).
@@ -42,6 +42,7 @@ Start an agent in a tmux window (`claude`, `codex`, `agy` or `opencode`). Close 
 | Optional Playwright setup, persistent browser downloads and execution checks | [docs/browser-testing.md](docs/browser-testing.md) |
 | Optional Go, Rust, Python and TypeScript language servers | [docs/language-tooling.md](docs/language-tooling.md) |
 | Optional agent plugins, token/context tools and documentation lookup | [docs/plugins.md](docs/plugins.md) |
+| Agent session monitoring with abtop | [docs/monitoring.md](docs/monitoring.md) |
 | The shared `AGENTS.md`, MCP servers, tools that agents install, OpenRouter | [docs/configuration.md](docs/configuration.md) |
 | Kubernetes with ContainerSSH | [docs/kubernetes.md](docs/kubernetes.md) |
 | What the container isolates, and vulnerability reports | [docs/security.md](docs/security.md) |
