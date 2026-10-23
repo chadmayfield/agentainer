@@ -3,15 +3,15 @@
 colourful: true
 filekinds:
   normal: {foreground: "#bfbdb6"}
-  directory: {foreground: "#bfbdb6", is_bold: true}
+  directory: {foreground: "#8fb573", is_bold: true}
   symlink: {foreground: "#e6b450"}
   pipe: {foreground: "#e6b450"}
   block_device: {foreground: "#e6b450", is_bold: true}
   char_device: {foreground: "#e6b450", is_bold: true}
-  socket: {foreground: "#e6b450"}
+  socket: {foreground: "#95e6cb"}
   special: {foreground: "#e6b450"}
   executable: {foreground: "#aad94c", is_bold: true}
-  mount_point: {foreground: "#bfbdb6", is_bold: true}
+  mount_point: {foreground: "#8fb573", is_bold: true}
 perms:
   user_read: {foreground: "#bfbdb6"}
   user_write: {foreground: "#e6b450"}

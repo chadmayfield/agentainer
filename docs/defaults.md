@@ -21,7 +21,9 @@ The Agentainer colorscheme is inspired by [Ayu Dark](https://github.com/ayu-them
 |---|---|
 | Background | `#000000` |
 | Selection and tmux bar | `#202020` |
-| Normal text and directories | `#bfbdb6` |
+| Normal text | `#bfbdb6` |
+| Directories | `#8fb573` |
+| Sockets and sticky directories | `#95e6cb` |
 | Secondary text | `#747474` |
 | Amber accents and links | `#e6b450` |
 | Additions and executables | `#aad94c` |
@@ -29,7 +31,13 @@ The Agentainer colorscheme is inspired by [Ayu Dark](https://github.com/ayu-them
 | Blue accents | `#59c2ff` |
 | Vim status line | `#253340` |
 
-The shell exports `LS_COLORS` from `~/.config/agentainer/shell-theme.bash`. It gives `ls` and eza gray directories, amber symbolic links and green executables. Edit that file to customize the file colors. Agentainer does not change the host terminal's ANSI palette, which bat's `ansi` theme uses.
+The shell exports `LS_COLORS` from `~/.config/agentainer/shell-theme.bash`. It gives `ls` and eza muted green directories (`#8fb573`), amber symbolic links and green executables. Edit that file to customize the file colors. Agentainer does not change the host terminal's ANSI palette, which bat's `ansi` theme uses.
+
+Sockets use teal. Setuid executables and world-writable directories without the sticky bit use red on a muted dark red background. Setgid executables use amber on dark amber. Sticky shared directories use muted green on dark green; other sticky directories use teal on dark teal. These explicit RGB colors do not depend on the terminal's ANSI palette. The special permission styles override ordinary directory and executable colors.
+
+![GNU ls file types with the Agentainer palette](images/ls-colors.png)
+
+The screenshot shows actual GNU `ls` output with the image's tools and this checkout's defaults. The final two rows illustrate the configured missing-target and block-device styles. Ordinary source files and archives have no extension-specific colors. Existing homes retain their saved theme files; a rebuilt image seeds these defaults only when the files are missing.
 
 The offline tests in [`tests/55-defaults.sh`](../tests/55-defaults.sh) check actual RGB output from `ls`, eza and Git, eza's `LS_COLORS` override, redirected Git output, and Vim and tmux settings. They also check that startup preserves edited color configuration files. These checks do not replace a visual check in the user's terminal. Generate the optional screenshot gallery with the commands in [visual review](../tests/visual/README.md). The gallery captures multiple states per tool for human review; generation does not approve their appearance.
 

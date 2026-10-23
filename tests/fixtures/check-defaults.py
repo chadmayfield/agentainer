@@ -7,6 +7,7 @@ import re
 import select
 import shlex
 import signal
+import socket
 import struct
 import termios
 import time
@@ -87,7 +88,7 @@ class DefaultsTests(unittest.TestCase):
             output = self.command(['bash', '-ic',
                 'test -n "$LS_COLORS" && ls --color=always --directory "$@"',
                 'cx-ls-colors', str(folder), str(executable), str(link)])
-            self.assertIn('38;2;191;189;182m', output)
+            self.assertIn('38;2;143;181;115m', output)
             self.assertIn('38;2;170;217;76m', output)
             self.assertIn('38;2;230;180;80m', output)
 
@@ -96,6 +97,8 @@ class DefaultsTests(unittest.TestCase):
             base = Path(directory)
             (base / 'sample.txt').write_text('example\n')
             (base / 'folder').mkdir()
+            with socket.socket(socket.AF_UNIX) as server:
+                server.bind(str(base / 'unix.socket'))
             env = dict(os.environ)
             for key in ('LS_COLORS', 'EZA_COLORS', 'EZA_CONFIG_DIR', 'NO_COLOR'):
                 env.pop(key, None)
@@ -106,10 +109,40 @@ class DefaultsTests(unittest.TestCase):
             self.assertIn('38;2;230;180;80', result.stdout)
             self.assertIn('38;2;116;116;116', result.stdout)
             self.assertIn('38;2;191;189;182', result.stdout)
+            self.assertIn('38;2;143;181;115', result.stdout)
+            self.assertIn('38;2;149;230;203', result.stdout)
             env['LS_COLORS'] = 'di=38;2;1;2;3'
             overridden = self.command(args, env=env)
             self.assertIn('38;2;1;2;3', overridden)
             self.assertIn('38;2;230;180;80', overridden)
+
+    def test_ls_special_file_types_use_theme_colors(self):
+        with tempfile.TemporaryDirectory(prefix='cx-ls-special-') as directory:
+            base = Path(directory)
+            entries = [
+                ('setuid-file', 0o4755, '01;38;2;240;113;120;48;2;58;32;36'),
+                ('setgid-file', 0o2755, '01;38;2;230;180;80;48;2;51;43;28'),
+                ('sticky-shared-dir', 0o1777, '38;2;143;181;115;48;2;30;43;32'),
+                ('writable-dir', 0o777, '01;38;2;240;113;120;48;2;58;32;36'),
+                ('sticky-dir', 0o1755, '38;2;149;230;203;48;2;27;43;48'),
+            ]
+            for name, mode, style in entries:
+                path = base / name
+                if name.endswith('-dir'):
+                    path.mkdir()
+                else:
+                    path.write_text('preview\n')
+                path.chmod(mode)
+            with socket.socket(socket.AF_UNIX) as server:
+                path = base / 'unix.socket'
+                server.bind(str(path))
+                entries.append(('unix.socket', None, '38;2;149;230;203'))
+                for name, _, style in entries:
+                    path = str(base / name)
+                    with self.subTest(name=name):
+                        output = self.command(['bash', '-ic',
+                            'ls --color=always --directory "$1"', 'cx-ls-special', path])
+                        self.assertIn('\x1b[' + style + 'm' + path, output)
 
     def test_agent_settings_have_expected_display_and_permission_values(self):
         claude = json.loads((HOME / '.claude/settings.json').read_text())
