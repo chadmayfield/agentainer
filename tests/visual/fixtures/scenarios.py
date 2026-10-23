@@ -154,7 +154,7 @@ def main():
                              absentText=list(absent), cols=cols, rows=rows))
         print('Captured ' + identifier, file=sys.stderr)
 
-    add('shell', 'Shell and ls', 'Amber user, blue hostname, gray directories, amber links, green executables.',
+    add('shell', 'Shell and ls', 'Amber user, blue hostname, muted green directories, amber links, green executables.',
         ['bash', '--noprofile', '--rcfile', str(home / '.bashrc'), '-i'],
         ['@agentainer', 'sample.py', 'run-example'], interactive=True, send=b'ls --color=always\n')
     add('eza', 'eza', 'File types, permissions, owners, sizes, dates and Git indicators.',

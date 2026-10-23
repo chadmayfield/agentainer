@@ -18,7 +18,7 @@ printf '%s\n' "$@"
 EOF
 chmod +x "$T/podman"
 # stdout holds the build arguments; stderr holds the trace and warnings.
-build() { STUB_SERVER=$1 PATH="$T:$PATH" RUNTIME=podman sh "$B" 2>"$T/err"; }
+build() { STUB_SERVER=$1 PATH="$T:$PATH" RUNTIME=podman "$B" 2>"$T/err"; }
 has_line() { # NAME EXACT-LINE OUTPUT
 	if printf '%s\n' "$3" | grep -qxF -- "$2"; then pass "$1"; else fail "$1" "no line [$2] in [$3]"; fi
 }

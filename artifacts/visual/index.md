@@ -2,8 +2,8 @@
 
 Agentainer colors, inspired by Ayu. Review contrast, selections, error colors, gutters and status lines.
 
-- Image: ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261019.1
-- Defaults: checkout overlay
+- Image: localhost/agentainer:dev
+- Defaults: image
 - Renderer: 155.0.8059.85
 - Terminal: 120 × 32 and narrow 80 × 24, JetBrains Mono 14px.
 
@@ -11,7 +11,7 @@ Captured from actual tools with generic files. Browser rendering uses a fixed fo
 
 ## Shell and ls
 
-Amber user, blue hostname, gray directories, amber links, green executables.
+Amber user, blue hostname, muted green directories, amber links, green executables.
 
 Terminal: 120 columns by 32 rows.
 

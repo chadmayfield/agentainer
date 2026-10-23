@@ -289,7 +289,6 @@ jobs:
         run: echo "buildkit=$(sed -n 's/^BUILDKIT_IMAGE=//p' versions.env)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
         with:
-          persist-credentials: false
           driver-opts: image=${{ steps.pins.outputs.buildkit }}
       - name: Compare every tool layer across two clean builds
         run: python3 tests/host/test-layer-repro.py

@@ -9,7 +9,7 @@ Agentainer is one container image with four AI coding agents and a shared set of
 
 Agents can modify mounted files, use supplied credentials and reach network services. See the [security limits](docs/security.md).
 
-This checkout documents the current source. The published prerelease `0.1.0-dev.20261019.1` predates `agentainer-doctor`, health checks, CMake, Ninja, pkg-config, psql, kubectl and Helm. Build the current source to use those additions; they require a subsequent release before they are available from GHCR ([release policy](docs/versions.md#releases)).
+This checkout documents the current source. The published prerelease `0.1.0-dev.20261019.1` predates this branch's configuration defaults, diagnostics, health checks and tool additions, including kubectl, Helm, Ruff, abtop and unslop. Build the current source to use these features; they require a subsequent release before they are available from GHCR ([release policy](docs/versions.md#releases)).
 
 ## Quick start
 
