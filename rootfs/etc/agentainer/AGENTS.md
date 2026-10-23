@@ -21,3 +21,15 @@ Edit this file to add your own instructions. It is `~/.agentainer/AGENTS.md`, an
 - Run the checks relevant to the change. Report their actual results, including failures and checks you could not run. Do not claim a check passed unless you ran it or inspected its result.
 - Never expose credentials or personal information in source code, logs, examples, commits or pull requests. Use generic placeholders in material intended for sharing.
 - Describe what changed, why it changed and how you verified it. Identify any remaining limitations.
+
+## Writing outside chat
+
+For text covered below, read `/usr/local/share/agentainer/skills/unslop/SKILL.md` and apply its editing rules within this scope:
+
+- Apply the full rules to docs, READMEs, plans, commit messages, PR and issue text, UI and marketing copy, user-facing errors, code comments and docstrings, and reports or other files written for the user. Short comment fragments and `TODO:` or `NOTE:` labels are allowed.
+- Apply the full rules to instruction files, skills and memory notes, except the bold-formatting rule. Preserve required structures, including frontmatter and memory fields.
+- For logs and internal errors, remove only obvious AI tells such as filler, fancy vocabulary, em dashes, emojis and chatbot phrases. Short, clipped wording is allowed.
+- Exempt chat replies, including Insight blocks, machine-generated output such as lockfiles, generated code and build output, config keys and values, test fixture data, quotations and code identifiers.
+- Apply the rules only to text you write or change. Do not reword untouched lines. Files written for the user remain covered even when created during a chat.
+
+The skill comes from Cursor's pstack project. Its upstream attribution and MIT license are in `/usr/local/share/agentainer/skills/unslop/LICENSE`. Edit this section to customize its scope.

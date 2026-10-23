@@ -29,8 +29,17 @@ assert_contains "Codex stores auth in a file" '"auth storage mode": "File"' "$do
 # and keeps the approval prompts.
 assert_contains "Codex filesystem sandbox is off" '"filesystem sandbox": "unrestricted"' "$doctor"
 assert_contains "Codex still asks for approval" '"approval policy": "OnRequest"' "$doctor"
-assert_contains "Codex reads the symlinked AGENTS.md" "Agentainer environment" \
-	"$(run_in $H --network none -- sh -c 'cd /tmp && codex debug prompt-input hi 2>/dev/null')"
+prompt=$(run_in $H --network none -- sh -c 'cd /tmp && codex debug prompt-input hi 2>/dev/null')
+assert_contains "Codex reads the symlinked AGENTS.md" "Agentainer environment" "$prompt"
+assert_contains "Codex receives the image-owned unslop skill reference" "/usr/local/share/agentainer/skills/unslop/SKILL.md" "$prompt"
+assert_eq "skill and license match their pins" "UNSLOP_VERIFIED" \
+	"$(run_in $H --network none -- sh -ec '
+. /usr/local/share/agentainer/versions.env
+cd /usr/local/share/agentainer/skills/unslop
+printf "%s  SKILL.md\n%s  LICENSE\n" "$UNSLOP_SHA256" "$UNSLOP_LICENSE_SHA256" | sha256sum -c >/dev/null
+test "$(stat -c "%U %a" SKILL.md)" = "root 644"
+test "$(stat -c "%U %a" LICENSE)" = "root 644"
+echo UNSLOP_VERIFIED')"
 # A fresh home: no volume, so every first-start step runs.
 assert_absent "a fresh start prints no warnings" "$(run_in -- echo STARTED 2>&1)" STARTED warning changed
 assert_contains "default AGENTS.md describes the container" "/workspace" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.agentainer/AGENTS.md)"

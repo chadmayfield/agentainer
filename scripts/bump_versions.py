@@ -7,6 +7,7 @@ and the publisher verification CLIs documented in docs/versions.md.
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -46,6 +47,7 @@ VALUE_PATTERNS = [
     (r"(BASE_IMAGE|[A-Z0-9_]+_IMAGE)", IMAGE_REF),
     (r"APT_SNAPSHOT", r"[0-9]{8}T[0-9]{6}Z"),
     (r"SOURCE_DATE_EPOCH", r"[0-9]{1,12}"),
+    (r"UNSLOP_COMMIT", r"[0-9a-f]{40}"),
     (r"[A-Z0-9_]+_VERSION", r"v?[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.-]+)?"),
     (r"[A-Z0-9_]+_SHA256(_[A-Z0-9]+)?", r"[0-9a-f]{64}"),
     (r"[A-Z0-9_]+_SHA512(_[A-Z0-9]+)?", r"[0-9a-f]{128}"),
@@ -349,6 +351,22 @@ def r_abtop():
         "ARM64": lambda v: "abtop-aarch64-unknown-linux-gnu.tar.xz"})
 
 
+def r_unslop():
+    # The pstack directory includes the skill and its license. Source files have no
+    # published checksums, so compute both from the same immutable upstream commit.
+    # https://github.com/cursor/plugins/tree/main/pstack
+    commits = fetch_json('https://api.github.com/repos/cursor/plugins/commits?path=pstack&per_page=1')
+    if not commits or not isinstance(commits[0], dict):
+        raise LookupFailed('unslop: no upstream commit')
+    commit = commits[0].get('sha', '')
+    if not isinstance(commit, str) or not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise LookupFailed('unslop: expected a full lowercase commit SHA')
+    base = 'https://raw.githubusercontent.com/cursor/plugins/' + commit + '/pstack/'
+    return {'UNSLOP_COMMIT': commit,
+            'UNSLOP_SHA256': hashlib.sha256(fetch_bytes(base + 'skills/unslop/SKILL.md')).hexdigest(),
+            'UNSLOP_LICENSE_SHA256': hashlib.sha256(fetch_bytes(base + 'LICENSE')).hexdigest()}
+
+
 def r_curlie():
     return github_tool("CURLIE", "rs/curlie", {
         "AMD64": lambda v: "curlie_%s_linux_amd64.tar.gz" % v, "ARM64": lambda v: "curlie_%s_linux_arm64.tar.gz" % v})
@@ -550,7 +568,7 @@ def r_buildkit():
                                       fetch_json("https://hub.docker.com/v2/repositories/moby/buildkit/tags/%s" % tag))}
 
 
-RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_abtop, r_curlie, r_golangci,
+RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_abtop, r_unslop, r_curlie, r_golangci,
              r_kubectl, r_helm, r_tea, r_claude, r_codex, r_agy, r_opencode, r_k8s_images, r_buildkit]
 
 

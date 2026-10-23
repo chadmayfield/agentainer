@@ -31,6 +31,25 @@ The first start copies the image's default. When an image's default differs from
 
 `~/.agentainer/agents-default.sha256` lists every default the home has seen, one line per default and image version: `<sha256> <version>`. A line with only a hash comes from an image that did not record its version and counts as older than any release. So an older image never rolls the file back, and two images that share one home volume do not report each other's default more than once.
 
+### Writing rules
+
+The shared default tells agents to read `/usr/local/share/agentainer/skills/unslop/SKILL.md` before writing covered text. This is one image-owned copy of [Cursor's unslop skill](https://github.com/cursor/plugins/tree/main/pstack/skills/unslop), accompanied by the upstream [MIT license and attribution](https://github.com/cursor/plugins/blob/main/pstack/LICENSE). The build verifies both files against the commit and SHA-256 values in [`versions.env`](../versions.env). Upstream publishes no checksum files for these sources; the updater computes the recorded hashes from the same immutable commit.
+
+The shared instructions set this scope:
+
+| Content | Treatment |
+|---|---|
+| Docs, READMEs, plans, commits, PRs, issues, UI and marketing copy, user-facing errors, comments, docstrings and files written for the user | Full editing rules; short comment fragments and `TODO:` or `NOTE:` labels are allowed |
+| Instruction files, skills and memory notes | Full rules except the bold-formatting rule; required structures stay intact |
+| Logs and internal errors | Remove obvious AI tells; clipped wording is allowed |
+| Chat replies and Insight blocks | Exempt |
+| Generated output, lockfiles, generated code, config keys and values, test fixture data, quotations and code identifiers | Exempt |
+| Untouched text | Leave unchanged |
+
+Edit the writing section in `~/.agentainer/AGENTS.md` to customize or disable it. Existing edited instructions, custom agent files and local `dev` homes follow the preservation rules above. Compare the new section with `agentainer-agents diff` before adopting it in those homes.
+
+Agentainer references the skill through shared instructions rather than registering a native `/unslop` command or installing the rest of pstack. The offline tests check the installed bytes, license, ownership and the reference in Codex's assembled prompt. Import and symlink checks cover how the shared instructions reach the other agents. Actual model adherence to the writing rules remains not verified.
+
 ## MCP servers
 
 Define servers once in `~/.agentainer/mcp.json`, in the `mcpServers` format most MCP server READMEs use:

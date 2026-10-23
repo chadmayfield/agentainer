@@ -149,6 +149,13 @@ ARG OPENCODE_INTEGRITY_AMD64
 ARG OPENCODE_INTEGRITY_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh opencode
 
+FROM fetch AS unslop
+ARG UNSLOP_COMMIT
+ARG UNSLOP_SHA256
+ARG UNSLOP_LICENSE_SHA256
+COPY build/install-unslop.sh /usr/local/lib/agentainer-build/install-unslop.sh
+RUN sh /usr/local/lib/agentainer-build/install-unslop.sh
+
 FROM ${BASE_IMAGE}
 
 ARG BASE_IMAGE
@@ -241,6 +248,7 @@ COPY --from=claude /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=codex /opt/codex /opt/codex
 COPY --from=agy /usr/local/bin/agy /usr/local/bin/agy
 COPY --from=opencode /usr/local/bin/opencode /usr/local/bin/opencode
+COPY --from=unslop /usr/local/share/agentainer/skills/unslop /usr/local/share/agentainer/skills/unslop
 
 ENV RUSTUP_HOME=/opt/rustup \
 	GOTOOLCHAIN=local \
