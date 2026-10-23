@@ -83,7 +83,19 @@ EOF
 # meaning when rustup reads them, so use stable bytes for the exported tool layer.
 # https://github.com/rust-lang/rustup/blob/1.29.1/src/dist/component/components.rs
 normalize_rust_components() {
-	LC_ALL=C sort -o "$1" "$1" || return 1
+	local tmp
+	tmp=$(mktemp) || return 1
+	if ! LC_ALL=C sort "$1" >"$tmp"; then
+		rm -f "$tmp"
+		return 1
+	fi
+	# Write through the existing file so sort implementations that replace -o's
+	# destination cannot change its owner or permissions.
+	if ! cat "$tmp" >"$1"; then
+		rm -f "$tmp"
+		return 1
+	fi
+	rm -f "$tmp"
 }
 
 W=$(mktemp -d)
@@ -129,10 +141,22 @@ uv)
 	tar -xzf uv.tgz
 	install -m 0755 "uv-${TRIPLE}-unknown-linux-gnu/uv" "uv-${TRIPLE}-unknown-linux-gnu/uvx" /usr/local/bin/
 	;;
+ruff)
+	# https://github.com/astral-sh/ruff/releases
+	sh $F "https://github.com/astral-sh/ruff/releases/download/${RUFF_VERSION}/ruff-${TRIPLE}-unknown-linux-gnu.tar.gz" sha256 "$(pin RUFF_SHA256)" ruff.tgz
+	tar -xzf ruff.tgz
+	install -m 0755 "ruff-${TRIPLE}-unknown-linux-gnu/ruff" /usr/local/bin/ruff
+	;;
 trivy)
 	sh $F "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" sha256 "$(pin TRIVY_SHA256)" trivy.tgz
 	tar -xzf trivy.tgz trivy
 	install -m 0755 trivy /usr/local/bin/trivy
+	;;
+abtop)
+	# Official release archives: https://github.com/graykode/abtop/releases
+	sh $F "https://github.com/graykode/abtop/releases/download/v${ABTOP_VERSION}/abtop-${TRIPLE}-unknown-linux-gnu.tar.xz" sha256 "$(pin ABTOP_SHA256)" abtop.tar.xz
+	tar -xJf abtop.tar.xz "abtop-${TRIPLE}-unknown-linux-gnu/abtop"
+	install -m 0755 "abtop-${TRIPLE}-unknown-linux-gnu/abtop" /usr/local/bin/abtop
 	;;
 curlie)
 	sh $F "https://github.com/rs/curlie/releases/download/v${CURLIE_VERSION}/curlie_${CURLIE_VERSION}_linux_${TARGETARCH}.tar.gz" sha256 "$(pin CURLIE_SHA256)" curlie.tgz
@@ -150,6 +174,17 @@ tea)
 	sh $F "https://gitea.com/gitea/tea/releases/download/v${TEA_VERSION}/tea-${TEA_VERSION}-linux-${TARGETARCH}.xz" sha256 "$(pin TEA_SHA256)" tea.xz
 	xz -d tea.xz
 	install -m 0755 tea /usr/local/bin/tea
+	;;
+kubectl)
+	# https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
+	sh $F "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" sha256 "$(pin KUBECTL_SHA256)" kubectl
+	install -m 0755 kubectl /usr/local/bin/kubectl
+	;;
+helm)
+	# https://helm.sh/docs/intro/install/#from-the-binary-releases
+	sh $F "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" sha256 "$(pin HELM_SHA256)" helm.tgz
+	tar -xzf helm.tgz "linux-${TARGETARCH}/helm"
+	install -m 0755 "linux-${TARGETARCH}/helm" /usr/local/bin/helm
 	;;
 claude)
 	# The native Claude Code binary from Anthropic's release host, the file the native

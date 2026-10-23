@@ -34,7 +34,7 @@ assert_absent "removed server is gone from every agent" "$out" LISTED everything
 # The unit tests again, on the image's Python, where the real TOML parser checks Codex output.
 repo=$(cd "$(dirname "$0")/.." && pwd)
 assert_contains "MCP unit tests pass on the image's Python (tomllib)" "OK" \
-	"$("$RUNTIME" run --rm --network none -v "$repo:/src:ro" -w /src --entrypoint python3 "$IMAGE" -m unittest tests.unit.test_mcp_sync 2>&1 | grep -E '^(OK|FAILED)')"
+	"$("$RUNTIME" run --rm --pull=never --network none -v "$repo:/src:ro" -w /src --entrypoint python3 "$IMAGE" -m unittest tests.unit.test_mcp_sync 2>&1 | grep -E '^(OK|FAILED)')"
 
 # A user's own Codex settings after agentainer's block survive a re-sync, and Codex still loads the file.
 run_in $H --entrypoint sh -- -c 'printf "\n[profiles.mine] # mine\nmodel = \"keepme\"\n" >> ~/.codex/config.toml' >/dev/null
@@ -83,10 +83,10 @@ held() { "$RUNTIME" exec "$lockname" test -e /home/agent/.agentainer/held; }
 sync_blocked() {
 	"$RUNTIME" exec "$syncname" sh -c 'for p in $(pgrep -f "[a]gentainer-mcp sync --if-changed"); do readlink /proc/$p/fd/* 2>/dev/null; done' | grep -q '/\.mcp-sync\.lock$'
 }
-"$RUNTIME" run -d ${PLATFORM:+--platform "$PLATFORM"} --name "$lockname" $H --entrypoint sh "$IMAGE" -c \
+"$RUNTIME" run -d --pull=never ${PLATFORM:+--platform "$PLATFORM"} --name "$lockname" $H --entrypoint sh "$IMAGE" -c \
 	'cd ~/.agentainer && flock .mcp-sync.lock sh -c "touch held; until [ -e release ]; do sleep 0.2; done"' >/dev/null
 wait_for 30 held || fail "the test holds the sync lock" "no held file"
-"$RUNTIME" run -d ${PLATFORM:+--platform "$PLATFORM"} --name "$syncname" $H --network none "$IMAGE" true >/dev/null
+"$RUNTIME" run -d --pull=never ${PLATFORM:+--platform "$PLATFORM"} --name "$syncname" $H --network none "$IMAGE" true >/dev/null
 if wait_for 60 sync_blocked; then pass "sync waits for another container's sync"; else fail "sync waits for another container's sync" "no sync process waiting on .mcp-sync.lock"; fi
 assert_eq "the waiting sync wrote nothing while the lock was held" "absent" \
 	"$("$RUNTIME" exec "$lockname" sh -c 'test -e ~/.agentainer/mcp-managed.json && echo present || echo absent' 2>&1)"

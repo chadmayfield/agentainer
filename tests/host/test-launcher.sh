@@ -6,7 +6,10 @@
 L="$(cd "$(dirname "$0")/../.." && pwd)/bin/agentainer"
 T=$(cd "$(mktemp -d)" && pwd -P) # resolved, as the launcher resolves paths
 trap 'rm -rf "$T"' EXIT INT TERM
-printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' >"$T/podman"
+cat >"$T/podman" <<'EOF'
+#!/bin/sh
+if [ "$1" = inspect ]; then echo 1; else printf '%s\n' "$@"; fi
+EOF
 cp "$T/podman" "$T/docker"
 chmod +x "$T/podman" "$T/docker"
 export AGENTAINER_ENV_FILE=/nonexistent
@@ -104,6 +107,10 @@ mkdir -p "$T/labels"
 cat >"$T/insp" <<'EOF'
 #!/bin/sh
 if [ "$1" = inspect ]; then
+	case "$*" in
+	*'.State.Running'*) echo true; exit 0 ;;
+	*'.Id'*) echo cx-previous-container; exit 0 ;;
+	esac
 	printf '%s\n' "$*" >>"$LABELS.calls"
 	shift
 	fmt="" obj=""
@@ -128,10 +135,10 @@ ins() { LABELS="$T/labels" AGENTAINER_RUNTIME="$T/insp" sh "$L" "$@"; }
 p=io.github.chadmayfield.agentainer
 printf '%s\n' "$p.dir=$T/my code" "$p.image=example.com/i:2" "$p.sudo=1" "$p.home=h2" "$p.env-file=$envf" >"$T/labels/proj"
 out=$(AGENTAINER_HOME_VOLUME=other AGENTAINER_ENV_FILE=/nonexistent ins update proj 2>/dev/null)
-assert_eq "update pulls, removes, then recreates" "pull|rm|run" \
+assert_eq "update retains a backup until replacement startup" "pull|rename|stop|run|exec|rm" \
 	"$(printf '%s\n' "$out" | awk 'NR==1 || prev=="---" {print} {prev=$0}' | paste -sd '|' -)"
 has_line "update pulls the recorded image" "example.com/i:2" "$(printf '%s\n' "$out" | sed -n '1,/^---$/p')"
-run_part=$(printf '%s\n' "$out" | sed -n '/^run$/,$p')
+run_part=$(printf '%s\n' "$out" | sed -n '/^run$/,/^---$/p')
 has_line "update keeps the name" "proj" "$run_part"
 has_line "update keeps DIR" "$(cd "$T/my code" && pwd -P):/workspace" "$run_part"
 has_line "update keeps the home volume" "h2:/home/agent" "$run_part"
@@ -146,7 +153,7 @@ run_part=$(ins update 2>/dev/null | sed -n '/^run$/,$p')
 has_line "update without --sudo keeps no-new-privileges" "no-new-privileges=true" "$run_part"
 has_line "update defaults to the agentainer container" "agentainer" "$run_part"
 : >"$T/labels/old"
-assert_contains "update refuses a container without labels" "agentainer down old" "$(ins update old 2>&1 || true)"
+assert_contains "update refuses a container without labels" "inspect it before recreating it" "$(ins update old 2>&1 || true)"
 assert_eq "update without labels changes nothing" "" "$(ins update old 2>/dev/null || true)"
 printf '%s\n' "$p.dir=$T/gone" "$p.image=example.com/i:2" "$p.sudo=0" "$p.home=h" "$p.env-file=" >"$T/labels/gone"
 assert_contains "update with a missing DIR fails" "no longer exists" "$(ins update gone 2>&1 || true)"
@@ -170,6 +177,12 @@ assert_eq "update with a missing env file changes nothing" "" "$(ins update noen
 has_line "up records a relative env file as an absolute path" "io.github.chadmayfield.agentainer.env-file=$(cd "$T" && pwd -P)/env" \
 	"$(cd "$T" && AGENTAINER_ENV_FILE="env" pod up "$T/my code" 2>/dev/null)"
 assert_contains "usage lists start and update" "start [N] | update [N]" "$(sh "$L" 2>&1 || true)"
+assert_eq "doctor runs diagnostics in the default container" "exec|agentainer|agentainer-doctor" "$(pod doctor | paste -sd '|' -)"
+assert_eq "doctor forwards JSON mode without a TTY" "exec|agentainer|agentainer-doctor|--json" "$(pod doctor --json | paste -sd '|' -)"
+assert_eq "doctor selects a named container" "exec|cx-project|agentainer-doctor|--json" "$(pod doctor cx-project --json | paste -sd '|' -)"
+rc=0
+out=$(pod doctor cx-project --json extra 2>&1) || rc=$?
+assert_eq "doctor rejects extra arguments" 2 "$rc"
 
 assert_contains "unknown command fails" "usage" "$(sh "$L" bogus 2>&1 || true)"
 assert_contains "no runtime found is an error" "neither podman nor docker" "$(AGENTAINER_RUNTIME='' PATH=/nonexistent /bin/sh "$L" status 2>&1 || true)"

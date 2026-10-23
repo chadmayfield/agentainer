@@ -7,13 +7,17 @@ HOME_VOLUME=${AGENTAINER_HOME_VOLUME:-agentainer-home}
 LABEL=io.github.chadmayfield.agentainer=1
 # up stores its options in labels with this prefix, so update can recreate the container.
 OPT=io.github.chadmayfield.agentainer
+update_token=""
+ports=""
 
 usage() {
 	cat >&2 <<'EOF'
-usage: agentainer up [--name N] [--sudo] [--image I] [--] [DIR]
+usage: agentainer up [--name N] [--sudo] [--image I] [--publish MAPPING ...] [--] [DIR]
        agentainer attach [N] | shell [N] | start [N] | update [N] | down [N] | status
-If a container already exists, use "agentainer down N" first (your home volume is kept).
+       agentainer doctor [N] [--json]
+If an agentainer container already exists, use "agentainer down N" first (your home volume is kept).
 update pulls the image and recreates N with the options and DIR of its "up".
+--publish (-p): [IPv4:]HOST_PORT:CONTAINER_PORT[/tcp|udp]; defaults to 127.0.0.1 and tcp.
 EOF
 	exit 2
 }
@@ -32,18 +36,82 @@ runtime() {
 run() {
 	{
 		printf '+'
-		for a; do printf " '%s'" "$a"; done
+		for a; do
+			printf " '"
+			printf '%s' "$a" | sed "s/'/'\\\\''/g"
+			printf "'"
+		done
 		printf '\n'
 	} >&2
 	[ "${AGENTAINER_DRY_RUN:-0}" = 1 ] || "$@"
 }
 
+# Canonical single-port mappings keep labels unambiguous and never become shell code.
+# Runtime syntax: https://docs.docker.com/engine/network/port-publishing/
+normalize_publish() {
+	printf '%s\n' "$1" | LC_ALL=C awk '
+NR == 1 { value = $0 }
+END {
+  if (NR != 1) exit 1
+  count = split(value, protocol, "/")
+  if (count > 2) exit 1
+  transport = count == 1 ? "tcp" : protocol[2]
+  if (transport != "tcp" && transport != "udp") exit 1
+  count = split(protocol[1], fields, ":")
+  if (count == 2) {
+    address = "127.0.0.1"; host = fields[1]; container = fields[2]
+  } else if (count == 3) {
+    address = fields[1]; host = fields[2]; container = fields[3]
+  } else exit 1
+  if (split(address, octets, ".") != 4) exit 1
+  address = ""
+  for (i = 1; i <= 4; i++) {
+    if (octets[i] !~ /^[0-9]+$/ || length(octets[i]) > 3 || octets[i] + 0 > 255) exit 1
+    address = address (i == 1 ? "" : ".") (octets[i] + 0)
+  }
+  if (host !~ /^[0-9]+$/ || container !~ /^[0-9]+$/) exit 1
+  if (length(host) > 5 || length(container) > 5) exit 1
+  if (host + 0 < 1 || host + 0 > 65535 || container + 0 < 1 || container + 0 > 65535) exit 1
+  printf "%s:%d:%d/%s", address, host, container, transport
+}'
+}
+
+add_publish() {
+	mapping=$(normalize_publish "$1") || {
+		echo "agentainer: invalid port mapping; use [IPv4:]HOST_PORT:CONTAINER_PORT[/tcp|udp] with ports 1-65535" >&2
+		exit 2
+	}
+	ports="${ports:+$ports,}$mapping"
+}
+
+# Read the comma-separated label without word splitting or evaluating its contents.
+normalize_port_list() (
+	case "$1" in
+	'' | '<no value>') return 0 ;;
+	,* | *, | *,,*) return 1 ;;
+	esac
+	rest=$1
+	separator=""
+	while [ -n "$rest" ]; do
+		mapping=$(normalize_publish "${rest%%,*}") || return 1
+		printf '%s%s' "$separator" "$mapping"
+		separator=,
+		case "$rest" in *,*) rest=${rest#*,} ;; *) rest="" ;; esac
+	done
+)
+
 cmd=${1:-}
 [ -n "$cmd" ] || usage
 shift
 case "$cmd" in
-up | attach | shell | start | update | down | status) ;;
+up | attach | shell | start | update | down | status | doctor) ;;
 *) usage ;;
+esac
+case "$cmd" in
+start | attach | shell | down | update)
+	[ "$#" -le 1 ] || usage
+	case "${1:-agentainer}" in -*) usage ;; esac
+	;;
 esac
 R=$(runtime)
 if [ -z "$R" ]; then
@@ -55,12 +123,26 @@ fi
 create() {
 	name=$1
 	sudo=$2
+	case "$name" in
+	'' | [!a-zA-Z0-9]* | *[!a-zA-Z0-9_.-]*)
+		echo "agentainer: name must start with a letter or digit and contain only letters, digits, '.', '_' or '-'" >&2
+		exit 2
+		;;
+	esac
+	if [ "${#name}" -gt 64 ]; then
+		echo "agentainer: name must be at most 64 bytes because it is also the hostname" >&2
+		exit 2
+	fi
 	# An absolute path, so the runtime bind-mounts it instead of creating a named volume.
 	# CDPATH is cleared so "code" means ./code, and cd prints nothing.
-	dir=$(CDPATH='' cd -- "$3" 2>/dev/null && pwd -P) || {
+	dir=$(CDPATH='' cd -- "$3" >/dev/null 2>&1 && pwd -P) || {
 		echo "agentainer: no such directory: $3" >&2
 		exit 1
 	}
+	case "$HOME/" in
+	"$dir/"*) echo "agentainer: warning: workspace exposes the host home directory" >&2 ;;
+	esac
+	if [ "$dir" = / ]; then echo "agentainer: warning: workspace exposes the host root directory" >&2; fi
 	# -v splits its value at ':' (SRC:DEST[:OPTIONS]), so such a path cannot be mounted.
 	case "$dir" in
 	*:*)
@@ -70,6 +152,9 @@ create() {
 	esac
 	# The env file is recorded as an absolute path, so update finds it from any directory.
 	envf=""
+	if [ "${AGENTAINER_ENV_FILE+x}" = x ] && [ -n "$ENV_FILE" ] && [ ! -f "$ENV_FILE" ]; then
+		echo "agentainer: warning: env file does not exist or is not a regular file: $ENV_FILE" >&2
+	fi
 	if [ -f "$ENV_FILE" ]; then
 		envf=$(CDPATH='' cd -- "$(dirname -- "$ENV_FILE")" && pwd -P)/$(basename -- "$ENV_FILE")
 	fi
@@ -77,7 +162,7 @@ create() {
 	# absolute path too, so update mounts the same directory from any working directory.
 	home=$HOME_VOLUME
 	case "$home" in
-	*/*)
+	*/* | . | ..)
 		home=$(CDPATH='' cd -- "$HOME_VOLUME" 2>/dev/null && pwd -P) || {
 			echo "agentainer: no such directory: $HOME_VOLUME (AGENTAINER_HOME_VOLUME)" >&2
 			exit 1
@@ -90,12 +175,13 @@ create() {
 		esac
 		;;
 	esac
+	if [ "$home" = "$HOME" ]; then echo "agentainer: warning: container home exposes the host home directory" >&2; fi
 	# ping uses unprivileged ICMP sockets (the image removes its NET_RAW file capability).
 	# The range names the agent group only: with keep-id the GID map is not contiguous,
 	# and a wider range no longer contains the agent group after translation.
 	set -- "$R" run -d --name "$name" --hostname "$name" --label "$LABEL" \
 		--label "$OPT.dir=$dir" --label "$OPT.image=$IMAGE" --label "$OPT.sudo=$sudo" \
-		--label "$OPT.home=$home" --label "$OPT.env-file=$envf" \
+		--label "$OPT.home=$home" --label "$OPT.env-file=$envf" --label "$OPT.ports=$ports" \
 		-v "$home:/home/agent" -v "$dir:/workspace" -w /workspace \
 		--sysctl "net.ipv4.ping_group_range=1000 1000"
 	if [ "$sudo" != 1 ]; then set -- "$@" --security-opt no-new-privileges=true; fi
@@ -104,17 +190,64 @@ create() {
 	esac
 	if [ -n "$envf" ]; then
 		# Following symlinks, any group or other permission bit is too open.
-		if [ -n "$(find -L "$envf" -prune -perm -g+r 2>/dev/null)$(find -L "$envf" -prune -perm -o+r 2>/dev/null)" ]; then
-			echo "agentainer: warning: $envf should not be readable by others (chmod 600 it)" >&2
+		if [ -n "$(find -L "$envf" -prune \( -perm -g+r -o -perm -o+r -o -perm -g+w -o -perm -o+w \) -print 2>/dev/null)" ]; then
+			echo "agentainer: warning: $envf should not be readable by others or writable by others (chmod 600 it)" >&2
 		fi
 		set -- "$@" --env-file "$envf"
 	fi
+	if [ -n "$update_token" ]; then set -- "$@" --label "$OPT.update=$update_token"; fi
+	rest=$ports
+	while [ -n "$rest" ]; do
+		set -- "$@" --publish "${rest%%,*}"
+		case "$rest" in *,*) rest=${rest#*,} ;; *) rest="" ;; esac
+	done
 	run "$@" "$IMAGE"
 }
 
 # label NAME KEY: print the value of label $OPT.KEY on container NAME.
 label() {
 	"$R" inspect --type container --format "{{index .Config.Labels \"$OPT.$2\"}}" -- "$1"
+}
+
+# Wait for startup to finish before discarding the previous container. Older images
+# have no completion marker, so their tools link supplies the legacy readiness check.
+wait_ready() {
+	[ "${AGENTAINER_DRY_RUN:-0}" != 1 ] || return 0
+	left=180
+	while [ "$left" -gt 0 ]; do
+		running=$("$R" inspect --type container --format '{{.State.Running}}' -- "$name") || return 1
+		[ "$running" = true ] || return 1
+		if "$R" exec "$name" sh -ec '
+if test -f /usr/local/share/agentainer/startup-readiness-v1; then
+  test -f /var/lib/agentainer/ready
+else
+  test -L /var/lib/agentainer/active
+fi' 2>/dev/null; then return 0; fi
+		left=$((left - 1))
+		sleep 1
+	done
+	return 1
+}
+
+rollback_update() {
+	rc=$?
+	trap - EXIT HUP INT TERM
+	if [ "$update_pending" = 1 ]; then
+		if [ "$create_attempted" = 1 ] &&
+			[ "$(label "$name" update 2>/dev/null || true)" = "$update_token" ]; then
+			run "$R" rm -f "$name" || true
+		fi
+		if run "$R" rename "$backup" "$name"; then
+			if [ "$was_running" = true ] && ! run "$R" start "$name"; then
+				echo "agentainer: update failed; restored $name but could not restart it; inspect its logs" >&2
+			else
+				echo "agentainer: update failed; restored the previous container $name" >&2
+			fi
+		else
+			echo "agentainer: update failed; previous container remains as $backup; restore it manually" >&2
+		fi
+	fi
+	exit "$rc"
 }
 
 case "$cmd" in
@@ -130,6 +263,15 @@ up)
 			;;
 		--sudo)
 			sudo=1
+			shift
+			;;
+		--publish | -p)
+			[ "$#" -ge 2 ] || usage
+			add_publish "$2"
+			shift 2
+			;;
+		--publish=* | -p?*)
+			case "$1" in --publish=*) add_publish "${1#*=}" ;; *) add_publish "${1#-p}" ;; esac
 			shift
 			;;
 		--)
@@ -149,11 +291,16 @@ update)
 	# Read every option first, so a failure leaves the old container in place.
 	img=$(label "$name" image) || exit 1
 	if [ -z "$img" ]; then
-		echo "agentainer: $name has no option labels, so it was not created by agentainer up; run 'agentainer down $name' and 'agentainer up' again" >&2
+		echo "agentainer: $name has no option labels, so it was not created by this agentainer up; inspect it before recreating it" >&2
 		exit 1
 	fi
 	dir=$(label "$name" dir) && sudo=$(label "$name" sudo) &&
 		HOME_VOLUME=$(label "$name" home) && ENV_FILE=$(label "$name" env-file) || exit 1
+	ports=$(label "$name" ports) || exit 1
+	ports=$(normalize_port_list "$ports") || {
+		echo "agentainer: invalid recorded port mapping; nothing changed" >&2
+		exit 1
+	}
 	IMAGE=$img
 	[ -d "$dir" ] || {
 		echo "agentainer: $name was created for $dir, which no longer exists; nothing changed" >&2
@@ -173,12 +320,65 @@ update)
 		exit 1
 	fi
 	run "$R" pull "$IMAGE"
-	run "$R" rm -f "$name"
-	create "$name" "$sudo" "$dir"
+	backup="cx-agentainer-backup-$name"
+	if "$R" inspect --type container "$backup" >/dev/null 2>&1; then
+		echo "agentainer: $backup already exists; inspect the previous update before retrying" >&2
+		exit 1
+	fi
+	was_running=$("$R" inspect --type container --format '{{.State.Running}}' -- "$name")
+	case "$was_running" in true | false) ;; *)
+		echo "agentainer: cannot read $name running state" >&2
+		exit 1
+		;;
+	esac
+	update_token=$("$R" inspect --type container --format '{{.Id}}' -- "$name")
+	[ -n "$update_token" ] || {
+		echo "agentainer: cannot read $name container ID" >&2
+		exit 1
+	}
+	update_pending=0
+	create_attempted=0
+	trap rollback_update EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' HUP TERM
+	run "$R" rename "$name" "$backup"
+	update_pending=1
+	if [ "$was_running" = true ]; then run "$R" stop "$backup"; fi
+	create_attempted=1
+	if (create "$name" "$sudo" "$dir"); then :; else exit "$?"; fi
+	if ! wait_ready; then
+		echo "agentainer: replacement did not finish startup; restoring the previous container" >&2
+		exit 1
+	fi
+	update_pending=0
+	trap - EXIT HUP INT TERM
+	run "$R" rm "$backup"
 	;;
 start) run "$R" start "${1:-agentainer}" ;;
+doctor)
+	name=agentainer
+	case "${1:-}" in
+	'' | --json) ;;
+	-*) usage ;;
+	*)
+		name=$1
+		shift
+		;;
+	esac
+	[ "$#" -le 1 ] || usage
+	if [ "$#" = 1 ] && [ "$1" != --json ]; then usage; fi
+	run "$R" exec "$name" agentainer-doctor "$@"
+	;;
 attach) run "$R" exec -it "${1:-agentainer}" tmux new-session -A -s main ;;
 shell) run "$R" exec -it "${1:-agentainer}" bash -l ;;
-down) run "$R" rm -f "${1:-agentainer}" ;;
+down)
+	name=${1:-agentainer}
+	managed=$("$R" inspect --type container --format "{{index .Config.Labels \"${LABEL%=*}\"}}" -- "$name") || exit 1
+	if [ "$managed" != 1 ]; then
+		echo "agentainer: refusing to remove $name because it has no agentainer label" >&2
+		exit 1
+	fi
+	run "$R" rm -f "$name"
+	;;
 status) run "$R" ps -a --filter "label=$LABEL" ;;
 esac

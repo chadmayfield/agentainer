@@ -1,0 +1,5 @@
+# Generic sample configuration.
+application:
+  name: example
+  enabled: true
+  retries: 3

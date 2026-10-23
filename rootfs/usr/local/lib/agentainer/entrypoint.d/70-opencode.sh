@@ -11,7 +11,7 @@ if ! flock -w 60 9; then
 	return 1
 fi
 [ -f "$marker" ] && return 0
-if [ ! -e "$HOME/.config/opencode/service.json" ]; then
+if [ ! -e "$HOME/.config/opencode/service.json" ] && [ ! -L "$HOME/.config/opencode/service.json" ]; then
 	opencode service set disabled true >/dev/null 9>&-
 fi
 touch "$marker"

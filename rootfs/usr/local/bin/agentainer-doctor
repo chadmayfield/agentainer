@@ -1,0 +1,220 @@
+#!/usr/bin/python3 -I
+"""Read-only offline checks. Never print config values or child-process output."""
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+
+try:
+    import tomllib
+except ImportError:
+    tomllib = None
+
+# These version commands are exercised in tests/20-tools-apt.sh,
+# tests/25-build-tools.sh, tests/30-tools-upstream.sh and tests/40-agents.sh.
+PROBES = (
+    ("claude", ["--version"]), ("codex", ["--version"]),
+    ("agy", ["--version"]), ("opencode", ["--version"]),
+    ("git", ["--version"]), ("gh", ["--version"]),
+    ("python3", ["--version"]), ("node", ["--version"]),
+    ("npm", ["--version"]), ("uv", ["--version"]),
+    ("go", ["version"]), ("rustc", ["--version"]), ("cargo", ["--version"]),
+    ("cmake", ["--version"]), ("ninja", ["--version"]),
+    ("pkg-config", ["--version"]), ("psql", ["--version"]),
+    ("kubectl", ["version", "--client=true", "--output=json"]), ("helm", ["version", "--short"]),
+)
+AGENTS = ("claude", "codex", "agy", "opencode")
+
+
+def result(name, status, message):
+    return {"name": name, "status": status, "message": message}
+
+
+def probe_tool(name, arguments, env, cwd, timeout=5):
+    executable = shutil.which(name, path=env.get("PATH", ""))
+    if executable is None:
+        return "fail", "executable not found on PATH"
+    try:
+        process = subprocess.Popen([executable, *arguments], cwd=cwd, env=env,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        return "fail", "could not execute version probe"
+    try:
+        if process.wait(timeout=timeout) != 0:
+            return "fail", "version probe failed; tool output suppressed"
+        return "ok", "version probe passed"
+    except subprocess.TimeoutExpired:
+        return "fail", "version probe timed out"
+    finally:
+        # A faulty version command must not leave descendants behind.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
+def config_check(name, path, kind):
+    try:
+        if not path.exists() and not path.is_symlink():
+            return result(name, "warn", "settings file is missing; compare the image defaults")
+        text = path.read_text(encoding="utf-8")
+        if kind == "toml":
+            if tomllib is None:
+                return result(name, "fail", "TOML checks require Python 3.11 or newer")
+            data = tomllib.loads(text)
+        else:
+            data = json.loads(text)
+        if not isinstance(data, dict):
+            return result(name, "fail", "settings must contain an object")
+    except (OSError, ValueError, UnicodeError, RuntimeError):
+        return result(name, "fail", "settings are unreadable or have invalid syntax; values suppressed")
+    return result(name, "ok", "settings syntax parsed; agent-specific validation not performed")
+
+
+def mcp_snapshot(box, locked):
+    try:
+        for agent in AGENTS:
+            path = box / ("mcp-pending-" + agent + ".json")
+            if path.exists() or path.is_symlink():
+                return result("mcp", "warn", "interrupted sync metadata exists; inspect before running agentainer-mcp sync")
+        source = box / "mcp.json"
+        manifest = box / "mcp-managed.json"
+        stamp = box / ".mcp-synced.sha256"
+        ownership = json.loads(manifest.read_text()) if manifest.exists() else {}
+        if not isinstance(ownership, dict) or not all(
+                agent in AGENTS and isinstance(names, list) and all(isinstance(n, str) for n in names)
+                for agent, names in ownership.items()):
+            return result("mcp", "fail", "sync ownership metadata is invalid; values suppressed")
+        if not source.exists() and not source.is_symlink():
+            if any(ownership.values()) or stamp.exists():
+                return result("mcp", "warn", "shared input was removed; run agentainer-mcp sync to apply removals")
+            return result("mcp", "ok", "no shared MCP input; connectivity not checked")
+        # Reuse the sync command's input validation without invoking its main or writers.
+        validator = runpy.run_path(str(Path(__file__).with_name("agentainer-mcp")),
+                                   run_name="agentainer_mcp_validation")
+        warnings = []
+        validator["load_desired"](str(source), lambda _: warnings.append(True))
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        previous = stamp.read_text().strip() if stamp.exists() else None
+        if not locked or previous != digest or not manifest.is_file():
+            return result("mcp", "warn", "shared input has no matching successful sync record; run agentainer-mcp sync")
+        if warnings:
+            return result("mcp", "warn", "shared input contains unsupported fields; review the MCP configuration documentation")
+        return result("mcp", "ok", "input matches the last successful sync record; connectivity not checked")
+    except Exception:
+        # Validation and filesystem exceptions can contain credentials and private URLs.
+        return result("mcp", "fail", "shared input or sync metadata is invalid or unreadable; values suppressed")
+
+
+def mcp_check(home):
+    box = home / ".agentainer"
+    try:
+        lock = (box / ".mcp-sync.lock").open("rb")
+    except FileNotFoundError:
+        return mcp_snapshot(box, locked=False)
+    except OSError:
+        return result("mcp", "fail", "sync lock is unreadable")
+    with lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return result("mcp", "warn", "another MCP sync is active; retry diagnostics after it finishes")
+        return mcp_snapshot(box, locked=True)
+
+
+def collect(home=None, state_root=None, manifest_path=None, env=None, probe=None):
+    env = dict(os.environ) if env is None else env
+    home = Path(env.get("HOME", str(Path.home()))) if home is None else home
+    state_root = Path("/var/lib/agentainer") if state_root is None else state_root
+    manifest_path = Path("/etc/agentainer/versions.json") if manifest_path is None else manifest_path
+    probe = probe_tool if probe is None else probe
+    checks = []
+    try:
+        manifest = json.loads(manifest_path.read_text())
+        if not isinstance(manifest, dict) or not all(isinstance(manifest.get(key), dict) for key in ("pins", "apt")):
+            raise ValueError
+        checks.append(result("image.manifest", "ok", "image version inventory parsed"))
+    except (OSError, ValueError, UnicodeError):
+        checks.append(result("image.manifest", "fail", "image version inventory is missing, invalid or unreadable"))
+    if not home.is_dir() or not os.access(home, os.R_OK | os.W_OK | os.X_OK):
+        checks.append(result("home", "fail", "home is not a readable, writable and searchable directory"))
+    elif home.stat().st_mode & 0o022:
+        checks.append(result("home", "warn", "home is writable by its group or other users; review shared credential access"))
+    else:
+        checks.append(result("home", "ok", "home permissions allow access by the current user"))
+    mode = env.get("AGENTAINER_TOOLS", "ephemeral")
+    expected = home / ".agentainer/tools" if mode == "persist" else state_root / "tools"
+    active = state_root / "active"
+    try:
+        valid = (mode in ("ephemeral", "persist") and active.is_symlink()
+                 and active.resolve(strict=True) == expected.resolve(strict=True)
+                 and expected.is_dir() and os.access(expected, os.W_OK | os.X_OK))
+    except (OSError, RuntimeError):
+        valid = False
+    checks.append(result("tools.persistence", "ok" if valid else "fail",
+                         "tools root matches the selected mode and is writable" if valid
+                         else "tools mode, active link or writable root is invalid; inspect agentainer-tools status"))
+    claude = Path(env.get("CLAUDE_CONFIG_DIR") or str(home / ".claude"))
+    codex = Path(env.get("CODEX_HOME") or str(home / ".codex"))
+    opencode = Path(env.get("XDG_CONFIG_HOME") or str(home / ".config")) / "opencode"
+    configs = (("config.claude", claude / "settings.json", "json"),
+               ("config.codex", codex / "config.toml", "toml"),
+               ("config.agy", home / ".gemini/antigravity-cli/settings.json", "json"),
+               ("config.opencode", opencode / "opencode.json", "json"),
+               ("config.opencode.cli", opencode / "cli.json", "json"))
+    for name, path, kind in configs:
+        if name == "config.opencode" and (opencode / "opencode.jsonc").exists():
+            checks.append(result(name, "warn", "opencode.jsonc exists; this diagnostic checks seeded JSON files, not JSONC"))
+        else:
+            checks.append(config_check(name, path, kind))
+    checks.append(mcp_check(home))
+    with tempfile.TemporaryDirectory(prefix="cx-agentainer-doctor-") as temporary:
+        cwd = Path(temporary)
+        # Do not pass credentials, user configuration overrides or repository hooks.
+        child_env = {"PATH": env.get("PATH", ""), "HOME": temporary,
+                     "XDG_CONFIG_HOME": str(cwd / "config"), "XDG_CACHE_HOME": str(cwd / "cache"),
+                     "XDG_DATA_HOME": str(cwd / "data"), "RUSTUP_HOME": env.get("RUSTUP_HOME", "/opt/rustup"),
+                     "CARGO_HOME": str(cwd / "cargo"), "GOTOOLCHAIN": "local", "GOTELEMETRY": "off",
+                     "DISABLE_UPDATES": "1", "AGY_CLI_DISABLE_AUTO_UPDATE": "true",
+                     "OPENCODE_DISABLE_AUTOUPDATE": "1", "PYTHONDONTWRITEBYTECODE": "1", "LC_ALL": "C"}
+        for name, arguments in PROBES:
+            status, message = probe(name, arguments, child_env, cwd)
+            checks.append(result("tool." + name, status, message))
+    return checks
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    usage = "usage: agentainer-doctor [--json]"
+    if argv in (["--help"], ["-h"]):
+        print(usage + "\nOffline checks of tools, home access, settings syntax, persistence and MCP sync metadata.")
+        print("Exit 0: no failed checks, 1: failed check, 2: invalid arguments. Warnings do not fail.")
+        return 0
+    if argv not in ([], ["--json"]):
+        print(usage, file=sys.stderr)
+        return 2
+    try:
+        checks = collect()
+    except Exception:
+        checks = [result("doctor", "fail", "could not complete diagnostics; error details suppressed")]
+    status = "fail" if any(c["status"] == "fail" for c in checks) else (
+        "warn" if any(c["status"] == "warn" for c in checks) else "ok")
+    if argv == ["--json"]:
+        print(json.dumps({"status": status, "checks": checks}, sort_keys=True))
+    else:
+        for check in checks:
+            print("{status} {name}: {message}".format(**check))
+    return 1 if status == "fail" else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

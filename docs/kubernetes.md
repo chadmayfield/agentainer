@@ -8,9 +8,20 @@
 
 This example has not been deployed to a cluster yet.
 
+## Contents
+
+- [Install](#install)
+- [Logging in](#logging-in)
+- [Limits](#limits)
+- [SSH port access](#ssh-port-access)
+- [Seeding a new home](#seeding-a-new-home)
+- [Network policy](#network-policy)
+- [Upgrading and removing](#upgrading-and-removing)
+- [More than one user](#more-than-one-user)
+
 ## Install
 
-Before you apply, set `loadBalancerSourceRanges` in [`containerssh/service.yaml`](../deploy/kubernetes/containerssh/service.yaml) to your client range, block node ports with a firewall (see [SSH port access](#ssh-port-access)), and pin the image in [`agentainer/kustomization.yaml`](../deploy/kubernetes/agentainer/kustomization.yaml) (`images`, `newTag`). The example follows `latest`.
+Before you apply, set `loadBalancerSourceRanges` in [`containerssh/service.yaml`](../deploy/kubernetes/containerssh/service.yaml) to your client range, block node ports with a firewall (see [SSH port access](#ssh-port-access)), and pin the image in [`agentainer/kustomization.yaml`](../deploy/kubernetes/agentainer/kustomization.yaml) (`images`, `newTag`). The example follows `latest`, which does not exist before the first stable release. Until then, select a published prerelease such as `0.1.0-dev.20261019.1` before applying these manifests ([release policy](versions.md#releases)).
 
 ```sh
 kubectl apply -f deploy/kubernetes/agentainer/namespace.yaml \
@@ -38,12 +49,15 @@ ssh dev@<containerssh service address>
 - Each login runs tmux with `TERM=xterm-256color`. ContainerSSH does not pass the client's environment to the pod in this setup, and tmux will not start without `TERM`.
 - ContainerSSH sends an SSH keepalive every 30 seconds, so load balancer and NAT idle timers do not drop a quiet session.
 
+The agent pod has startup and readiness probes with a three-minute startup allowance. They execute the image's local health command; legacy images fall back to the active-tools link. These checks do not detect every hung agent. A liveness policy needs a separate responsiveness and recovery contract ([probe semantics](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)).
+
 ## Limits
 
+- Each webhook request has a ten-second deadline covering headers and body. The webhook runs at most 16 handler threads and one deadline timer per handler. Excess connections receive HTTP 503. To preserve that response during an in-flight upload, it drains at most 16 rejected sockets without blocking or adding threads. Each drain has an 80 KiB byte budget and a one-second deadline checked by the server's polling loop. Further excess connections close immediately ([implementation](../deploy/kubernetes/auth-webhook/webhook.py), [HTTP connection teardown](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6)).
 - A cluster has no host folder. Clone repos into `/workspace`. **Work you have not pushed exists only on the workspace volume.**
 - sftp and the default `scp` do not work: since OpenSSH 9.0, `scp` uses the SFTP protocol, and the image has no `sftp-server`. `scp -O` (the legacy protocol) and `rsync -e ssh` should work, because ContainerSSH runs those as commands; this is not verified.
 - Port forwarding (`ssh -L`, `ssh -R`), socket forwarding and X11 forwarding are off: ContainerSSH disables them by default and the example keeps that.
-- The ContainerSSH-to-webhook traffic is plain HTTP inside the cluster. ContainerSSH's webhook client accepts `cacert`, `cert` and `key` settings for TLS (`config/http.go` in ContainerSSH v0.6.0).
+- The ContainerSSH-to-webhook traffic is plain HTTP inside the cluster. The example has no server-side TLS configuration; adding it requires a server change or TLS-terminating proxy. ContainerSSH's webhook client accepts `cacert`, `cert` and `key` settings for TLS (`config/http.go` in ContainerSSH v0.6.0).
 - Resource requests and limits on all three pods are example values.
 - To turn sudo on, follow the comment in [`agentainer/statefulset.yaml`](../deploy/kubernetes/agentainer/statefulset.yaml). The capability list there is untested, and the pod then needs the Baseline profile.
 
@@ -67,11 +81,11 @@ Both keys are optional. [Configuration](configuration.md) describes both files; 
 
 ## Network policy
 
-[`agentainer/networkpolicy.yaml`](../deploy/kubernetes/agentainer/networkpolicy.yaml) allows the agent pod only DNS (port 53) and outbound TCP 443. It is off by default; add it to that folder's `kustomization.yaml` to use it, with a CNI that enforces NetworkPolicy. Without it, the agent pod can reach any address, including your cloud provider's instance metadata address (`169.254.169.254`) if the cluster allows it.
+[`agentainer/networkpolicy.yaml`](../deploy/kubernetes/agentainer/networkpolicy.yaml) allows the agent pod only DNS (port 53) and outbound TCP 443. Both UDP and TCP 53, and TCP 443, are allowed to every destination, including internal services and arbitrary DNS servers. This is a port restriction, not an internet-only allowlist. Restrict DNS selectors and pod/service/node ranges for the actual cluster before treating it as host or internal-service isolation. NetworkPolicy and address translation behavior depend on the CNI ([Kubernetes policy semantics](https://kubernetes.io/docs/concepts/services-networking/network-policies/)). It is off by default; add it to that folder's `kustomization.yaml` to use it, with a CNI that enforces NetworkPolicy. Without it, the agent pod can reach any address, including your cloud provider's instance metadata address (`169.254.169.254`) if the cluster allows it.
 
 ## Upgrading and removing
 
-To upgrade, change `newTag` in `agentainer/kustomization.yaml` and run `kubectl apply -k deploy/kubernetes`. With `newTag: latest` the manifest does not change, so restart the pod instead: `kubectl -n agentainer rollout restart statefulset agentainer`. The `home` and `workspace` volumes stay.
+To upgrade, change `newTag` in `agentainer/kustomization.yaml` and run `kubectl apply -k deploy/kubernetes`. After a stable release publishes `latest`, using `newTag: latest` means the manifest does not change, so restart the pod instead: `kubectl -n agentainer rollout restart statefulset agentainer`. The `home` and `workspace` volumes stay.
 
 The StatefulSet keeps the `home` and `workspace` PVCs when it is deleted or scaled down. **`kubectl delete -k deploy/kubernetes` also deletes the `agentainer` namespace, which deletes those PVCs and, with the usual `Delete` reclaim policy, the disks.** To keep your work, delete only the StatefulSet (`kubectl -n agentainer delete statefulset agentainer`), or set the volumes' reclaim policy to `Retain` first.
 

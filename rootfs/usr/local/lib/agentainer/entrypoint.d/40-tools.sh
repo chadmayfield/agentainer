@@ -22,18 +22,34 @@ fi
 ln -sfn "$root" "$active.new.$$"
 mv -T "$active.new.$$" "$active"
 
+write_stamp() (
+	destination=$1
+	if [ -L "$destination" ] || { [ -e "$destination" ] && [ ! -f "$destination" ]; }; then
+		warn "cannot record the version in $destination; leaving that path alone"
+		return 0
+	fi
+	temporary=$(mktemp "$destination.XXXXXX") || {
+		warn "cannot create a version stamp next to $destination"
+		return 0
+	}
+	trap 'rm -f "$temporary"' EXIT
+	trap 'exit 1' HUP INT TERM
+	if ! { printf '%s\n' "$current" >"$temporary" && mv -T "$temporary" "$destination"; }; then
+		warn "cannot record the version in $destination"
+	fi
+)
 current=$(sha256sum /usr/local/share/agentainer/versions.env | cut -d' ' -f1)
-printf '%s\n' "$current" >"$HOME/.agentainer/image-version"
+write_stamp "$HOME/.agentainer/image-version"
 if [ "$mode" = persist ]; then
 	tstamp="$HOME/.agentainer/tools-image-version"
 	persisted=""
-	for d in bin npm/bin python/bin; do
+	for d in bin npm/bin python/bin python/lib; do
 		names=$(find "$HOME/.agentainer/tools/$d" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/null | tr '\n' ' ')
 		if [ -n "$names" ]; then persisted="$persisted $names"; fi
 	done
 	if [ -z "$persisted" ]; then
 		# Nothing persisted yet: tools installed from now on belong to this image.
-		printf '%s\n' "$current" >"$tstamp"
+		write_stamp "$tstamp"
 	elif [ "$(cat "$tstamp" 2>/dev/null)" != "$current" ]; then
 		# Repeats on every start until the user runs agentainer-tools reset.
 		warn "image changed since these persisted tools were installed:$persisted"

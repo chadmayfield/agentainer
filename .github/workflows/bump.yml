@@ -15,7 +15,8 @@ jobs:
   # output-limitations).
   resolve:
     runs-on: ubuntu-26.04
-    # Runs take about 15 seconds; the resolver's HTTP requests time out after 60 seconds each.
+    # Publisher verification downloads release archives for both architectures.
+    # Each HTTP request times out after 60 seconds; each verifier has a 180-second limit.
     timeout-minutes: 15
     permissions:
       contents: read
@@ -30,6 +31,8 @@ jobs:
         with:
           ref: develop
           persist-credentials: false
+      - name: Install publisher signature verifier
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
       - name: Resolve pins
         shell: bash  # adds -o pipefail, so a failed resolver fails the job
         env:

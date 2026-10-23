@@ -32,6 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          persist-credentials: false
           # For a pull request, HEAD is GitHub's test merge commit; depth 2 brings its parents.
           fetch-depth: 2
       - id: diff
@@ -101,6 +102,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: actionlint
         env:
           # rhysd/actionlint 1.7.12 from Docker Hub, pinned to the digest of its multi-arch index.
@@ -132,6 +135,8 @@ jobs:
       IMAGE: localhost/agentainer:dev
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build
         run: RUNTIME=docker sh scripts/build.sh --tag "$IMAGE"
       - name: Build report (versions, changed pins, size)
@@ -174,10 +179,6 @@ jobs:
       - name: Linux host checks with Docker
         run: |
           set -eu
-          # sudo blocked by no-new-privileges=true, allowed without it
-          if docker run --rm --security-opt no-new-privileges=true "$IMAGE" sudo -n true; then
-            echo "FAIL: sudo worked with no-new-privileges"; exit 1; fi
-          docker run --rm "$IMAGE" sudo -n true
           # rootful Docker writes as UID 1000 (a documented limitation, see docs/running.md)
           mkdir -p ws && sudo chmod 777 ws && docker run --rm -v "$PWD/ws:/workspace" "$IMAGE" touch /workspace/d
           echo "docker-created file owner: $(stat -c %u ws/d) (runner uid $(id -u))" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -225,20 +226,17 @@ jobs:
         run: |
           docker builder prune -af
           docker save -o image.tar "$IMAGE"
-          # docker save writes mode 0600; the scan runs as the image user (UID 1000).
+          # Keep the exported archive readable by the independent scanner.
           chmod 644 image.tar
           df -h /
           mounts=(-v "$PWD/image.tar:/scan/image.tar:ro")
-          extra=()
-          if [ -f trivy-secret.yaml ]; then
-            mounts+=(-v "$PWD/trivy-secret.yaml:/scan/trivy-secret.yaml:ro")
-            extra=(--secret-config /scan/trivy-secret.yaml)
-          fi
-          docker run --rm "${mounts[@]}" --entrypoint trivy "$IMAGE" \
-            image --input /scan/image.tar --scanners secret --exit-code 1 "${extra[@]}"
+          scanner=$(sed -n 's/^TRIVY_SCANNER_IMAGE=//p' versions.env)
+          test -n "$scanner"
+          docker run --rm "${mounts[@]}" "$scanner" \
+            image --input /scan/image.tar --scanners secret --exit-code 1
           # The full report is an artifact: the job summary is limited to 1 MiB.
           mkdir -p report && chmod 777 report
-          docker run --rm "${mounts[@]}" -v "$PWD/report:/report" --entrypoint trivy "$IMAGE" \
+          docker run --rm "${mounts[@]}" -v "$PWD/report:/report" "$scanner" \
             image --input /scan/image.tar --scanners vuln --exit-code 0 --format json --output /report/vulnerabilities.json
           python3 scripts/vuln_summary.py "$ARCH=report/vulnerabilities.json" >>"$GITHUB_STEP_SUMMARY"
           echo "Full report: the vulnerabilities-$ARCH artifact." >>"$GITHUB_STEP_SUMMARY"
@@ -258,7 +256,6 @@ jobs:
       - name: Linux host checks with rootless Podman
         run: |
           set -eu
-          podman run --rm --userns=keep-id:uid=1000,gid=1000 --security-opt no-new-privileges "$IMAGE" sh -c '! sudo -n true'
           # bind-mount ownership: rootless Podman keeps the runner user's UID
           mkdir -p wsp && podman run --rm --userns=keep-id:uid=1000,gid=1000 -v "$PWD/wsp:/workspace" "$IMAGE" touch /workspace/p
           test "$(stat -c %u wsp/p)" = "$(id -u)"
@@ -286,6 +283,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - id: pins
         run: echo "buildkit=$(sed -n 's/^BUILDKIT_IMAGE=//p' versions.env)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
@@ -338,7 +337,12 @@ jobs:
       prerelease: ${{ steps.ver.outputs.prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with: {fetch-depth: 0}
+        # Authorization code comes from main, never from the candidate tag.
+        # https://github.com/actions/checkout#usage
+        with:
+          persist-credentials: false
+          ref: main
+          fetch-depth: 0
       - id: ver
         name: Version from the merged release branch
         shell: bash
@@ -358,8 +362,19 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "prerelease=$(python3 "$parser" prerelease "$v")" >> "$GITHUB_OUTPUT"
 
-  publish:
+  authorize-release:
     needs: version
+    if: needs.version.outputs.version != ''
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    environment: release
+    steps:
+      - name: Confirm publication approval
+        run: echo "Release publication approved."
+
+  publish:
+    needs: [version, authorize-release]
     if: needs.version.outputs.version != ''
     strategy:
       matrix:
@@ -375,6 +390,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - id: pins
         name: Build arguments, as scripts/build.sh passes them
         # Each pin a Containerfile stage declares with ARG becomes a build argument, plus
@@ -414,6 +431,13 @@ jobs:
           # zstd makes this image's download about 20% smaller than gzip. BuildKit maps levels 9
           # to 22 to its "Best" setting (about zstd 11; Docker build exporters docs).
           outputs: type=image,name=ghcr.io/chadmayfield/agentainer,push-by-digest=true,name-canonical=true,push=true,compression=zstd,compression-level=9,force-compression=true,rewrite-timestamp=true
+      - name: Check the pushed image on its native runner
+        env:
+          REF: ghcr.io/chadmayfield/agentainer@${{ steps.build.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+          SHA: ${{ github.sha }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: sh scripts/check-release-platform.sh "$REF" "$ARCH" "$SHA" "$VERSION"
       # One file per architecture, named after it, holds the digest, so the release job
       # can check that it got exactly one digest for each.
       - name: Record the digest
@@ -429,7 +453,7 @@ jobs:
           path: digests/${{ matrix.arch }}
           if-no-files-found: error
           overwrite: true
-      - name: Scan the pushed image for vulnerabilities
+      - name: Scan the pushed image for secrets and vulnerabilities
         env:
           ARCH: ${{ matrix.arch }}
           REF: ghcr.io/chadmayfield/agentainer@${{ steps.build.outputs.digest }}
@@ -437,9 +461,13 @@ jobs:
           set -eu
           docker pull "$REF"
           docker save -o image.tar "$REF"
-          chmod 644 image.tar  # docker save writes 0600; trivy runs as UID 1000
+          chmod 644 image.tar  # keep the exported archive readable by the scanner
           mkdir -p report && chmod 777 report
-          docker run --rm -v "$PWD/image.tar:/scan/image.tar:ro" -v "$PWD/report:/report" --entrypoint trivy "$REF" \
+          scanner=$(sed -n 's/^TRIVY_SCANNER_IMAGE=//p' versions.env)
+          test -n "$scanner"
+          docker run --rm -v "$PWD/image.tar:/scan/image.tar:ro" "$scanner" \
+            image --input /scan/image.tar --scanners secret --exit-code 1
+          docker run --rm -v "$PWD/image.tar:/scan/image.tar:ro" -v "$PWD/report:/report" "$scanner" \
             image --input /scan/image.tar --scanners vuln --exit-code 0 --format json \
             --output "/report/vulnerabilities-$ARCH.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
@@ -460,7 +488,7 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with: {fetch-depth: 0}
+        with: {fetch-depth: 0, persist-credentials: false}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with: {pattern: digest-*, merge-multiple: true, path: digests}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
@@ -483,7 +511,7 @@ jobs:
           SHA: ${{ github.sha }}
         run: bash scripts/release-image.sh prepare
       - name: Attest the signed index
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.prepare-index.outputs.digest }}

@@ -18,8 +18,9 @@ You need Podman or Docker.
 ```sh
 scripts/build.sh                            # builds localhost/agentainer:dev for your architecture
 sh tests/run.sh                             # container tests against that image
-sh tests/lint.sh                            # shellcheck and shfmt, run from the image
+sh tests/lint.sh                            # shellcheck, shfmt and Ruff, run from the image
 python3 -m unittest discover -s tests/unit  # unit tests, no container needed
+sh tests/14-unit-linux.sh                   # image Python and Linux-only unit modules
 sh tests/host/test-launcher.sh              # launcher tests, no container needed
 sh tests/host/test-build-script.sh          # scripts/build.sh tests, no container needed
 sh tests/host/test-fetch.sh                 # fetch.sh and Rust manifest check tests, no container needed
@@ -27,6 +28,11 @@ sh tests/host/test-manifests.sh             # Kubernetes manifest tests (kubectl
 sh tests/host/test-launcher-integration.sh  # real engine, existing local image
 sh tests/host/test-build-uid.sh             # slow: builds a full image with --uid 1001 --gid 20
 python3 tests/host/test-layer-repro.py      # slow: two clean tool builds, configured Buildx
+python3 tests/host/test-healthcheck.py      # also invoked by tests/58-healthcheck.sh
+python3 tests/host/test-language-tooling.py --image localhost/agentainer:dev  # slow, network
+python3 tests/host/test-playwright-setup.py --image localhost/agentainer:dev  # slow, network
+# Release verification arguments: docs/versions.md#verifying-a-release-before-use
+# Optional terminal screenshots: tests/visual/README.md
 ```
 
 With Docker, prefix the commands with `RUNTIME=docker`. `IMAGE=<name>` tests another image.
@@ -62,14 +68,14 @@ These settings stay in `.git/config`, apply to this local clone and its worktree
 3. When `ci` passes, merge with "Create a merge commit". The subject must be exactly `Merge pull request #N from <owner>/release/<version>`. A push to `main` tests the merge but does not publish.
 4. Fetch the merged commit, create a signed annotated tag `v<version>` on that exact merge commit with `git tag -s v<version> <merge-commit> -m "Release v<version>"`, verify it with `git verify-tag v<version>`, then push only that tag with `git push origin refs/tags/v<version>` ([signed tags](https://git-scm.com/docs/git-tag)). Do not tag the release branch's pre-merge tip.
 5. The tag push runs CI. After aggregate CI passes, `scripts/check_release_tag.py` requires a two-parent release merge on main's first-parent history, a matching tag version and target, and a valid GPG signature by the trusted primary key. It retrieves the owner's public key from GitHub and verifies in a temporary keyring. Set the repository Actions variable `RELEASE_SIGNING_FINGERPRINT` to that full uppercase fingerprint. The signing key must be registered on the repository owner's GitHub account, or on the account named by the optional `RELEASE_SIGNER` Actions variable for an organization-owned repository ([public GPG keys API](https://docs.github.com/en/rest/users/gpg-keys)). A missing key setting, unsigned tag or existing GitHub release stops publishing.
-6. The publish jobs build and push both architectures. The release job assembles an index with only `sha-<short>`, signs it and the platform manifests with cosign, then creates a GitHub provenance attestation for the index. The attestation is stored in GitHub and GHCR. Verification must pass before version or `latest` tags move: exact workflow identity, source commit and tag ref for GitHub provenance; expected repository and commit in each platform's BuildKit provenance; signatures, SBOM descriptors and native startup. The highest stable version alone can move `latest`. Prereleases remain explicitly excluded from latest. The GitHub release uses `--verify-tag`, preserving the maintainer-signed tag.
+6. Approve the `authorize-release` job in the `release` environment. The publish jobs then build and push both architectures. Each native runner pulls its pushed digest, checks the image architecture, source revision and release version, then starts the image and all four agent binaries before uploading its digest artifact ([platform check](scripts/check-release-platform.sh)). The release job assembles an index with only `sha-<short>`, signs it and the platform manifests with cosign, then creates a GitHub provenance attestation for the index. The attestation is stored in GitHub and GHCR. Verification must pass before version or `latest` tags move: exact workflow identity, source commit and tag ref for GitHub provenance; expected repository and commit in each platform's BuildKit provenance; signatures, SBOM descriptors and native startup. The highest stable version alone can move `latest`. Prereleases remain explicitly excluded from latest. The GitHub release uses `--verify-tag`, preserving the maintainer-signed tag.
 7. Open a pull request from `main` to `develop` to bring back fixes made on the release branch.
 
 Do not run `git flow release finish`: it merges into `main` locally. A hotfix is a new release made the same way. A `hotfix/*` merge does not authorize publication.
 
 Re-run a failed tag workflow without replacing the signed tag. A failure before verification and the retag dry run pass leaves the version and `latest` tags unchanged. A rebuilt image gets a new digest; it must be signed, attested and verified again before promotion. Once the GitHub release exists, its version cannot be republished. Use a new version for further changes.
 
-CI holds no maintainer private signing key. It uses GitHub OIDC for image signatures and attestations. Live registry verification is not verified until the first release completes ([attestation verification flags](https://cli.github.com/manual/gh_attestation_verify)).
+CI holds no maintainer private signing key. It verifies the GPG-signed release tag using the maintainer's public key, then uses GitHub OIDC for container image signatures and attestations.
 
 ## The bump GitHub App
 
@@ -87,3 +93,21 @@ Without the variable and secret, the workflow uses `GITHUB_TOKEN`. If the variab
 ## Security problems
 
 Do not open a public issue. See [SECURITY.md](SECURITY.md).
+
+The release concurrency group retains one running job and one pending job. A third queued release replaces the pending one under GitHub's default policy. Check all pushed tags and rerun any canceled release workflow. Larger queues are documented by GitHub, but compatibility with the pinned actionlint is not verified ([concurrency](https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency)).
+
+The manual [optional tooling workflow](.github/workflows/optional-tooling.yml) builds the selected source and runs networked language-server and Playwright installation checks on both architectures. It has read-only repository permission and is separate from required pull-request CI. It has not been run in GitHub Actions until the workflow is available on the default branch.
+
+### GitHub release controls
+
+The `release` environment requires the maintainer's approval and permits only `v*` tags. Self-approval is allowed so a sole maintainer can release. The `authorize-release` job waits for that approval before the publish jobs receive control. Configure this environment before merging the workflow change ([environment protection](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)).
+
+An active tag ruleset blocks updates and deletion of `v*` tags, without bypass actors. It permits new tags. Correct a released version by creating a new version, rather than replacing its tag ([ruleset rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets)). Branch administrator enforcement remains unchanged.
+
+Fork pull-request workflows require approval for all external contributors. Review their proposed changes before approving execution ([fork workflow approval](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/approve-runs-from-forks)).
+
+### Python linting
+
+`sh tests/lint.sh` runs Ruff from the built image alongside shellcheck and shfmt. CI runs the same command in each architecture's image job. Rebuild the image after changing its Ruff pin. No host Ruff installation is required.
+
+[`ruff.toml`](ruff.toml) selects only Pyflakes `F` rules. [`scripts/lint-python.py`](scripts/lint-python.py) includes `.py` files and Python shebang commands in the source directories, including `build/` and extensionless runtime commands. It excludes dependency and cache directories. Explicit file arguments prevent Ruff's default exclusion of `build/` from hiding those scripts ([Ruff file discovery](https://docs.astral.sh/ruff/configuration/#python-file-discovery), [Pyflakes rules](https://docs.astral.sh/ruff/rules/#pyflakes-f)).

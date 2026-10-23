@@ -1,5 +1,15 @@
 # Configuration
 
+[Default configuration](defaults.md) covers the seeded shell, Git, tmux, Vim, EditorConfig and agent settings. Existing user files are preserved.
+
+## Contents
+
+- [AGENTS.md](#agentsmd)
+- [MCP servers](#mcp-servers)
+- [Tools that agents install](#tools-that-agents-install)
+- [OpenRouter](#openrouter)
+- [Startup messages](#startup-messages)
+
 ## AGENTS.md
 
 You keep one instruction file, `~/.agentainer/AGENTS.md`, and every agent reads it:
@@ -21,6 +31,25 @@ The first start copies the image's default. When an image's default differs from
 
 `~/.agentainer/agents-default.sha256` lists every default the home has seen, one line per default and image version: `<sha256> <version>`. A line with only a hash comes from an image that did not record its version and counts as older than any release. So an older image never rolls the file back, and two images that share one home volume do not report each other's default more than once.
 
+### Writing rules
+
+The shared default tells agents to read `/usr/local/share/agentainer/skills/unslop/SKILL.md` before writing covered text. This is one image-owned copy of [Cursor's unslop skill](https://github.com/cursor/plugins/tree/main/pstack/skills/unslop), accompanied by the upstream [MIT license and attribution](https://github.com/cursor/plugins/blob/main/pstack/LICENSE). The build verifies both files against the commit and SHA-256 values in [`versions.env`](../versions.env). Upstream publishes no checksum files for these sources; the updater computes the recorded hashes from the same immutable commit.
+
+The shared instructions set this scope:
+
+| Content | Treatment |
+|---|---|
+| Docs, READMEs, plans, commits, PRs, issues, UI and marketing copy, user-facing errors, comments, docstrings and files written for the user | Full editing rules; short comment fragments and `TODO:` or `NOTE:` labels are allowed |
+| Instruction files, skills and memory notes | Full rules except the bold-formatting rule; required structures stay intact |
+| Logs and internal errors | Remove obvious AI tells; clipped wording is allowed |
+| Chat replies and Insight blocks | Exempt |
+| Generated output, lockfiles, generated code, config keys and values, test fixture data, quotations and code identifiers | Exempt |
+| Untouched text | Leave unchanged |
+
+Edit the writing section in `~/.agentainer/AGENTS.md` to customize or disable it. Existing edited instructions, custom agent files and local `dev` homes follow the preservation rules above. Compare the new section with `agentainer-agents diff` before adopting it in those homes.
+
+Agentainer references the skill through shared instructions rather than registering a native `/unslop` command or installing the rest of pstack. The offline tests check the installed bytes, license, ownership and the reference in Codex's assembled prompt. Import and symlink checks cover how the shared instructions reach the other agents. Actual model adherence to the writing rules remains not verified.
+
 ## MCP servers
 
 Define servers once in `~/.agentainer/mcp.json`, in the `mcpServers` format most MCP server READMEs use:
@@ -28,9 +57,11 @@ Define servers once in `~/.agentainer/mcp.json`, in the `mcpServers` format most
 ```json
 {"mcpServers": {
   "remote": {"url": "https://mcp.example.com/mcp", "headers": {"Authorization": "Bearer ${EXAMPLE_TOKEN}"}},
-  "everything": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]}
+  "everything": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything@2.0.0"]}
 }}
 ```
+
+The sample fixes the package version using [published npm metadata](https://registry.npmjs.org/@modelcontextprotocol/server-everything/2.0.0). Stdio MCP servers execute code with the filesystem access and environment their agent gives them. Review the server and its dependencies before adding it. Use explicit package versions or a locked local installation.
 
 `agentainer-mcp sync` writes them into each agent's own configuration:
 
@@ -59,7 +90,7 @@ Any other `type` stops the sync with an error and changes nothing. Other keys, s
 Limits per agent:
 
 - SSE servers reach Claude Code as SSE. Codex supports only streamable HTTP and Antigravity only `stdio` and `http`, so both leave an SSE server out with a warning. OpenCode gets it as a remote server, with a warning that this is not verified.
-- Keep secrets as `${NAME}` references to variables in your env file; no agent config receives the value. The sync writes literal values directly into agent config files and never passes server configuration to a child process. New config files have mode `0600`; existing files keep their permissions.
+- Keep secrets as `${NAME}` references to variables in your env file; no agent config receives the value. The sync writes literal values directly into agent config files and never passes server configuration to a child process. New config files have mode `0600`. Existing files keep their permissions unless a sync contains literal environment or header values; those config writes remove group and other permissions. Stop agents that write the same config files before syncing. The sync lock coordinates Agentainer syncs, not arbitrary agent writers.
 - Antigravity has no documented syntax for variable references. For `agy`, the sync leaves out `env` entries that are `${NAME}` references (the server inherits the container's environment instead) and does not write headers that contain `${NAME}`, such as `Authorization: Bearer ${TOKEN}`. It prints a warning for each; add those headers in Antigravity by hand.
 - Codex sends a `${NAME}` header variable as the whole header value. `Authorization: Bearer ${NAME}` works. For any other header written as `Bearer ${NAME}`, the sync leaves it out for Codex with a warning: store `Bearer <token>` in the variable and write the header value as `${NAME}`.
 - Codex passes a server only the variables named in its config, under their own names. An `env` entry such as `API_KEY=${OTHER}` cannot rename a variable for Codex, so the sync leaves it out with a warning; give the variable the name the server expects.
@@ -77,7 +108,7 @@ In a hand check, Codex and Antigravity listed a synced server's tools, and `clau
 | `ephemeral` (default) | `/var/lib/agentainer/tools` | No |
 | `persist` | `~/.agentainer/tools` | Yes |
 
-Image tools come first on `PATH`, so an installed tool never hides an image tool. When the image changes and persisted tools exist, the entrypoint warns; `agentainer-tools reset` moves them to a dated backup. Resets share a lock and reserve unique backup paths across containers. `agentainer-tools status` shows the mode and what is installed.
+Image tools come first on `PATH`, so an installed tool never hides an image tool. When the image changes and persisted tools exist, the entrypoint warns; `agentainer-tools reset` moves them to a dated backup. Resets share a lock and reserve unique backup paths across containers. `agentainer-tools status` shows the effective mode, selected root, and entries in `bin`, `npm/bin` and `python/bin`. It does not inventory every package or cache.
 
 Ubuntu's Python refuses `pip install` outside a virtual environment, `pip install --user` included (PEP 668), so use `uv`, `pipx` or a venv. `PYTHONUSERBASE` points into the same tools root, but plain `pip` never installs there.
 

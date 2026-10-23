@@ -5,3 +5,13 @@ tests
 deploy
 .github
 **/.DS_Store
+artifacts/visual
+
+# Runtime credentials do not belong in a build context.
+env
+host.key
+.env
+**/env
+**/host.key
+**/.env
+**/.env.*

@@ -1,0 +1,4 @@
+# bat --help and bat --list-themes document these options and the built-in ansi theme.
+--theme=ansi
+--style=numbers,changes,header
+--paging=auto
