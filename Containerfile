@@ -175,6 +175,9 @@ COPY build/apt-packages.txt build/check-apt-snapshot.py /tmp/agentainer-build/
 #   that fresh installs already get, instead of deferring phased ones
 #   (apt_preferences(5), "Phased Updates").
 # - check-apt-snapshot.py fails the build if any installed version is not in the snapshot.
+# - Failed indexes and archives get five retries. update fails if any index is
+#   unavailable, so installation cannot continue with missing package lists
+#   (apt-get(8), --error-on=any; apt.conf(5), Acquire::Retries).
 # - The apt and dpkg logs hold build times and are removed.
 ARG APT_SNAPSHOT
 # The bootstrap bundle is available only during this RUN, outside final image layers.
@@ -183,8 +186,8 @@ RUN --mount=type=bind,from=certs,source=/etc/ssl/certs/ca-certificates.crt,targe
     test -n "${APT_SNAPSHOT}" \
 	&& export DEBIAN_FRONTEND=noninteractive \
 	&& printf 'Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute resolute-updates resolute-backports\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\nSnapshot: %s\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\nSnapshot: %s\n' "${APT_SNAPSHOT}" "${APT_SNAPSHOT}" > /etc/apt/sources.list.d/ubuntu.sources \
-	&& APT="apt-get -o Acquire::https::CAInfo=/tmp/agentainer-build/ca.crt -o APT::Get::Always-Include-Phased-Updates=true" \
-	&& $APT update \
+	&& APT="apt-get -o Acquire::Retries=5 -o Acquire::https::CAInfo=/tmp/agentainer-build/ca.crt -o APT::Get::Always-Include-Phased-Updates=true" \
+	&& $APT update --error-on=any \
 	&& $APT upgrade -y \
 	&& xargs -a /tmp/agentainer-build/apt-packages.txt $APT install -y --no-install-recommends \
 	&& apt-cache policy bash > /usr/local/share/agentainer/apt-policy.txt \

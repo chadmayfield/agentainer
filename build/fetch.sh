@@ -14,7 +14,9 @@ if [ -z "$expected" ]; then
 	echo "fetch.sh: no expected checksum for $url" >&2
 	exit 1
 fi
-if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$out" "$url"; then
+# GET downloads go to a file, so curl can discard partial bytes before retrying.
+# https://curl.se/docs/manpage.html#--retry-all-errors
+if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors -o "$out" "$url"; then
 	rm -f "$out"
 	echo "fetch.sh: download failed: $url" >&2
 	exit 1
