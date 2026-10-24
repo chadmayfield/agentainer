@@ -158,11 +158,6 @@ abtop)
 	tar -xJf abtop.tar.xz "abtop-${TRIPLE}-unknown-linux-gnu/abtop"
 	install -m 0755 "abtop-${TRIPLE}-unknown-linux-gnu/abtop" /usr/local/bin/abtop
 	;;
-curlie)
-	sh $F "https://github.com/rs/curlie/releases/download/v${CURLIE_VERSION}/curlie_${CURLIE_VERSION}_linux_${TARGETARCH}.tar.gz" sha256 "$(pin CURLIE_SHA256)" curlie.tgz
-	tar -xzf curlie.tgz curlie
-	install -m 0755 curlie /usr/local/bin/curlie
-	;;
 golangci-lint)
 	G="golangci-lint-${GOLANGCI_LINT_VERSION}-linux-${TARGETARCH}"
 	sh $F "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/${G}.tar.gz" sha256 "$(pin GOLANGCI_LINT_SHA256)" golangci.tgz

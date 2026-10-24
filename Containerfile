@@ -78,13 +78,6 @@ ARG RUFF_SHA256_AMD64
 ARG RUFF_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh ruff
 
-FROM fetch AS curlie
-ARG TARGETARCH
-ARG CURLIE_VERSION
-ARG CURLIE_SHA256_AMD64
-ARG CURLIE_SHA256_ARM64
-RUN bash /usr/local/lib/agentainer-build/install-tool.sh curlie
-
 FROM fetch AS abtop
 ARG TARGETARCH
 ARG ABTOP_VERSION
@@ -238,7 +231,6 @@ COPY --from=gh /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=uv /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
 COPY --from=ruff /usr/local/bin/ruff /usr/local/bin/ruff
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
-COPY --from=curlie /usr/local/bin/curlie /usr/local/bin/curlie
 COPY --from=abtop /usr/local/bin/abtop /usr/local/bin/abtop
 COPY --from=golangci-lint /usr/local/bin/golangci-lint /usr/local/bin/golangci-lint
 COPY --from=tea /usr/local/bin/tea /usr/local/bin/tea

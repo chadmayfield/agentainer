@@ -4,8 +4,8 @@
 Usage: scripts/vuln_summary.py ARCH=REPORT.json [ARCH=REPORT.json ...]
 
 CI writes the result to the job summary (limited to 1 MiB) and to release notes,
-so it lists counts by severity and at most 50 critical findings. The full JSON
-reports are uploaded next to it.
+so it lists counts by severity, at most 50 critical findings, and fixable findings
+in upstream Go executables. The full JSON reports are uploaded next to it.
 """
 import collections
 import json
@@ -21,19 +21,28 @@ KERNEL_HEADERS = "linux-libc-dev"
 def load(path):
     with open(path) as f:
         data = json.load(f)
-    return [v for r in data.get("Results") or [] for v in r.get("Vulnerabilities") or []]
+    return data.get("Results") or []
 
 
 def summary(reports):
     arches = [a for a, _ in reports]
     counts, fixable, headers = {}, {}, {}
     critical = collections.OrderedDict()
+    upstream = {}
     for arch, path in reports:
-        everything = load(path)
+        results = load(path)
+        everything = [v for r in results for v in r.get("Vulnerabilities") or []]
         vulns = [v for v in everything if v.get("PkgName") != KERNEL_HEADERS]
         headers[arch] = len(everything) - len(vulns)
         counts[arch] = collections.Counter(v.get("Severity", "UNKNOWN") for v in vulns)
         fixable[arch] = collections.Counter(v.get("Severity", "UNKNOWN") for v in vulns if v.get("FixedVersion"))
+        for result in results:
+            if result.get("Type") != "gobinary":
+                continue
+            n = sum(bool(v.get("FixedVersion")) for v in result.get("Vulnerabilities") or [])
+            if n:
+                where = upstream.setdefault(result["Target"], {})
+                where[arch] = where.get(arch, 0) + n
         for v in vulns:
             if v.get("Severity") != "CRITICAL":
                 continue
@@ -62,6 +71,17 @@ def summary(reports):
         if len(critical) > MAX_CRITICAL:
             lines.append("")
             lines.append("%d more critical findings are in the full reports." % (len(critical) - MAX_CRITICAL))
+    if upstream:
+        lines += ["", "### Fixable findings in upstream executables", "",
+                  "These findings are in Go code embedded in the executables below. "
+                  "Fixed versions refer to Go or its dependencies and do not necessarily identify a published tool binary. "
+                  "Agentainer installs upstream release binaries rather than rebuilding bundled tools. "
+                  "Where a patched executable is not yet available, we are waiting for its upstream release.", "",
+                  "Counts include the same vulnerability reported against different executables.", "",
+                  "| Upstream executable | " + " | ".join(arches) + " |",
+                  "|---|" + "---|" * len(arches)]
+        for target, where in sorted(upstream.items()):
+            lines.append("| `%s` | %s |" % (target, " | ".join(str(where.get(a, 0)) for a in arches)))
     return "\n".join(lines) + "\n"
 
 
