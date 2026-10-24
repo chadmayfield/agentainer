@@ -68,6 +68,37 @@ class VulnSummaryTests(unittest.TestCase):
         self.assertIn("linux-libc-dev", out)
         self.assertIn("amd64 4", out)
 
+    def test_lists_fixable_upstream_executables_per_architecture(self):
+        def binaries(kubectl, yq):
+            return {"Results": [
+                {"Target": "usr/local/bin/kubectl", "Type": "gobinary",
+                 "Vulnerabilities": kubectl},
+                {"Target": "usr/local/bin/yq", "Type": "gobinary",
+                 "Vulnerabilities": yq},
+                {"Target": "img (ubuntu 26.04)", "Type": "ubuntu",
+                 "Vulnerabilities": [v("CVE-OS", "MEDIUM")]},
+            ]}
+        a = self.write(binaries([v("CVE-1", "HIGH"), v("CVE-2", "MEDIUM"),
+                                 v("CVE-3", "LOW", fixed="")], []))
+        b = self.write(binaries([v("CVE-1", "HIGH")], [v("CVE-4", "MEDIUM")]))
+        out = vs.summary([("amd64", a), ("arm64", b)])
+        self.assertIn("| Upstream executable | amd64 | arm64 |", out)
+        self.assertIn("| `usr/local/bin/kubectl` | 2 | 1 |", out)
+        self.assertIn("| `usr/local/bin/yq` | 0 | 1 |", out)
+        self.assertIn("waiting for its upstream release", out)
+        self.assertIn("do not necessarily identify a published tool binary", out)
+
+    def test_omits_upstream_note_without_fixable_go_findings(self):
+        data = {"Results": [
+            {"Target": "usr/local/bin/kubectl", "Type": "gobinary",
+             "Vulnerabilities": [v("CVE-1", "HIGH", fixed="")]},
+            {"Target": "img (ubuntu 26.04)", "Type": "ubuntu",
+             "Vulnerabilities": [v("CVE-OS", "MEDIUM")]},
+        ]}
+        out = vs.summary([("arm64", self.write(data))])
+        self.assertNotIn("| Upstream executable |", out)
+        self.assertNotIn("waiting for its upstream release", out)
+
     def test_stays_small(self):
         many = [v("CVE-%d" % i, "CRITICAL") for i in range(500)]
         out = vs.summary([("amd64", self.write(report(many)))])

@@ -139,13 +139,13 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(bv.asset_sha256(release, "yq_linux_arm64"), "2" * 64)
 
     def test_github_asset_without_digest_uses_release_checksums_file(self):
-        release = {"tag_name": "v1.8.2", "assets": [
-            {"name": "curlie_1.8.2_linux_arm64.tar.gz", "digest": None},
-            {"name": "curlie_1.8.2_checksums.txt", "digest": None,
-             "browser_download_url": "https://example.com/curlie_1.8.2_checksums.txt"}]}
+        release = {"tag_name": "v1.0.0", "assets": [
+            {"name": "tool_1.0.0_linux_arm64.tar.gz", "digest": None},
+            {"name": "tool_1.0.0_checksums.txt", "digest": None,
+             "browser_download_url": "https://example.com/tool_1.0.0_checksums.txt"}]}
         a, b = "a" * 64, "b" * 64
-        text = "%s  curlie_1.8.2_linux_amd64.tar.gz\n%s  curlie_1.8.2_linux_arm64.tar.gz\n" % (a, b)
-        got = bv.asset_sha256(release, "curlie_1.8.2_linux_arm64.tar.gz", fetch_text=lambda url: text)
+        text = "%s  tool_1.0.0_linux_amd64.tar.gz\n%s  tool_1.0.0_linux_arm64.tar.gz\n" % (a, b)
+        got = bv.asset_sha256(release, "tool_1.0.0_linux_arm64.tar.gz", fetch_text=lambda url: text)
         self.assertEqual(got, b)
 
     def test_github_asset_without_any_checksum_raises(self):
@@ -373,7 +373,7 @@ class WriteTests(unittest.TestCase):
         bad = [
             {"AGY_URL_AMD64": "https://storage.googleapis.com/antigravity-public/$(touch /tmp/x)/a.tgz"},
             {"GO_VERSION": "1.27.3;id"},
-            {"CURLIE_VERSION": "1.8.3`id`"},
+            {"GH_VERSION": "2.103.1`id`"},
             {"BASE_IMAGE": "docker.io/library/ubuntu:26.04@sha256:" + "a" * 63},
             {"APT_SNAPSHOT": "20261008"},
             {"GO_SHA256_AMD64": "A" * 64},

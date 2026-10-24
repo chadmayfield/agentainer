@@ -17,7 +17,7 @@ assert_contains "uv version" "uv $UV_VERSION" "$(run_in -- uv --version)"
 assert_contains "uvx version" "uvx $UV_VERSION" "$(run_in -- uvx --version)"
 assert_eq "ruff version" "ruff $RUFF_VERSION" "$(run_in -- ruff --version)"
 assert_contains "trivy version" "Version: $TRIVY_VERSION" "$(run_in -- trivy --version)"
-assert_contains "curlie version" "curlie $CURLIE_VERSION" "$(run_in -- curlie version 2>&1)"
+assert_absent "curlie is not bundled" "$(run_in -- sh -c 'command -v curlie; echo CURLIE_CHECK_RAN')" "CURLIE_CHECK_RAN" "curlie"
 assert_contains "golangci-lint version" "version $GOLANGCI_LINT_VERSION " "$(run_in -- golangci-lint --version)"
 assert_contains "tea version" "$TEA_VERSION" "$(run_in -- tea --version)"
 # find prints END only when it exits 0, so a missing or unreadable path fails these checks
