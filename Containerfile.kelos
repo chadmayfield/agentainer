@@ -45,6 +45,10 @@ COPY --chmod=0755 rootfs-kelos/kelos_entrypoint.sh \
 	rootfs-kelos/kelos_entrypoint_claude.sh \
 	rootfs-kelos/kelos_entrypoint_codex.sh /
 COPY --chmod=0755 rootfs-kelos/agent-gh-wrapper.sh /usr/local/bin/gh
+# The push sidecar runs in its own container of the Task pod (an init container with
+# restartPolicy: Always) and pushes the agent's work to a branch.
+COPY --chmod=0755 rootfs-kelos/usr/local/bin/push-sidecar /usr/local/bin/push-sidecar
+COPY --chmod=0644 rootfs-kelos/usr/local/share/push-sidecar/excludes /usr/local/share/push-sidecar/excludes
 # The guard is sourced by the dispatcher and by the claude wrapper. The wrapper sits
 # first on PATH while the dispatcher runs the Kelos entrypoint, so the guard runs
 # once more right before the real claude starts.

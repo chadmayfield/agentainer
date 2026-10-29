@@ -12,6 +12,7 @@ claude_env_allowlist=(
   LANG LC_ALL LC_CTYPE TZ TERM   # locale, time zone and terminal type
   CLAUDE_CODE_OAUTH_TOKEN        # the only credential a Claude pod gets
   DISABLE_UPDATES CLAUDE_CODE_NONBLOCKING_STDOUT CLAUDE_CODE_TMUX_TRUECOLOR # image ENV: update lock and output behavior
+  DISABLE_TELEMETRY              # any non-empty value opts out of telemetry, so claude does not call the telemetry host (env-vars)
   HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy # egress proxy; claude reads both spellings (network-config)
   GIT_SSL_CAINFO SSL_CERT_FILE NODE_EXTRA_CA_CERTS # CA bundle for git, gh and claude, set by the dispatcher
   GITHUB_TOKEN GH_TOKEN GH_ENTERPRISE_TOKEN GH_HOST GH_CONFIG_DIR # set by Kelos when the Workspace has a secretRef (job_builder.go)
