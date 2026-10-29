@@ -1,0 +1,82 @@
+# Kelos variant of the Agentainer image. Build with scripts/build.sh --variant kelos.
+# Kelos runs its agent containers as UID 61100 and starts them with
+# /kelos_entrypoint.sh. This image adds the Kelos entrypoints, the kelos-capture
+# binary and the gh wrapper to the Agentainer image. Nothing is installed at
+# startup. Source and changes: rootfs-kelos/SOURCE.md.
+#
+# Agentainer already has what Kelos's claude-code and codex Dockerfiles install
+# (git, make, curl, ca-certificates, tini, Node.js, gh, Go, bubblewrap), so this
+# file adds no packages.
+# Index digest of 0.1.0-dev.20261024.1 (amd64 manifest sha256:63f87ab8de87acea39b9e2dae78522efd9a1002764ae2cda8c9ab902cb816b25).
+# scripts/build.sh --from overrides it.
+ARG AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261024.1@sha256:075e0c2cc259c7c1803950f7a204d80bf4bc53f0bbc3823ea0e29c3f203dd534
+
+# Builds kelos-capture from source. The stage runs on the build host's architecture
+# and cross-compiles (CGO off), so it does not need emulation. golang 1.25.14 (index
+# digest below) satisfies the fork's go.mod, which says "go 1.25.0" and has no
+# toolchain line. The build needs network access to github.com and the Go module
+# proxy. The flags match Kelos's Makefile (CGO_ENABLED=0, version ldflags), plus
+# -trimpath so the binary does not record the build directory.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.25.14@sha256:699337d620559a59b4a2bb298ad59611e535d2ee755a34cf2d2a98f37578dc80 AS kelos-capture
+ARG TARGETARCH
+ARG KELOS_FORK_COMMIT=ca909c7f6b80e9ac8ab7b8db11399e4363aa841d
+ARG KELOS_CAPTURE_VERSION=v0.62.0-proxy.3
+RUN git init -q /src \
+	&& cd /src \
+	&& git remote add origin https://github.com/chadmayfield/kelos.git \
+	&& git fetch -q --depth 1 origin "${KELOS_FORK_COMMIT}" \
+	&& git checkout -q FETCH_HEAD \
+	&& test "$(git rev-parse HEAD)" = "${KELOS_FORK_COMMIT}" \
+	&& CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" go build -trimpath \
+		-ldflags "-X github.com/kelos-dev/kelos/internal/version.Version=${KELOS_CAPTURE_VERSION}" \
+		-o /out/kelos-capture ./cmd/kelos-capture
+
+FROM ${AGENTAINER_IMAGE}
+
+ARG TARGETARCH
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+USER root
+
+# The Kelos gh wrapper ends with exec /usr/bin/gh, so the real gh moves there and
+# the wrapper takes its place in /usr/local/bin.
+RUN mv /usr/local/bin/gh /usr/bin/gh
+
+COPY --chmod=0755 rootfs-kelos/kelos_entrypoint.sh \
+	rootfs-kelos/kelos_entrypoint_claude.sh \
+	rootfs-kelos/kelos_entrypoint_codex.sh /
+COPY --chmod=0755 rootfs-kelos/agent-gh-wrapper.sh /usr/local/bin/gh
+# The guard is sourced by the dispatcher and by the claude wrapper. The wrapper sits
+# first on PATH while the dispatcher runs the Kelos entrypoint, so the guard runs
+# once more right before the real claude starts.
+COPY --chmod=0644 rootfs-kelos/kelos_guard.sh /usr/local/lib/kelos/guard.sh
+COPY --chmod=0755 rootfs-kelos/claude-wrapper.sh /usr/local/lib/kelos/bin/claude
+# kelos-capture is not the upstream v0.62.0 binary. The builder stage above builds
+# it from the chadmayfield/kelos fork (github.com/chadmayfield/kelos), branch
+# proxy-env-for-git-init, commit ca909c7f6b80e9ac8ab7b8db11399e4363aa841d, on top of
+# the v0.62.0 base commit 8b0805c. It reads pull requests over REST instead of
+# GitHub GraphQL, which the egress proxy blocks. Provenance: rootfs-kelos/SOURCE.md.
+COPY --from=kelos-capture --chmod=0755 /out/kelos-capture /kelos/kelos-capture
+COPY --chmod=0644 rootfs-kelos/LICENSE.kelos rootfs-kelos/SOURCE.md /usr/share/doc/kelos/
+
+RUN useradd -u 61100 -m -s /bin/bash kelos \
+	&& install -d -o kelos -g kelos /home/kelos/.claude /home/kelos/.codex /home/kelos/.local/bin /home/kelos/go
+
+# The Agentainer entrypoint points /var/lib/agentainer/active at a tools root. It
+# does not run here, so the tool locations move into the home directory.
+ENV GOPATH=/home/kelos/go \
+	GOBIN=/home/kelos/.local/bin \
+	NPM_CONFIG_PREFIX=/home/kelos/.local \
+	CARGO_HOME=/home/kelos/.cargo \
+	CARGO_INSTALL_ROOT=/home/kelos/.local \
+	UV_TOOL_DIR=/home/kelos/.local/share/uv/tools \
+	UV_TOOL_BIN_DIR=/home/kelos/.local/bin \
+	PIPX_HOME=/home/kelos/.local/pipx \
+	PIPX_BIN_DIR=/home/kelos/.local/bin \
+	PYTHONUSERBASE=/home/kelos/.local \
+	PATH=/home/kelos/.local/bin:/usr/local/go/bin:/opt/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+USER 61100
+WORKDIR /workspace
+HEALTHCHECK NONE
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/kelos_entrypoint.sh"]
+CMD []
