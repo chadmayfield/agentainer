@@ -323,4 +323,11 @@ if [ "$rc" -eq 78 ]; then pass "codex: CODEX_HOME elsewhere is refused"; else fa
 seen=$(kr --user 0 -e HOME=/home/kelos -e CLAUDE_CODE_OAUTH_TOKEN=x -- sh -c 'printf "#!/bin/sh\nprintf \"%%s\\n\" \"\$@\"\n" > /usr/local/bin/claude; mkdir -p /tmp/r && cd /tmp/r && echo rules > CLAUDE.md && /usr/local/lib/kelos/bin/claude -p hi' 2>&1)
 assert_contains "wrapper passes the repo CLAUDE.md as prompt text" "--append-system-prompt-file" "$seen"
 
+# The Task's git identity reaches git commits run by claude.
+# shellcheck disable=SC2016 # expands in the container
+seen=$(kr --user 0 -e HOME=/home/kelos -e CLAUDE_CODE_OAUTH_TOKEN=x -e GIT_AUTHOR_NAME=n -e GIT_AUTHOR_EMAIL=e@x -e GIT_COMMITTER_NAME=n -e GIT_COMMITTER_EMAIL=e@x -- sh -c 'printf "#!/bin/sh\nexec /usr/bin/env\n" > /usr/local/bin/claude; exec /usr/local/lib/kelos/bin/claude' 2>&1)
+for v in GIT_AUTHOR_NAME=n GIT_AUTHOR_EMAIL=e@x GIT_COMMITTER_NAME=n GIT_COMMITTER_EMAIL=e@x; do
+	assert_contains "git identity passes: $v" "$v" "$seen"
+done
+
 finish

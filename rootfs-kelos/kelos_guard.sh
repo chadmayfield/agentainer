@@ -17,6 +17,7 @@ claude_env_allowlist=(
   GITHUB_TOKEN GH_TOKEN GH_ENTERPRISE_TOKEN GH_HOST GH_CONFIG_DIR # set by Kelos when the Workspace has a secretRef (job_builder.go)
   KELOS_GITHUB_TOKEN_FILE        # read by the gh wrapper at /usr/local/bin/gh
   KELOS_BRANCH KELOS_BASE_BRANCH KELOS_UPSTREAM_REPO # Task context the agent's shell and prompt can use
+  GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL # commit identity set by the Task; labels, not credentials
   GOPATH GOBIN GOTOOLCHAIN RUSTUP_HOME CARGO_HOME CARGO_INSTALL_ROOT # image ENV for the agent's build tools
   NPM_CONFIG_PREFIX UV_TOOL_DIR UV_TOOL_BIN_DIR PIPX_HOME PIPX_BIN_DIR PYTHONUSERBASE # image ENV for installed tools
 )
