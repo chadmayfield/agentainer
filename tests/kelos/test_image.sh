@@ -506,11 +506,11 @@ echo uncommitted > work/b.txt
 /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
 pid=$!
 sleep 3
-start=$SECONDS
+start=$(date +%s)
 kill -TERM $pid
 wait $pid
 echo "rc=$?"
-echo "elapsed=$((SECONDS - start))"
+echo "elapsed=$(($(date +%s) - start))"
 cat /tmp/ps/out
 echo "subject=$(git -C remote.git log task -1 --format=%s)"
 git -C remote.git show task:b.txt >/dev/null 2>&1 && echo b-pushed || echo b-not-pushed' 2>&1)
@@ -655,11 +655,11 @@ echo hello > work/f.txt
 PUSH_INTERVAL=1 /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
 pid=$!
 sleep 4
-start=$SECONDS
+start=$(date +%s)
 kill -TERM $pid
 wait $pid
 echo "rc=$?"
-echo "elapsed=$((SECONDS - start))"
+echo "elapsed=$(($(date +%s) - start))"
 cat /tmp/ps/out' 2>&1)
 assert_contains "slow periodic push: the stop is announced" "stopped by SIGTERM during a periodic push" "$out"
 assert_contains "slow periodic push: the final push succeeds" "rc=0" "$out"
@@ -718,11 +718,11 @@ echo uncommitted > work/b.txt
 /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
 pid=$!
 sleep 3
-start=$SECONDS
+start=$(date +%s)
 kill -TERM $pid
 wait $pid
 echo "rc=$?"
-echo "elapsed=$((SECONDS - start))"
+echo "elapsed=$(($(date +%s) - start))"
 cat /tmp/ps/out
 echo "subject=$(git -C remote.git log task -1 --format=%s)"' 2>&1)
 assert_contains "final budget: HEAD is pushed first" "push-note: HEAD pushed" "$out"
@@ -740,13 +740,117 @@ echo uncommitted > work/b.txt
 /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
 pid=$!
 sleep 3
-start=$SECONDS
+start=$(date +%s)
 kill -TERM $pid
 wait $pid
 echo "rc=$?"
-echo "elapsed=$((SECONDS - start))"
+echo "elapsed=$(($(date +%s) - start))"
 cat /tmp/ps/out' 2>&1)
 assert_contains "final budget: a stuck HEAD push is reported" "push-note: pushing HEAD failed: timed out after 10s" "$out"
 case "$out" in *"elapsed=19"* | *"elapsed=20"* | *"elapsed=21"* | *"elapsed=22"*) pass "final budget: the final path with two stuck pushes ends in about 20 s" ;; *) fail "final budget: the final path with two stuck pushes ends in about 20 s" "$out" ;; esac
+
+# The dispatcher stops the whole container fast. Kelos starts a custom image with the
+# command /kelos_entrypoint.sh and no tini, so the dispatcher is PID 1 (mode pid1); the
+# image ENTRYPOINT with tini is the other way in (mode tini). A fake agent starts a plain
+# child and a child in its own session (setsid), as claude's shell tool can. podman stop
+# gives a 30 s grace period; the container must be gone within 5 s, with exit code 143.
+fast_stop_run() {
+	_type=$1 _fake=$2 _mode=$3 _name=ks-$$-$1-$3
+	_bin=/usr/local/bin/claude
+	[ "$_type" = codex ] && _bin=/usr/local/bin/codex
+	_init=
+	[ "$_mode" = tini ] && _init="/usr/bin/tini -g --"
+	"$RUNTIME" run -d --pull=never ${PLATFORM:+--platform "$PLATFORM"} --network none --name "$_name" --user 0 \
+		-e "KELOS_AGENT_TYPE=$_type" -e HOME=/home/kelos -e CLAUDE_CODE_OAUTH_TOKEN=x \
+		--entrypoint sh "$IMAGE" -c "rm -f $_bin; printf '$_fake' > $_bin; chmod 755 $_bin; \
+exec setpriv --reuid 61100 --regid 61100 --clear-groups $_init /kelos_entrypoint.sh hi" >/dev/null
+}
+for mode in pid1 tini; do
+	for type in claude-code codex; do
+		name=ks-$$-$type-$mode
+		fast_stop_run "$type" '#!/bin/sh\nsetsid sleep 600 &\nsleep 600 &\nwait\n' "$mode"
+		sleep 5
+		# shellcheck disable=SC2016 # expands in the container
+		count=$("$RUNTIME" exec "$name" sh -c 'n=0; for f in /proc/[0-9]*/comm; do [ "$(cat $f 2>/dev/null)" = sleep ] && n=$((n + 1)); done; echo $n')
+		start=$(date +%s)
+		"$RUNTIME" stop -t 30 "$name" >/dev/null 2>&1
+		elapsed=$(($(date +%s) - start))
+		code=$("$RUNTIME" inspect "$name" --format '{{.State.ExitCode}}')
+		"$RUNTIME" rm -f "$name" >/dev/null 2>&1
+		if [ "${count:-0}" -ge 2 ]; then pass "$mode $type: the fake agent's two sleeps were running"; else fail "$mode $type: the fake agent's two sleeps were running" "count=$count"; fi
+		if [ "$elapsed" -le 5 ]; then pass "$mode $type: podman stop finishes within 5 s ($elapsed s)"; else fail "$mode $type: podman stop finishes within 5 s" "took $elapsed s"; fi
+		assert_eq "$mode $type: exit code 143 after SIGTERM" "143" "$code"
+	done
+done
+# The agent's own exit status passes through, and leftovers in another session do not hold the container.
+fast_stop_run claude-code '#!/bin/sh\nsetsid sleep 600 >/dev/null 2>&1 </dev/null &\nexit 3\n' pid1
+name=ks-$$-claude-code-pid1
+start=$(date +%s)
+code=$("$RUNTIME" wait "$name" 2>/dev/null)
+elapsed=$(($(date +%s) - start))
+"$RUNTIME" rm -f "$name" >/dev/null 2>&1
+assert_eq "the agent's exit status 3 passes through" "3" "$code"
+if [ "$elapsed" -le 10 ]; then pass "the container ends when the agent ends ($elapsed s)"; else fail "the container ends when the agent ends" "took $elapsed s"; fi
+# When PID 1 is neither the dispatcher nor tini (a shared PID namespace), the dispatcher
+# stops only its own descendants. A same-user sleep started by PID 1 must survive.
+name=ks-$$-shared
+# shellcheck disable=SC2016 # expands in the container
+"$RUNTIME" run -d --pull=never ${PLATFORM:+--platform "$PLATFORM"} --network none --name "$name" --user 0 \
+	-e KELOS_AGENT_TYPE=claude-code -e HOME=/home/kelos -e CLAUDE_CODE_OAUTH_TOKEN=x \
+	--entrypoint sh "$IMAGE" -c "rm -f /usr/local/bin/claude; printf '#!/bin/sh\nsleep 600 &\nsleep 600 &\nwait\n' > /usr/local/bin/claude; chmod 755 /usr/local/bin/claude; \
+setpriv --reuid 61100 --regid 61100 --clear-groups sleep 601 & \
+setpriv --reuid 61100 --regid 61100 --clear-groups /kelos_entrypoint.sh hi; wait" >/dev/null
+sleep 8
+# shellcheck disable=SC2016 # expands in the container
+"$RUNTIME" exec "$name" sh -c 'for f in /proc/[0-9]*/comm; do p=${f#/proc/}; p=${p%/comm}; [ "$(cat $f 2>/dev/null)" = kelos_entrypoin ] && echo $p; done | sort -n | head -1 | xargs kill -TERM'
+sleep 6
+# shellcheck disable=SC2016 # expands in the container
+left=$("$RUNTIME" exec "$name" sh -c 'for f in /proc/[0-9]*/cmdline; do tr "\0" " " < $f 2>/dev/null; echo; done | grep -c -E "(^|/)[s]leep 60[01] "')
+# shellcheck disable=SC2016 # expands in the container
+sibling=$("$RUNTIME" exec "$name" sh -c 'for f in /proc/[0-9]*/cmdline; do tr "\0" " " < $f 2>/dev/null; echo; done | grep -c -E "(^|/)[s]leep 601 "')
+"$RUNTIME" rm -f "$name" >/dev/null 2>&1
+assert_eq "shared namespace: the agent's own sleeps are stopped, the sibling sleep remains" "1 1" "$left $sibling"
+# A shared PID namespace where PID 1 is a sibling container's tini (same user): the dispatcher
+# is not PID 1 and tini is not its parent, so it must not signal the sibling's processes.
+sib=ks-$$-sibling
+name=ks-$$-tinishared
+"$RUNTIME" run -d --pull=never ${PLATFORM:+--platform "$PLATFORM"} --network none --name "$sib" --user 61100 \
+	--entrypoint /usr/bin/tini "$IMAGE" -g -- sleep 609 >/dev/null
+# shellcheck disable=SC2016 # expands in the container
+"$RUNTIME" run -d --pull=never ${PLATFORM:+--platform "$PLATFORM"} --network none --name "$name" --pid="container:$sib" --user 0 \
+	-e KELOS_AGENT_TYPE=claude-code -e HOME=/home/kelos -e CLAUDE_CODE_OAUTH_TOKEN=x \
+	--entrypoint sh "$IMAGE" -c "rm -f /usr/local/bin/claude; printf '#!/bin/sh\nsleep 600 &\nwait\n' > /usr/local/bin/claude; chmod 755 /usr/local/bin/claude; \
+exec setpriv --reuid 61100 --regid 61100 --clear-groups /kelos_entrypoint.sh hi" >/dev/null
+sleep 8
+# shellcheck disable=SC2016 # expands in the container
+"$RUNTIME" exec "$name" sh -c 'for f in /proc/[0-9]*/comm; do p=${f#/proc/}; p=${p%/comm}; [ "$(cat $f 2>/dev/null)" = kelos_entrypoin ] && echo $p; done | sort -n | head -1 | xargs kill -TERM'
+sleep 6
+sib_running=$("$RUNTIME" inspect "$sib" --format '{{.State.Running}}')
+agent_code=$("$RUNTIME" inspect "$name" --format '{{.State.ExitCode}}')
+"$RUNTIME" rm -f "$name" "$sib" >/dev/null 2>&1
+assert_eq "shared namespace under a sibling's tini: the sibling keeps running and the agent exits 143" "true 143" "$sib_running $agent_code"
+
+# SIGINT exits 130, and SIGTERM 143 (above).
+fast_stop_run claude-code '#!/bin/sh\nsleep 600 &\nwait\n' pid1
+name=ks-$$-claude-code-pid1
+sleep 5
+"$RUNTIME" kill --signal INT "$name" >/dev/null 2>&1
+code=$("$RUNTIME" wait "$name" 2>/dev/null)
+"$RUNTIME" rm -f "$name" >/dev/null 2>&1
+assert_eq "SIGINT exits 130" "130" "$code"
+# The stop timer's file descriptor is not inherited by the agent.
+fast_stop_run claude-code '#!/bin/sh\nls -l /proc/$$/fd >&2\nexit 0\n' pid1
+name=ks-$$-claude-code-pid1
+"$RUNTIME" wait "$name" >/dev/null 2>&1
+fds=$("$RUNTIME" logs "$name" 2>&1)
+"$RUNTIME" rm -f "$name" >/dev/null 2>&1
+assert_absent "the agent does not inherit the stop timer descriptor" "$fds" "total" "kelos-stop"
+# The traps are set before the guards run.
+# shellcheck disable=SC2016 # expands in the container
+assert_eq "the stop traps come before the guards" "ok" "$(kr -- sh -c '
+	t=$(grep -n "^setup_stop\$" /kelos_entrypoint.sh | head -1 | cut -d: -f1)
+	g=$(grep -n "^kelos_preflight\$" /kelos_entrypoint.sh | head -1 | cut -d: -f1)
+	[ -n "$t" ] && [ -n "$g" ] && [ "$t" -lt "$g" ] && echo ok')"
+assert_contains "the dispatcher header explains why it supervises" "Kelos starts an agent container with the command" "$(kr -- head -n 120 /kelos_entrypoint.sh)"
 
 finish
