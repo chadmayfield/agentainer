@@ -65,10 +65,16 @@ assert_eq "no KELOS_AGENT_TYPE exits 2" "2" "$?"
 kr -e KELOS_AGENT_TYPE=gemini -- /kelos_entrypoint.sh >/dev/null 2>&1
 assert_eq "unknown KELOS_AGENT_TYPE exits 2" "2" "$?"
 
-# Codex: auth.json is seeded only when missing.
+# Codex: auth.json is seeded only when missing, and a valid file for the same
+# account is kept. The tokens below are fake. Codex parses id_token as a JWT, so
+# fake_jwt has that shape: header {"alg":"none","typ":"JWT"}, payload
+# {"email":"a@example.com","https://api.openai.com/auth":{"chatgpt_account_id":"acct-a"}}
+# and the signature "sig".
+fake_jwt=eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6ImFAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1hIn19.sig
+old_auth='{"tokens":{"id_token":"'"$fake_jwt"'","access_token":"at-old","refresh_token":"rt-old","account_id":"acct-a"}}'
 # shellcheck disable=SC2016 # expands in the container
-assert_eq "codex keeps an existing auth.json" "OLD" "$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e 'CODEX_AUTH_JSON={"new":1}' -- sh -c '
-	mkdir -p ~/.codex && printf OLD > ~/.codex/auth.json
+assert_eq "codex keeps an existing auth.json" "$old_auth" "$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e 'CODEX_AUTH_JSON={"tokens":{"id_token":"id-new","access_token":"at-new","refresh_token":"rt-new","account_id":"acct-a"}}' -e "OLD_AUTH=$old_auth" -- sh -c '
+	mkdir -p ~/.codex && printf "%s" "$OLD_AUTH" > ~/.codex/auth.json
 	/kelos_entrypoint.sh
 	cat ~/.codex/auth.json' 2>&1)"
 # shellcheck disable=SC2016 # expands in the container
@@ -132,6 +138,237 @@ assert_eq "auth.json has mode 600" "600" "$(kr -e KELOS_AGENT_TYPE=codex -e KELO
 	rm -rf ~/.codex; mkdir -p ~/.codex
 	/kelos_entrypoint.sh
 	stat -c %a ~/.codex/auth.json' 2>&1)"
+
+# Codex: each start removes everything in CODEX_HOME except auth.json, then writes
+# config.toml and AGENTS.md. Planted files, a subdirectory and a dotfile must be gone,
+# and auth.json must keep its exact bytes and mode.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e 'CODEX_AUTH_JSON={"tokens":{"id_token":"id-new","access_token":"at-new","refresh_token":"rt-new","account_id":"acct-a"}}' -e 'KELOS_AGENTS_MD=fresh rules' -e "FAKE_JWT=$fake_jwt" -- sh -c '
+	h=/home/kelos/.codex
+	printf "{\"tokens\":{\"id_token\":\"%s\",\"access_token\":\"a1\",\"refresh_token\":\"r1\",\"account_id\":\"acct-a\"}}\n" "$FAKE_JWT" > $h/auth.json && chmod 600 $h/auth.json
+	before=$(sha256sum < $h/auth.json)
+	printf "model = \"planted\"\n" > $h/config.toml
+	printf "planted rules\n" > $h/EXTRA.md
+	mkdir -p $h/sessions/old && printf "planted\n" > $h/sessions/old/rollout.jsonl
+	printf "planted\n" > $h/.hidden
+	/kelos_entrypoint.sh; echo "rc=$?"
+	echo "entries=$(LC_ALL=C ls -A $h | tr "\n" ",")end"
+	[ "$(sha256sum < $h/auth.json)" = "$before" ] && echo auth=same || echo auth=changed
+	echo "mode=$(stat -c %a $h/auth.json)"
+	echo "config=$(cat $h/config.toml)"
+	echo "agents=$(cat $h/AGENTS.md)"' 2>&1)
+assert_contains "reset: the start succeeds" "rc=0" "$out"
+assert_contains "reset: only AGENTS.md, auth.json and config.toml remain" "entries=AGENTS.md,auth.json,config.toml,end" "$out"
+assert_contains "reset: auth.json is byte-identical" "auth=same" "$out"
+assert_contains "reset: auth.json keeps mode 600" "mode=600" "$out"
+assert_contains "reset: config.toml is written fresh" 'config=cli_auth_credentials_store = "file"
+' "$out"
+assert_contains "reset: AGENTS.md is written fresh" "agents=fresh rules" "$out"
+assert_absent "reset: no planted content survives" "$out" "rc=0" "planted" ".hidden" "EXTRA.md" "sessions"
+
+# Symlinks in CODEX_HOME are removed as links and never followed: a link named
+# config.toml, a link to a directory, and a link inside a subdirectory.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e 'CODEX_AUTH_JSON={"new":1}' -- sh -c '
+	h=/home/kelos/.codex
+	mkdir -p /tmp/out/dir && printf "keep\n" > /tmp/out/target.toml && printf "keep\n" > /tmp/out/dir/inner
+	ln -s /tmp/out/target.toml $h/config.toml
+	ln -s /tmp/out/dir $h/linkdir
+	mkdir $h/sub && ln -s /tmp/out/dir $h/sub/link
+	/kelos_entrypoint.sh; echo "rc=$?"
+	echo "entries=$(LC_ALL=C ls -A $h | tr "\n" ",")end"
+	[ -L $h/config.toml ] && echo config=link || echo config=notlink
+	echo "target=$(cat /tmp/out/target.toml)"
+	echo "inner=$(cat /tmp/out/dir/inner)"
+	echo "outside=$(LC_ALL=C ls -A /tmp/out | tr "\n" ",")end"' 2>&1)
+assert_contains "reset with symlinks: the start succeeds" "rc=0" "$out"
+assert_contains "reset with symlinks: the links are gone" "entries=auth.json,config.toml,end" "$out"
+assert_contains "reset with symlinks: config.toml is a new regular file" "config=notlink" "$out"
+assert_contains "reset with symlinks: the file target is untouched" "target=keep" "$out"
+assert_contains "reset with symlinks: the directory target is untouched" "inner=keep" "$out"
+assert_contains "reset with symlinks: nothing outside was removed" "outside=dir,target.toml,end" "$out"
+
+# An auth.json that is a symlink, or not a regular file, is refused before anything is removed.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c '
+	h=/home/kelos/.codex
+	printf "outside\n" > /tmp/auth-target.json
+	ln -s /tmp/auth-target.json $h/auth.json
+	printf "x\n" > $h/EXTRA.md
+	/kelos_entrypoint.sh; echo "rc=$?"
+	echo "target=$(cat /tmp/auth-target.json)"
+	echo "entries=$(LC_ALL=C ls -A $h | tr "\n" ",")end"' 2>&1)
+assert_contains "auth.json symlink: refused with exit 78" "rc=78" "$out"
+assert_contains "auth.json symlink: the refusal names it" "auth.json is a symlink" "$out"
+assert_contains "auth.json symlink: the target is untouched" "target=outside" "$out"
+assert_contains "auth.json symlink: nothing was removed" "entries=EXTRA.md,auth.json,end" "$out"
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c '
+	mkdir /home/kelos/.codex/auth.json && printf "x\n" > /home/kelos/.codex/EXTRA.md
+	/kelos_entrypoint.sh; echo "rc=$?"
+	echo "entries=$(LC_ALL=C ls -A /home/kelos/.codex | tr "\n" ",")end"' 2>&1)
+assert_contains "auth.json directory: refused with exit 78" "rc=78" "$out"
+assert_contains "auth.json directory: the refusal says why" "auth.json is not a regular file" "$out"
+assert_contains "auth.json directory: nothing was removed" "entries=EXTRA.md,auth.json,end" "$out"
+
+# A run that leaves a directory without owner write or search permission must not
+# stop later starts. One case is a mode 500 directory holding a file; the other is
+# a deeper tree with mode 000 and 500 levels and a symlink to an outside directory,
+# whose target must keep its mode and content.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c '
+	h=/home/kelos/.codex
+	mkdir $h/locked && printf "x\n" > $h/locked/f && chmod 500 $h/locked
+	mkdir -p $h/deep/a/b/c/d /tmp/out2 && printf "x\n" > $h/deep/a/b/c/d/f && printf "keep\n" > /tmp/out2/k
+	ln -s /tmp/out2 $h/deep/a/b/link && chmod 500 /tmp/out2
+	chmod 500 $h/deep/a/b/c/d && chmod 000 $h/deep/a/b/c && chmod 500 $h/deep/a/b && chmod 000 $h/deep/a
+	/kelos_entrypoint.sh; echo "rc=$?"
+	/kelos_entrypoint.sh; echo "rc2=$?"
+	echo "entries=$(LC_ALL=C ls -A $h | tr "\n" ",")end"
+	echo "outside=$(stat -c %a /tmp/out2) $(cat /tmp/out2/k)"' 2>&1)
+assert_contains "locked directories: the start succeeds" "rc=0" "$out"
+assert_contains "locked directories: the next start succeeds" "rc2=0" "$out"
+assert_contains "locked directories: both trees are gone" "entries=config.toml,end" "$out"
+assert_contains "locked directories: the symlink target keeps its mode and content" "outside=500 keep" "$out"
+
+# auth.json is checked against CODEX_AUTH_JSON. The JSON below is fake and holds no
+# real token. A file with the same account and refreshed tokens is kept byte for
+# byte; an invalid file, a file with missing token fields, another account, or an
+# added API key is replaced by CODEX_AUTH_JSON with mode 600. The log names the
+# reason and never a token value.
+secret='{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"id-from-secret","access_token":"at-from-secret","refresh_token":"rt-from-secret","account_id":"acct-a"}}'
+# shellcheck disable=SC2016 # expands in the container
+auth_case() {
+	kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e "CODEX_AUTH_JSON=$secret" -e "OLD_AUTH=$1" -- sh -c '
+		f=/home/kelos/.codex/auth.json
+		printf "%s" "$OLD_AUTH" > $f && chmod 644 $f
+		before=$(sha256sum < $f)
+		/kelos_entrypoint.sh; echo "rc=$?"
+		if [ "$(sha256sum < $f)" = "$before" ]; then echo auth=kept
+		elif printf "%s" "$CODEX_AUTH_JSON" | cmp -s - $f; then echo auth=reseeded
+		else echo auth=other; fi
+		echo "mode=$(stat -c %a $f)"
+		echo "entries=$(LC_ALL=C ls -A /home/kelos/.codex | tr "\n" ",")end"
+		echo "checkdirs=$(ls -d /tmp/codex-auth-check.* 2>/dev/null | wc -l)"' 2>&1
+}
+out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"'"$fake_jwt"'","access_token":"at-rotated","refresh_token":"rt-rotated","account_id":"acct-a"},"last_refresh":"2020-01-01T00:00:00Z"}')
+assert_contains "auth same account: the start succeeds" "rc=0" "$out"
+assert_contains "auth same account: refreshed tokens are kept byte for byte" "auth=kept" "$out"
+assert_absent "auth same account: no reseed is logged" "$out" "rc=0" "reseeded auth.json"
+assert_contains "auth same account: a kept file at mode 644 comes out 600" "mode=600" "$out"
+assert_contains "auth same account: codex login status leaves nothing in the home" "entries=auth.json,config.toml,end" "$out"
+assert_contains "auth same account: the check directory is removed" "checkdirs=0" "$out"
+out=$(auth_case '{"tokens": {"id_token": "id-x", "access_token"')
+assert_contains "auth invalid JSON: reseeded from CODEX_AUTH_JSON" "auth=reseeded" "$out"
+assert_contains "auth invalid JSON: the log says why" "reseeded auth.json from CODEX_AUTH_JSON because it is not a single JSON object" "$out"
+assert_contains "auth invalid JSON: the new file has mode 600" "mode=600" "$out"
+assert_contains "auth invalid JSON: no temp file is left" "entries=auth.json,config.toml,end" "$out"
+out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"id-other","access_token":"at-other","refresh_token":"rt-other","account_id":"acct-b"}}')
+assert_contains "auth other account: reseeded from CODEX_AUTH_JSON" "auth=reseeded" "$out"
+assert_contains "auth other account: the log says why" "because its tokens.account_id differs from CODEX_AUTH_JSON" "$out"
+assert_absent "auth other account: no token value is printed" "$out" "auth=reseeded" "id-other" "at-other" "rt-other" "acct-b" "from-secret"
+out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"id-rotated","access_token":"at-rotated","account_id":"acct-a"}}')
+assert_contains "auth missing refresh_token: reseeded from CODEX_AUTH_JSON" "auth=reseeded" "$out"
+assert_contains "auth missing refresh_token: the log says why" "because it lacks tokens.id_token, tokens.access_token or tokens.refresh_token" "$out"
+out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":"sk-fake","tokens":{"id_token":"id-rotated","access_token":"at-rotated","refresh_token":"rt-rotated","account_id":"acct-a"}}')
+assert_contains "auth with an added API key: reseeded from CODEX_AUTH_JSON" "auth=reseeded" "$out"
+assert_contains "auth with an added API key: the log names the field" "because its OPENAI_API_KEY differs from CODEX_AUTH_JSON" "$out"
+assert_absent "auth with an added API key: the key is not printed" "$out" "auth=reseeded" "sk-fake"
+# Files that pass the field checks but that Codex refuses to load: an id_token that
+# is not a JWT, and a duplicate key (jq keeps the last value, Codex rejects the file).
+out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"id-not-a-jwt","access_token":"at-rotated","refresh_token":"rt-rotated","account_id":"acct-a"}}')
+assert_contains "auth id_token not a JWT: reseeded from CODEX_AUTH_JSON" "auth=reseeded" "$out"
+assert_contains "auth id_token not a JWT: the log says why" "because codex login status rejects it (exit 1)" "$out"
+assert_contains "auth id_token not a JWT: no check directory or tmp is left in the home" "entries=auth.json,config.toml,end" "$out"
+assert_absent "auth id_token not a JWT: no token value is printed" "$out" "auth=reseeded" "id-not-a-jwt" "rt-rotated"
+out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"OPENAI_API_KEY":null,"tokens":{"id_token":"'"$fake_jwt"'","access_token":"at-rotated","refresh_token":"rt-rotated","account_id":"acct-a"}}')
+assert_contains "auth duplicate OPENAI_API_KEY: reseeded from CODEX_AUTH_JSON" "auth=reseeded" "$out"
+assert_contains "auth duplicate OPENAI_API_KEY: the log says why" "because codex login status rejects it (exit 1)" "$out"
+# When the load check cannot run, the existing file is kept: a codex that does not
+# finish within the 20 s timeout, a temp directory that cannot be made, and a copy
+# that fails. The file has an id_token that is not a JWT, so a check that did run
+# would replace it. The Codex entrypoint is run directly so that PATH and TMPDIR can
+# point at stubs; the dispatcher's guard would refuse them.
+rejected_auth='{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"id-not-a-jwt","access_token":"at-rotated","refresh_token":"rt-rotated","account_id":"acct-a"}}'
+# shellcheck disable=SC2016 # expands in the container
+auth_unchecked_case() {
+	kr -e KELOS_SESSION_SETUP_ONLY=1 -e CODEX_HOME=/home/kelos/.codex -e "CODEX_AUTH_JSON=$secret" -e "OLD_AUTH=$rejected_auth" -e "CASE=$1" -- sh -c '
+		f=/home/kelos/.codex/auth.json
+		printf "%s" "$OLD_AUTH" > $f
+		before=$(sha256sum < $f)
+		mkdir -p /tmp/stub
+		tmpdir=/tmp
+		case "$CASE" in
+		timeout) printf "#!/bin/sh\nexec sleep 60\n" > /tmp/stub/codex ;;
+		mktemp) tmpdir=/nonexistent ;;
+		cp) printf "#!/bin/sh\nexit 1\n" > /tmp/stub/cp ;;
+		esac
+		chmod 755 /tmp/stub/* 2>/dev/null
+		start=$(date +%s)
+		env PATH="/tmp/stub:$PATH" TMPDIR="$tmpdir" /kelos_entrypoint_codex.sh; echo "rc=$?"
+		echo "elapsed=$(($(date +%s) - start))"
+		[ "$(sha256sum < $f)" = "$before" ] && echo auth=kept || echo auth=changed
+		echo "checkdirs=$(ls -d /tmp/codex-auth-check.* 2>/dev/null | wc -l)"' 2>&1
+}
+for case in timeout mktemp cp; do
+	out=$(auth_unchecked_case "$case")
+	assert_contains "auth check cannot run ($case): the start succeeds" "rc=0" "$out"
+	assert_contains "auth check cannot run ($case): auth.json is kept byte for byte" "auth=kept" "$out"
+	assert_contains "auth check cannot run ($case): the log says the file was kept" "could not check auth.json, kept the existing file" "$out"
+	assert_contains "auth check cannot run ($case): no check directory is left" "checkdirs=0" "$out"
+	assert_absent "auth check cannot run ($case): no token value is printed" "$out" "rc=" "id-not-a-jwt" "rt-rotated" "from-secret"
+	[ "$case" != timeout ] || assert_contains "auth check cannot run (timeout): the log names the timeout" "did not finish within 20 s" "$out"
+done
+# Without CODEX_AUTH_JSON an existing auth.json is left as it is, even when invalid.
+# shellcheck disable=SC2016 # expands in the container
+assert_eq "auth without CODEX_AUTH_JSON: the file is kept" "not json" "$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c '
+	printf "not json" > /home/kelos/.codex/auth.json
+	/kelos_entrypoint.sh >/dev/null 2>&1
+	cat /home/kelos/.codex/auth.json' 2>&1)"
+
+# A real start, not setup only, gets a clean home before codex runs. A stub codex
+# prints what it finds. user 0 lets the test replace the binary; the dispatcher then
+# runs as UID 61100.
+# shellcheck disable=SC2016 # expands in the stub
+codex_stub='#!/bin/sh
+h=${CODEX_HOME:-$HOME/.codex}
+echo "stub-entries=$(LC_ALL=C ls -A "$h" | tr "\n" ",")end" >&2
+cat "$h/config.toml" >&2 2>/dev/null
+exit 0
+'
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr --user 0 -e KELOS_AGENT_TYPE=codex -e HOME=/home/kelos -e 'KELOS_AGENTS_MD=fresh rules' -e "STUB=$codex_stub" -- sh -c '
+	h=/home/kelos/.codex
+	printf "%s" "$STUB" > /usr/local/bin/codex && chmod 755 /usr/local/bin/codex
+	printf "model = \"planted\"\n" > $h/config.toml && printf "planted\n" > $h/EXTRA.md && chown -R 61100:61100 $h
+	setpriv --reuid 61100 --regid 61100 --clear-groups /kelos_entrypoint.sh hi; echo "rc=$?"' 2>&1)
+assert_contains "real start: the entrypoint exits 0" "rc=0" "$out"
+assert_contains "real start: codex sees only AGENTS.md" "stub-entries=AGENTS.md,end" "$out"
+assert_absent "real start: codex sees no planted config.toml" "$out" "stub-entries=" "planted"
+
+# CODEX_HOME must be set, must be /home/kelos/.codex, and must not be a symlink. The
+# dispatcher sets it after its guard; the entrypoint run directly checks it itself.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c '
+	rm -rf /home/kelos/.codex && mkdir -p /tmp/real && printf "x\n" > /tmp/real/EXTRA.md
+	ln -s /tmp/real /home/kelos/.codex
+	/kelos_entrypoint.sh; echo "rc=$?"
+	echo "real=$(LC_ALL=C ls -A /tmp/real | tr "\n" ",")end"' 2>&1)
+assert_contains "symlinked CODEX_HOME: refused with exit 78" "rc=78" "$out"
+assert_contains "symlinked CODEX_HOME: the refusal names it" ".codex is a symlink" "$out"
+assert_contains "symlinked CODEX_HOME: the link target is untouched" "real=EXTRA.md,end" "$out"
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c '
+	printf "x\n" > /home/kelos/.codex/EXTRA.md
+	/kelos_entrypoint_codex.sh; echo "rc=$?"
+	echo "entries=$(LC_ALL=C ls -A /home/kelos/.codex | tr "\n" ",")end"' 2>&1)
+assert_contains "codex entrypoint refuses an unset CODEX_HOME" "rc=78" "$out"
+assert_contains "the refusal says CODEX_HOME is not set" "CODEX_HOME is not set" "$out"
+assert_contains "unset CODEX_HOME: nothing was removed" "entries=EXTRA.md,end" "$out"
+out=$(kr -e KELOS_SESSION_SETUP_ONLY=1 -e CODEX_HOME=/tmp/codex -- /kelos_entrypoint_codex.sh 2>&1)
+rc=$?
+if [ "$rc" -eq 78 ]; then pass "codex entrypoint refuses another CODEX_HOME"; else fail "codex entrypoint refuses another CODEX_HOME" "exit $rc"; fi
+assert_contains "the refusal names the CODEX_HOME value" "CODEX_HOME is /tmp/codex" "$out"
 
 # Proxy CA: the bundle is the system bundle plus the proxy CA, and the variables point at it.
 # The setup command (allowed for Codex) prints what the agent would see.

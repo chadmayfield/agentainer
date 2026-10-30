@@ -5,7 +5,7 @@ Source: https://github.com/kelos-dev/kelos, tag v0.62.0, commit 8b0805c6474017c0
 | File here | Source | Change |
 |---|---|---|
 | kelos_entrypoint_claude.sh | claude-code/kelos_entrypoint.sh | none |
-| kelos_entrypoint_codex.sh | codex/kelos_entrypoint.sh | three marked changes: auth.json written only when missing, created with mode 0600, and the config.toml setting added only when absent (AGENTAINER CHANGE, CHANGE 2, CHANGE 3) |
+| kelos_entrypoint_codex.sh | codex/kelos_entrypoint.sh | five marked changes: auth.json written only when missing, created with mode 0600, the config.toml setting added only when absent, every entry in CODEX_HOME except auth.json removed at each start (lost+found included on an ext4 volume), refusing when CODEX_HOME is not /home/kelos/.codex or is a symlink, or auth.json is a symlink or not a regular file, and an existing auth.json replaced from CODEX_AUTH_JSON when it is not valid JSON, lacks the token fields, or holds another account or other credentials (AGENTAINER CHANGE, CHANGE 2, CHANGE 3, CHANGE 4, CHANGE 5) |
 | agent-gh-wrapper.sh | hack/agent-gh-wrapper.sh | none |
 | /kelos/kelos-capture (built in Containerfile.kelos) | Built from source from the chadmayfield/kelos fork (github.com/chadmayfield/kelos), branch proxy-env-for-git-init, commit ca909c7f6b80e9ac8ab7b8db11399e4363aa841d, on top of the v0.62.0 base commit. Not the upstream binary. | PR capture reads GitHub over REST instead of GraphQL (the egress proxy blocks GraphQL) |
 | LICENSE.kelos | LICENSE | none |
