@@ -192,6 +192,10 @@ claude-code)
 codex)
   codex_guard
   proxy_ca_setup
+  # codex_guard allows CODEX_HOME only unset or set to this path. Kelos sets it
+  # only for Sessions, so a Task arrives without it. The Codex entrypoint refuses
+  # to clean the Codex home unless CODEX_HOME names it.
+  export CODEX_HOME=/home/kelos/.codex
   supervise /kelos_entrypoint_codex.sh "$@"
   ;;
 *)
