@@ -54,6 +54,9 @@ COPY --chmod=0644 rootfs-kelos/usr/local/share/push-sidecar/excludes /usr/local/
 # once more right before the real claude starts.
 COPY --chmod=0644 rootfs-kelos/kelos_guard.sh /usr/local/lib/kelos/guard.sh
 COPY --chmod=0755 rootfs-kelos/claude-wrapper.sh /usr/local/lib/kelos/bin/claude
+# Claude's headersHelper for the MCP gateway: prints the bearer header from the
+# token file mounted at /etc/agentainer/mcp/token.
+COPY --chmod=0755 rootfs-kelos/mcp-headers.sh /usr/local/lib/kelos/mcp-headers
 # kelos-capture is not the upstream v0.62.0 binary. The builder stage above builds
 # it from the chadmayfield/kelos fork (github.com/chadmayfield/kelos), branch
 # proxy-env-for-git-init, commit ca909c7f6b80e9ac8ab7b8db11399e4363aa841d, on top of

@@ -84,14 +84,96 @@ kelos_preflight() {
     esac
   done
   # KELOS_MCP_SERVERS makes the Kelos entrypoint start arbitrary stdio commands
-  # after every guard. This image does not use MCP servers, so only an empty value
-  # passes.
+  # after every guard, and Kelos puts header values from a Secret into it in
+  # plain text. This image takes its one MCP server from files instead (mcp_check
+  # below), so only an empty value passes.
   if [ -n "${KELOS_MCP_SERVERS:-}" ]; then
-    refuse "KELOS_MCP_SERVERS is set; this image does not support MCP servers"
+    refuse "KELOS_MCP_SERVERS is set; this image reads its MCP server from $mcp_dir"
   fi
   if "$TR" '\0' '\n' <"/proc/$$/environ" | "$GREP" -aq '^BASH_FUNC_'; then
     refuse "an exported bash function (BASH_FUNC_*) is in the environment"
   fi
+  mcp_check
+}
+
+# MCP gateway. A Task may mount a Secret with the keys url and token at
+# mcp_dir. The url file is the switch: with neither file there is no MCP server,
+# which also covers the empty directory Kubernetes mounts for a missing optional
+# Secret. With exactly one of the two the pod is refused. Both values are checked
+# against strict patterns before any config file is written, so a quote,
+# backslash, newline or space cannot add a JSON header or a TOML key. The token
+# is read into a shell variable and never passed on a command line.
+mcp_dir=/etc/agentainer/mcp
+mcp_url_re='^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$'
+mcp_token_re='^[A-Za-z0-9._~+/=-]{16,4096}$'
+mcp_url=""
+
+# mcp_read FILE MAX: sets mcp_value to the file's content with one trailing
+# newline removed. Fails, with mcp_error set, when the file is not a readable
+# regular file, is larger than MAX bytes plus that newline, or holds a NUL byte
+# (bash drops NUL bytes when it reads a file, so the byte counts would differ).
+mcp_read() {
+  local LC_ALL=C file=$1 max=$2 size raw
+  mcp_value="" mcp_error=""
+  if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+    mcp_error="$file is not a readable file"
+    return 1
+  fi
+  size=$(/usr/bin/wc -c <"$file") || {
+    mcp_error="$file cannot be read"
+    return 1
+  }
+  if [ "$size" -gt $((max + 1)) ]; then
+    mcp_error="$file is longer than $max bytes"
+    return 1
+  fi
+  raw=$(
+    /usr/bin/cat -- "$file"
+    printf x
+  ) || {
+    mcp_error="$file cannot be read"
+    return 1
+  }
+  raw=${raw%x}
+  if [ "${#raw}" -ne "$size" ]; then
+    mcp_error="$file holds a NUL byte"
+    return 1
+  fi
+  mcp_value=${raw%$'\n'}
+}
+
+# mcp_token_valid FILE: succeeds when FILE holds a token that matches
+# mcp_token_re after one trailing newline is removed. Sets mcp_error otherwise.
+mcp_token_valid() {
+  local LC_ALL=C
+  mcp_read "$1" 4096 || return 1
+  if ! [[ $mcp_value =~ $mcp_token_re ]]; then
+    mcp_value=""
+    mcp_error="$1 must be 16 to 4096 characters from A-Z a-z 0-9 . _ ~ + / = -"
+    return 1
+  fi
+  mcp_value=""
+}
+
+# Sets mcp_url when the gateway is configured, and refuses a bad configuration.
+mcp_check() {
+  local LC_ALL=C url_file=$mcp_dir/url token_file=$mcp_dir/token has_url=0 has_token=0
+  mcp_url=""
+  # The token goes in a file so that it never sits in the pod spec.
+  if [ -n "${AGENTAINER_MCP_TOKEN+x}" ]; then
+    refuse "environment variable AGENTAINER_MCP_TOKEN is set; mount the token as $token_file instead"
+  fi
+  { [ -e "$url_file" ] || [ -L "$url_file" ]; } && has_url=1
+  { [ -e "$token_file" ] || [ -L "$token_file" ]; } && has_token=1
+  [ "$has_url$has_token" != 00 ] || return 0
+  [ "$has_url" = 1 ] || refuse "$token_file exists without $url_file"
+  [ "$has_token" = 1 ] || refuse "$url_file exists without $token_file"
+  mcp_read "$url_file" 512 || refuse "$mcp_error"
+  if [ "${#mcp_value}" -gt 512 ] || ! [[ $mcp_value =~ $mcp_url_re ]]; then
+    refuse "$url_file must be one https URL of at most 512 bytes with no query, quote, backslash or space"
+  fi
+  mcp_url=$mcp_value
+  mcp_token_valid "$token_file" || refuse "$mcp_error"
 }
 
 # API keys, bearer tokens, cloud-provider selectors and credentials, gateway and

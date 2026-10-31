@@ -288,6 +288,23 @@ process.exit(r.status ?? 1);
   printf '\n---KELOS_SETUP_COMMAND_DONE---\n' >&2
 fi
 
+# AGENTAINER CHANGE 6: the MCP gateway. The dispatcher's guard has checked the
+# files in /etc/agentainer/mcp; mcp_check runs again here so that the URL written
+# below is the one just checked. The two tables are appended after every other
+# write to config.toml, so no later line can land inside them, and the
+# top-level keys written above stay at top level. The URL matches a pattern
+# with no quote, backslash or newline, so it needs no TOML escaping. Codex sends
+# AGENTAINER_MCP_TOKEN as the bearer token, and the shell policy removes every
+# AGENTAINER_MCP_* variable from the commands the agent runs. The token stays in
+# /etc/agentainer/mcp, outside the Codex home that the reset above empties.
+# shellcheck disable=SC1091 # exists in the image
+. /usr/local/lib/kelos/guard.sh
+mcp_check
+if [ -n "$mcp_url" ]; then
+  printf '\n[mcp_servers.gateway]\nurl = "%s"\nbearer_token_env_var = "AGENTAINER_MCP_TOKEN"\n\n[shell_environment_policy.filters]\n"AGENTAINER_MCP_*" = "exclude"\n' \
+    "$mcp_url" >>"$codex_home/config.toml" || codex_refuse "cannot write $codex_home/config.toml"
+fi
+
 if [ "${KELOS_SESSION_SETUP_ONLY:-}" = "1" ]; then
   exit 0
 fi
@@ -309,7 +326,15 @@ if [ -n "${KELOS_EFFORT:-}" ]; then
   ARGS+=("--config" "model_reasoning_effort=\"$SAFE_EFFORT\"")
 fi
 
-codex "${ARGS[@]}" | /kelos/kelos-capture
+# The token is set with an assignment prefix, so it is in the environment of
+# this codex process only: not exported, not in argv, and not seen by
+# kelos-capture.
+# shellcheck disable=SC2154 # mcp_dir is set in guard.sh
+if [ -n "$mcp_url" ]; then
+  AGENTAINER_MCP_TOKEN="$(<"$mcp_dir/token")" codex "${ARGS[@]}" | /kelos/kelos-capture
+else
+  codex "${ARGS[@]}" | /kelos/kelos-capture
+fi
 AGENT_EXIT_CODE=${PIPESTATUS[0]}
 
 exit $AGENT_EXIT_CODE

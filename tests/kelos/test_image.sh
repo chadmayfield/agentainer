@@ -1090,4 +1090,177 @@ assert_eq "the stop traps come before the guards" "ok" "$(kr -- sh -c '
 	[ -n "$t" ] && [ -n "$g" ] && [ "$t" -lt "$g" ] && echo ok')"
 assert_contains "the dispatcher header explains why it supervises" "Kelos starts an agent container with the command" "$(kr -- head -n 120 /kelos_entrypoint.sh)"
 
+# MCP gateway. A Task may mount a Secret with the keys url and token at
+# /etc/agentainer/mcp. Each test writes the files as root in its throwaway
+# container, then runs the dispatcher, the wrapper or the helper as UID 61100.
+# Values travel base64-encoded so that quotes and newlines reach the files byte
+# for byte. MCP_U and MCP_T name the url and token contents; an unset variable
+# means no file. The URL and token are made up.
+b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
+b64nl() { printf '%s\n' "$1" | base64 | tr -d '\n'; }
+mcp_url=https://gw.example.test/mcp
+mcp_token=t0k-abcdefghijklm
+# shellcheck disable=SC2016 # expands in the container
+mcp_write='mkdir -p /etc/agentainer/mcp
+if [ -n "${MCP_U+x}" ]; then printf %s "$MCP_U" | base64 -d >/etc/agentainer/mcp/url; fi
+if [ -n "${MCP_T+x}" ]; then printf %s "$MCP_T" | base64 -d >/etc/agentainer/mcp/token; fi
+chmod 0755 /etc/agentainer/mcp
+chmod 0644 /etc/agentainer/mcp/* 2>/dev/null
+as_kelos() { setpriv --reuid 61100 --regid 61100 --clear-groups "$@"; }
+'
+# mcp_kr [runtime options...] -- SCRIPT: writes the files, then runs SCRIPT.
+mcp_kr() {
+	_script=""
+	for _a; do _script=$_a; done
+	_n=$#
+	_i=0
+	for _a; do
+		_i=$((_i + 1))
+		shift
+		[ "$_i" -lt "$_n" ] && set -- "$@" "$_a"
+	done
+	kr --user 0 -e HOME=/home/kelos -e CLAUDE_CODE_OAUTH_TOKEN=x "$@" sh -c "$mcp_write$_script"
+}
+# mcp_setup_rc AGENT [runtime options...]: exit code of a setup-only start.
+mcp_setup_rc() {
+	_agent=$1
+	shift
+	mcp_kr -e KELOS_AGENT_TYPE="$_agent" -e KELOS_SESSION_SETUP_ONLY=1 "$@" -- 'as_kelos /kelos_entrypoint.sh >/dev/null 2>&1; echo $?'
+}
+
+# The header helper prints the bearer header, also for a token file that ends in
+# one newline, and fails with no output when the token file is missing.
+assert_eq "mcp-headers is mode 755" "755" "$(kr -- stat -c %a /usr/local/lib/kelos/mcp-headers 2>&1)"
+assert_eq "mcp-headers prints the bearer header" '{"Authorization":"Bearer t0k-abcdefghijklm"}' \
+	"$(mcp_kr -e "MCP_U=$(b64 "$mcp_url")" -e "MCP_T=$(b64 "$mcp_token")" -- 'as_kelos /usr/local/lib/kelos/mcp-headers' 2>&1)"
+assert_eq "mcp-headers drops one trailing newline" '{"Authorization":"Bearer t0k-abcdefghijklm"}' \
+	"$(mcp_kr -e "MCP_U=$(b64 "$mcp_url")" -e "MCP_T=$(b64nl "$mcp_token")" -- 'as_kelos /usr/local/lib/kelos/mcp-headers' 2>&1)"
+assert_eq "mcp-headers without a token fails with no output" "rc=1" \
+	"$(mcp_kr -e "MCP_U=$(b64 "$mcp_url")" -- 'as_kelos /usr/local/lib/kelos/mcp-headers 2>/dev/null; echo "rc=$?"')"
+
+# Claude: a stub in place of the real binary prints its arguments. With both files
+# the wrapper adds --mcp-config with a file that names one server and the helper,
+# and the token is not in that file. Without the files, or with an empty
+# directory (a missing optional Secret), no --mcp-config is passed.
+# shellcheck disable=SC2016 # expands in the stub
+claude_stub='#!/bin/sh
+for a; do printf "arg=%s\n" "$a"; done
+'
+# shellcheck disable=SC2016 # expands in the container
+claude_mcp_run='printf "%s" "$STUB" >/usr/local/bin/claude && chmod 755 /usr/local/bin/claude
+cd /tmp && as_kelos /usr/local/lib/kelos/bin/claude -p hi
+f=/home/kelos/.claude/mcp-gateway.json
+if [ -f "$f" ]; then
+	jq -e --arg u "$URL" '"'"'(.mcpServers | keys) == ["gateway"] and .mcpServers.gateway == {"type": "http", "url": $u, "headersHelper": "/usr/local/lib/kelos/mcp-headers"}'"'"' "$f" >/dev/null && echo config-ok
+	grep -qF "$TOKEN" "$f" && echo token-in-config
+fi
+true'
+out=$(mcp_kr -e "STUB=$claude_stub" -e "URL=$mcp_url" -e "TOKEN=$mcp_token" -e "MCP_U=$(b64 "$mcp_url")" -e "MCP_T=$(b64 "$mcp_token")" -- "$claude_mcp_run" 2>&1)
+assert_contains "claude gets --mcp-config with the gateway file" "arg=--mcp-config
+arg=/home/kelos/.claude/mcp-gateway.json" "$out"
+assert_contains "the gateway file has one http server with the helper" "config-ok" "$out"
+assert_absent "the token is not in the gateway file" "$out" "config-ok" "token-in-config"
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr --user 0 -e HOME=/home/kelos -e CLAUDE_CODE_OAUTH_TOKEN=x -e "STUB=$claude_stub" -- sh -c '
+	printf "%s" "$STUB" >/usr/local/bin/claude && chmod 755 /usr/local/bin/claude
+	rm -rf /etc/agentainer/mcp
+	cd /tmp && setpriv --reuid 61100 --regid 61100 --clear-groups /usr/local/lib/kelos/bin/claude -p hi' 2>&1)
+assert_absent "claude without MCP files gets no --mcp-config" "$out" "arg=--strict-mcp-config" "arg=--mcp-config"
+out=$(mcp_kr -e "STUB=$claude_stub" -e "URL=$mcp_url" -e "TOKEN=$mcp_token" -- "$claude_mcp_run" 2>&1)
+assert_absent "claude with an empty MCP directory gets no --mcp-config" "$out" "arg=--strict-mcp-config" "arg=--mcp-config" "config-ok"
+for agent in claude-code codex; do
+	assert_eq "$agent: an empty MCP directory starts" "0" "$(mcp_setup_rc "$agent")"
+done
+
+# Codex: the real binary reads the block that the entrypoint appends last. The
+# setting written earlier stays at top level, the agent's shell loses every
+# AGENTAINER_MCP_* variable, and the token is not in config.toml.
+# shellcheck disable=SC2016 # expands in the container
+out=$(mcp_kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e 'CODEX_AUTH_JSON={"new":1}' -e "URL=$mcp_url" -e "TOKEN=$mcp_token" \
+	-e "MCP_U=$(b64 "$mcp_url")" -e "MCP_T=$(b64 "$mcp_token")" -- '
+	as_kelos /kelos_entrypoint.sh >/dev/null 2>&1 || echo "setup failed"
+	c=/home/kelos/.codex/config.toml
+	as_kelos env CODEX_HOME=/home/kelos/.codex codex mcp get gateway --json 2>/dev/null |
+		jq -e --arg u "$URL" '"'"'.transport.url == $u and .transport.bearer_token_env_var == "AGENTAINER_MCP_TOKEN"'"'"' >/dev/null && echo get-ok
+	awk '"'"'/^\[/ { t = 1 } $0 == "cli_auth_credentials_store = \"file\"" && !t { print "auth-top-level" }'"'"' "$c"
+	grep -A1 -xF "[shell_environment_policy.filters]" "$c" | grep -qxF "\"AGENTAINER_MCP_*\" = \"exclude\"" && echo filter-ok
+	grep -qF "$TOKEN" "$c" && echo token-in-config
+	echo done' 2>&1)
+assert_contains "codex mcp get shows the gateway URL and bearer variable" "get-ok" "$out"
+assert_contains "cli_auth_credentials_store stays at top level" "auth-top-level" "$out"
+assert_contains "the shell policy excludes AGENTAINER_MCP_*" "filter-ok" "$out"
+assert_absent "the token is not in config.toml" "$out" "done" "token-in-config" "setup failed"
+# shellcheck disable=SC2016 # expands in the container
+out=$(mcp_kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- '
+	as_kelos /kelos_entrypoint.sh >/dev/null 2>&1 && echo "mcp_servers=$(grep -c "mcp_servers" /home/kelos/.codex/config.toml)"' 2>&1)
+assert_eq "codex without MCP files has no mcp_servers table" "mcp_servers=0" "$out"
+# A real start hands the token to codex in its environment only. A stub codex
+# prints what it receives.
+# shellcheck disable=SC2016 # expands in the stub
+codex_tok_stub='#!/bin/sh
+echo "codex-token=${AGENTAINER_MCP_TOKEN:-unset}" >&2
+exit 0
+'
+# shellcheck disable=SC2016 # expands in the container
+out=$(mcp_kr -e KELOS_AGENT_TYPE=codex -e "STUB=$codex_tok_stub" -e "MCP_U=$(b64 "$mcp_url")" -e "MCP_T=$(b64nl "$mcp_token")" -- '
+	printf "%s" "$STUB" >/usr/local/bin/codex && chmod 755 /usr/local/bin/codex
+	as_kelos /kelos_entrypoint.sh hi; echo "rc=$?"' 2>&1)
+assert_contains "codex receives the token in AGENTAINER_MCP_TOKEN" "codex-token=t0k-abcdefghijklm
+" "$out"
+assert_contains "the codex start with MCP exits 0" "rc=0" "$out"
+
+# Exactly one of the two files is refused, for both CLIs.
+for agent in claude-code codex; do
+	assert_eq "$agent: only the url file is refused" "78" "$(mcp_setup_rc "$agent" -e "MCP_U=$(b64 "$mcp_url")")"
+	assert_eq "$agent: only the token file is refused" "78" "$(mcp_setup_rc "$agent" -e "MCP_T=$(b64 "$mcp_token")")"
+	assert_eq "$agent: a url and token with one trailing newline each start" "0" \
+		"$(mcp_setup_rc "$agent" -e "MCP_U=$(b64nl "$mcp_url")" -e "MCP_T=$(b64nl "$mcp_token")")"
+done
+
+# A URL that is not https, or that holds a quote, backslash, space, newline or
+# query, is refused and the url file is named. So is one over 512 bytes.
+long_url=https://gw.example.test/$(head -c 500 /dev/zero | tr '\0' a)
+mcp_url_case() {
+	for agent in claude-code codex; do
+		out=$(mcp_kr -e KELOS_AGENT_TYPE="$agent" -e KELOS_SESSION_SETUP_ONLY=1 -e "MCP_U=$(b64 "$2")" -e "MCP_T=$(b64 "$mcp_token")" -- \
+			'as_kelos /kelos_entrypoint.sh; echo "rc=$?"' 2>&1)
+		assert_contains "$agent: url $1 is refused" "rc=78" "$out"
+		assert_contains "$agent: url $1 refusal names the file" "/etc/agentainer/mcp/url" "$out"
+	done
+}
+mcp_url_case "http" "http://gw.example.test/mcp"
+mcp_url_case "with a quote" 'https://gw.example.test/m"cp'
+mcp_url_case "with a backslash" 'https://gw.example.test/m\cp'
+mcp_url_case "with a space" 'https://gw.example.test/m cp'
+mcp_url_case "with a newline" "$(printf 'https://gw.example.test/mcp\nhttps://other.example.test/')"
+mcp_url_case "with a query" 'https://gw.example.test/mcp?x=1'
+mcp_url_case "over 512 bytes" "$long_url"
+
+# A token that is empty, under 16 characters, holds a quote, backslash or space,
+# or is over 4096 bytes is refused. The refusal names the file, never the value.
+# 16 and 4096 characters are accepted.
+mcp_token_case() {
+	assert_eq "token $1 is refused" "78" "$(mcp_setup_rc claude-code -e "MCP_U=$(b64 "$mcp_url")" -e "MCP_T=$(b64 "$2")")"
+}
+mcp_token_case "empty" ""
+mcp_token_case "of 15 characters" "abcdefghijklmno"
+mcp_token_case "with a quote" 'abcdefghijklmnop"q'
+mcp_token_case "with a backslash" 'abcdefghijklmnop\q'
+mcp_token_case "with a space" 'abcdefghijklmnop q'
+mcp_token_case "over 4096 bytes" "$(head -c 4097 /dev/zero | tr '\0' a)"
+assert_eq "a token of 16 characters is accepted" "0" "$(mcp_setup_rc codex -e "MCP_U=$(b64 "$mcp_url")" -e "MCP_T=$(b64 abcdefghijklmnop)")"
+assert_eq "a token of 4096 characters is accepted" "0" "$(mcp_setup_rc codex -e "MCP_U=$(b64 "$mcp_url")" -e "MCP_T=$(b64 "$(head -c 4096 /dev/zero | tr '\0' a)")")"
+out=$(mcp_kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e "MCP_U=$(b64 "$mcp_url")" -e "MCP_T=$(b64 short-token-val)" -- \
+	'as_kelos /kelos_entrypoint.sh; echo "rc=$?"' 2>&1)
+assert_contains "a short token refusal names the file" "/etc/agentainer/mcp/token" "$out"
+assert_absent "a short token refusal does not print the value" "$out" "rc=78" "short-token-val"
+
+# The token must come from the file, never the pod environment.
+for agent in claude-code codex; do
+	out=$(kr -e KELOS_AGENT_TYPE="$agent" -e KELOS_SESSION_SETUP_ONLY=1 -e CLAUDE_CODE_OAUTH_TOKEN=x -e AGENTAINER_MCP_TOKEN=abcdefghijklmnop -- /kelos_entrypoint.sh 2>&1)
+	rc=$?
+	assert_eq "$agent: AGENTAINER_MCP_TOKEN in the environment is refused" "78" "$rc"
+	assert_contains "$agent: the refusal names AGENTAINER_MCP_TOKEN" "AGENTAINER_MCP_TOKEN" "$out"
+done
+
 finish

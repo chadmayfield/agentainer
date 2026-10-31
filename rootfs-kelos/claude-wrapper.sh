@@ -23,12 +23,28 @@ done
 # --setting-sources user: load only the image's user settings, never the
 # cloned repo's .claude/settings.json or settings.local.json, whose env block
 # could swap the credential and whose hooks run before the first prompt.
-# --strict-mcp-config: ignore the repo's .mcp.json servers for the same reason.
+# --strict-mcp-config: ignore the repo's .mcp.json servers for the same reason;
+# only the gateway file below, when there is one, is read.
 # --setting-sources user also stops the repo's CLAUDE.md from loading, so a
 # regular-file CLAUDE.md in the working directory (the cloned repo) is passed
 # as prompt text instead: its rules apply, its settings never do.
 extra=()
 if [ -f ./CLAUDE.md ] && [ ! -L ./CLAUDE.md ]; then
   extra=(--append-system-prompt-file "$PWD/CLAUDE.md")
+fi
+# MCP gateway: kelos_preflight has checked the mounted url and token files and
+# set mcp_url when both are present. The config names the URL and the header
+# helper, never the token; the helper reads the token file each time Claude
+# connects. $HOME/.claude is in the image layer, so the file is new in each pod.
+# shellcheck disable=SC2154 # set by mcp_check in kelos_guard.sh
+if [ -n "$mcp_url" ]; then
+  mcp_config=$HOME/.claude/mcp-gateway.json
+  # shellcheck disable=SC2016 # $u is a jq variable
+  # Remove first, so a link left at that path is replaced and not followed.
+  if ! (umask 077 && /usr/bin/rm -f -- "$mcp_config" && "$JQ" -n --arg u "$mcp_url" \
+    '{mcpServers: {gateway: {type: "http", url: $u, headersHelper: "/usr/local/lib/kelos/mcp-headers"}}}' >"$mcp_config"); then
+    refuse "cannot write $mcp_config"
+  fi
+  extra=(--mcp-config "$mcp_config" "${extra[@]}")
 fi
 exec /usr/bin/env -i "${kept[@]}" /usr/local/bin/claude --setting-sources user --strict-mcp-config "${extra[@]}" "$@"
