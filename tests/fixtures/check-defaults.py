@@ -281,6 +281,20 @@ class DefaultsTests(unittest.TestCase):
         self.assertEqual(result.strip(), 'probe')
         self.command(['bat', '--paging=never', str(HOME / '.gitconfig')])
 
+    def test_fzf_colors_use_theme(self):
+        text = (HOME / '.config/fzf/config').read_text()
+        lines = [l for l in text.splitlines() if l.startswith('--color=')]
+        self.assertEqual(len(lines), 1, text)
+        colors = dict(item.split(':', 1) for item in lines[0][len('--color='):].split(','))
+        self.assertEqual(colors, {
+            'bg': '#010409', 'bg+': '#151b23',
+            'fg': '#e6edf3', 'fg+': '#e6edf3',
+            'hl': '#58a6ff', 'hl+': '#79c0ff',
+            'info': '#9198a1',
+            'prompt': '#58a6ff', 'pointer': '#58a6ff', 'spinner': '#58a6ff',
+            'marker': '#3fb950', 'header': '#d2a8ff', 'border': '#3d444d',
+        })
+
     def test_vim_honors_project_editorconfig_and_has_no_gutter_underline(self):
         with tempfile.TemporaryDirectory(prefix='cx-vim-defaults-') as directory:
             base = Path(directory)
