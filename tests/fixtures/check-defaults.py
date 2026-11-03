@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import pwd
+import plistlib
 import pty
 import re
 import select
@@ -16,6 +17,7 @@ import fcntl
 from pathlib import Path
 import subprocess
 import tempfile
+import tomllib
 import unittest
 
 HOME = Path.home()
@@ -174,7 +176,7 @@ class DefaultsTests(unittest.TestCase):
         self.assertEqual(agy['colorScheme'], 'terminal')
         self.assertIs(agy['notifications'], True)
         cli = json.loads((HOME / '.config/opencode/cli.json').read_text())
-        self.assertEqual(cli['theme'], {'name': 'ayu', 'mode': 'dark'})
+        self.assertEqual(cli['theme'], {'name': 'github-dark', 'mode': 'dark'})
         self.assertEqual(cli['session']['permissions'], 'prompt')
         self.assertEqual(cli['attention'], {'notifications': True, 'sound': False})
         self.assertEqual(cli['diffs'], {'view': 'auto', 'wrap': 'word', 'tree': True})
@@ -248,14 +250,17 @@ class DefaultsTests(unittest.TestCase):
             os.waitpid(pid, 0)
             os.close(master)
 
-    def assert_opencode_loaded_ayu(self, output):
+    def assert_opencode_loaded_theme(self, output):
         plain = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', output)
         self.assertIn('Ask anything', plain, 'OpenCode did not render its input prompt')
-        self.assertIn('\x1b]12;#bfbdb6\x07', output,
-                      'OpenCode did not apply the configured Ayu cursor color')
+        # Only the seeded github-dark theme paints the #010409 background.
+        self.assertIn('48;2;1;4;9m', output,
+                      'OpenCode did not paint the GitHub Dark background')
+        self.assertIn('\x1b]12;#e6edf3\x07', output,
+                      'OpenCode did not apply the GitHub Dark cursor color')
 
     def test_opencode_native_client_loads_cli_config_and_detects_fallback(self):
-        self.assert_opencode_loaded_ayu(self.opencode_terminal())
+        self.assert_opencode_loaded_theme(self.opencode_terminal())
         path = HOME / '.config/opencode/cli.json'
         original = path.read_bytes()
         try:
@@ -266,9 +271,23 @@ class DefaultsTests(unittest.TestCase):
             plain = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', output)
             self.assertIn('Ask anything', plain, 'OpenCode did not render its input prompt')
             with self.assertRaises(AssertionError):
-                self.assert_opencode_loaded_ayu(output)
+                self.assert_opencode_loaded_theme(output)
         finally:
             path.write_bytes(original)
+
+    def test_codex_theme_is_configured_and_parses(self):
+        with (HOME / '.codex/config.toml').open('rb') as file:
+            config = tomllib.load(file)
+        self.assertEqual(config['tui']['theme'], 'github-dark')
+        with (HOME / '.codex/themes/github-dark.tmTheme').open('rb') as file:
+            theme = plistlib.load(file)
+        self.assertEqual(theme['settings'][0]['settings']['background'], '#010409')
+        scopes = {scope.strip() for item in theme['settings'][1:]
+                  for scope in item['scope'].split(',')}
+        for scope in ('keyword', 'storage', 'string', 'comment', 'entity.name.function',
+                      'entity.name.tag', 'constant', 'variable'):
+            with self.subTest(scope=scope):
+                self.assertIn(scope, scopes)
 
     def test_shell_completion_and_cli_theme_options_are_usable(self):
         output = self.command(['bash', '-ic',
