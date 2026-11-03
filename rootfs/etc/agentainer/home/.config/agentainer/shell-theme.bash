@@ -1,5 +1,6 @@
 # Agentainer colors: GitHub Dark. Blue user, gray host and bold light path.
-# Palette: https://github.com/primer/primitives (@primer/primitives 11.10.0) and the maintainer's github-dark.terminal profile.
+# Palette: https://github.com/primer/primitives/blob/%40primer/primitives%4011.10.0/src/tokens/base/color/dark/dark.json5
+# Terminal colors: https://terminalcolors.com/downloads/ghostty/github-dark
 # Bash prompt escapes: https://www.gnu.org/software/bash/manual/html_node/Controlling-the-Prompt.html
 PS1='\[\e[38;2;88;166;255m\]\u\[\e[38;2;145;152;161m\]@\h\[\e[0m\]:\[\e[1;38;2;230;237;243m\]\w\[\e[0m\] \[\e[38;2;88;166;255m\]\$\[\e[0m\] '
 

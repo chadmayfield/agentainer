@@ -57,12 +57,12 @@ Limits:
 
 The launcher skips a value it cannot use:
 
-- A locale must be `C.UTF-8`, or `language_TERRITORY.UTF-8` (or `.utf8`) with an optional `@modifier`, such as `en_US.UTF-8` or `sr_RS.UTF-8@latin`. Other codesets, and macOS's bare `LC_CTYPE=UTF-8`, are skipped, because tmux needs a UTF-8 locale.
+- A locale must be `C.UTF-8`, `C.utf8`, or `language_TERRITORY.UTF-8` (or `.utf8`) with an optional `@modifier`, such as `en_US.UTF-8` or `sr_RS.UTF-8@latin`. Other codesets, and macOS's bare `LC_CTYPE=UTF-8`, are skipped, because tmux needs a UTF-8 locale.
 - `TZ` must be a zone name such as `America/Denver` or `UTC`. A value that starts with `:` names a file and is skipped.
 
-Variables your env file sets win. Both runtimes let `-e` override `--env-file`, so the launcher reads the variable names in the env file and does not pass those variables. It reads names only and never prints the file's values.
+Variables your env file sets win. Both runtimes let `-e` override `--env-file` ([docker/cli `opts/parse.go`](https://github.com/docker/cli/blob/master/opts/parse.go), [Podman environment precedence](https://docs.podman.io/en/latest/markdown/podman-run.1.html)), so the launcher reads the variable names in the env file and does not pass those variables. It reads names only and never prints the file's values.
 
-`up` records what it passed in the `io.github.chadmayfield.agentainer.locale` label. `update` passes those recorded values again and does not read your current shell, so an update from cron or SSH changes nothing. A container created before the label existed gets no locale or time zone from `update`. To change the locale or time zone of a container, run `agentainer down` and then `agentainer up`; the home volume stays.
+`up` records what it passed in the `io.github.chadmayfield.agentainer.locale` label. `update` passes those recorded values again and does not read your current shell, so an update from cron or SSH changes nothing. A container created before the label existed gets no locale or time zone from `update`. A value passed from your shell changes only when you run `agentainer down` and then `agentainer up`; the home volume stays. A `LANG` or `TZ` set in the env file is read again on every `update`, so editing it there takes effect on `update`.
 
 ## Development server ports
 

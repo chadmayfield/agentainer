@@ -1,5 +1,6 @@
 " Agentainer colors, GitHub Dark. Near-black panes and a blue status line.
-" Palette: GitHub Dark terminal colors and @primer/primitives 11.10.0
+" Palette: https://github.com/primer/primitives/blob/%40primer/primitives%4011.10.0/src/tokens/base/color/dark/dark.json5
+" Terminal colors: https://terminalcolors.com/downloads/ghostty/github-dark
 " Highlight groups: :help highlight-groups
 highlight clear
 if exists('syntax_on')

@@ -39,7 +39,6 @@ Text that a default sets directly has a contrast ratio of at least 4.5:1 against
 
 Primer's current neutral values replace the older GitHub grays (`#161b22`, `#8b949e`) that many third-party themes still use.
 
-
 The shell exports `LS_COLORS` from `~/.config/agentainer/shell-theme.bash`. It gives `ls` and eza bold blue directories, cyan symbolic links, green executables and purple pipes and devices. Edit that file to customize the file colors. Agentainer does not change the host terminal's ANSI palette, which bat's `ansi` theme uses.
 
 Sockets use a second purple (`#bc8cff`). Setuid executables and world-writable directories without the sticky bit use bold red on a dark red background. Setgid executables use bold orange on dark orange. Sticky directories use cyan on dark blue, and sticky world-writable directories use blue on dark blue. These explicit RGB colors do not depend on the terminal's ANSI palette. The special permission styles override ordinary directory and executable colors.
@@ -75,7 +74,7 @@ Shell behavior:
 
 Colors:
 
-- The bat build does not include a GitHub theme. Its `ansi` theme uses the terminal's ANSI palette instead of downloading a theme.
+- bat has no GitHub Dark theme (`bat --list-themes` shows only a light `GitHub` theme), so the seeded `ansi` theme uses the terminal's ANSI palette.
 - fzf uses the explicit RGB palette in its options file.
 - eza reads `~/.config/eza/theme.yml`. `LS_COLORS` and `EZA_COLORS` take precedence over file-name colors. The theme also colors metadata in long listings such as `eza --long --group --header`.
 - Git uses bold blue diff headings, purple hunk markers, white context, green additions and red removals. Status shows added files in green, changed files in yellow (`#d29922`) and untracked files in orange. The current branch is bold blue and remote branches are cyan. Commit hashes keep Git's default yellow and `HEAD` keeps its default bold cyan. `color.ui=auto` keeps redirected output free of color escapes.
@@ -140,6 +139,6 @@ Customize models, providers, plugins and hooks in your own home files. Keep API 
 
 Image upgrades do not replace your `.bashrc`, `.gitconfig`, `.vimrc`, `.tmux.conf` or agent settings. Compare desired files with `/etc/agentainer/home/` and apply changes yourself. [Upgrading](running.md#upgrading) lists the few files that startup does change.
 
-Home volumes created before the GitHub Dark colors keep their old settings. Startup adds the three theme files above because they are missing, but it does not change `~/.claude/settings.json`, `~/.codex/config.toml` or `~/.config/opencode/cli.json`. To switch an existing home, run `/theme` in Claude Code or OpenCode, or copy the `theme` setting from `/etc/agentainer/home/`. Colors in files such as `.tmux.conf` and `.gitconfig` change only if you copy them from the image.
+Home volumes created before the GitHub Dark colors keep their old settings. Startup adds the three theme files above because they are missing, but it does not change `~/.claude/settings.json`, `~/.codex/config.toml` or `~/.config/opencode/cli.json`. To switch an existing home, run `/theme` in Claude Code or `/themes` in OpenCode, or copy the `theme` setting from `/etc/agentainer/home/`. Colors in files such as `.tmux.conf` and `.gitconfig` change only if you copy them from the image.
 
 Changes to image seed files do not modify running containers.

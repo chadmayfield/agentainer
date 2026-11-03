@@ -6,7 +6,7 @@
     pager = less -FRSX
 [color]
     ui = auto
-# GitHub Dark colors. Palette sources: https://github.com/primer/primitives (@primer/primitives 11.10.0) and the maintainer's github-dark.terminal. Git emits them only when color.ui or the command enables color.
+# GitHub Dark colors. Palette sources: https://github.com/primer/primitives/blob/%40primer/primitives%4011.10.0/src/tokens/base/color/dark/dark.json5 and https://terminalcolors.com/downloads/ghostty/github-dark. Git emits them only when color.ui or the command enables color.
 [color "diff"]
     context = "#e6edf3"
     meta = "#58a6ff" bold
