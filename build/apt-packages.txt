@@ -31,6 +31,7 @@ less
 libatomic1
 libimage-exiftool-perl
 libssl-dev
+locales-all
 make
 nano
 netcat-openbsd
