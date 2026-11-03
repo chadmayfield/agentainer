@@ -149,9 +149,14 @@ def installed_locales(env):
     return {normalize_locale(line) for line in done.stdout.decode("utf-8", "replace").splitlines() if line.strip()}
 
 
+LOCALE_VARIABLES = ("LANG", "LC_ALL", "LC_CTYPE", "LC_NUMERIC", "LC_TIME", "LC_COLLATE", "LC_MONETARY",
+                    "LC_MESSAGES", "LC_PAPER", "LC_NAME", "LC_ADDRESS", "LC_TELEPHONE",
+                    "LC_MEASUREMENT", "LC_IDENTIFICATION")
+
+
 def locale_check(env, locales):
     available = {"c", "posix"} | locales
-    names = sorted(name for name in env if name in ("LANG", "LC_ALL") or name.startswith("LC_"))
+    names = [name for name in LOCALE_VARIABLES if name in env]
     missing = [name for name in names if env[name] and normalize_locale(env[name]) not in available]
     if missing:
         return result("locale", "warn", "{} names a locale this image does not have".format(", ".join(missing)))

@@ -97,6 +97,12 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("LC_TIME", locale["message"])
         self.assertNotIn("en_DE", json.dumps(checks))
 
+    def test_non_category_lc_variable_is_ignored(self):
+        self.env["LC_TERMINAL"] = "iTerm2"
+        checks = self.collect()
+        locale = next(c for c in checks if c["name"] == "locale")
+        self.assertEqual(locale["status"], "ok")
+
     def test_available_locale_is_ok(self):
         self.env["LANG"] = "en_US.UTF-8"
         checks = self.collect(locales={"c.utf8", "en_us.utf8"})
