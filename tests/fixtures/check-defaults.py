@@ -325,14 +325,29 @@ class DefaultsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertNotIn('W22:', result.stderr)
 
-    def test_tmux_theme_and_shortcuts_load(self):
+    def test_tmux_theme_status_bar_and_shortcuts_load(self):
         socket = 'cx-defaults-%s' % os.getpid()
         base = ['tmux', '-L', socket]
+        conf = HOME / '.tmux.conf'
         try:
-            self.command(base + ['-f', str(HOME / '.tmux.conf'), 'new-session', '-d', '-s', 'cx-defaults'])
-            style = self.command(base + ['show-options', '-g', 'status-style'])
-            self.assertIn('bg=#202020', style)
-            self.assertIn('fg=#e6b450', style)
+            self.command(base + ['-f', str(conf), 'new-session', '-d', '-s', 'cx-defaults'])
+
+            def option(name):
+                return self.command(base + ['show-options', '-gv', name]).rstrip('\n')
+
+            self.assertEqual(option('status-style'), 'bg=#151b23,fg=#58a6ff')
+            self.assertEqual(option('status-right-length'), '64')
+            self.assertEqual(option('window-status-format'), ' #I:#W ')
+            self.assertEqual(option('window-status-current-format'), ' #I:#W ')
+            self.assertNotIn('#F', option('window-status-format'))
+            self.assertEqual(option('window-status-style'), 'fg=#58a6ff,bg=#151b23')
+            self.assertNotIn('underscore', option('window-status-activity-style'))
+            status_right = option('status-right')
+            self.assertIn('%x', status_right)
+            self.assertIn(' agentainer ', status_right)
+            activity_lines = [line for line in conf.read_text().splitlines()
+                              if re.match(r'\s*set(-option)?\s+.*window-status-activity-style', line)]
+            self.assertEqual(len(activity_lines), 1, activity_lines)
             self.assertIn('1', self.command(base + ['show-options', '-g', 'base-index']))
             for key in ('|', '-', 'r', 'c', 'H', 'J', 'K', 'L'):
                 self.command(base + ['list-keys', '-T', 'prefix', key])
