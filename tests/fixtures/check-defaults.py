@@ -60,7 +60,7 @@ class DefaultsTests(unittest.TestCase):
             self.assertEqual(set(ignored.splitlines()), set(paths))
             self.assertEqual(run(['git', '-C', directory, 'check-ignore', 'source.py']).returncode, 1)
 
-    def test_git_diff_and_status_use_ayu_colors(self):
+    def test_git_diff_and_status_use_theme_colors(self):
         with tempfile.TemporaryDirectory(prefix='cx-git-colors-') as directory:
             base = Path(directory)
             before, after = base / 'before', base / 'after'
@@ -68,14 +68,25 @@ class DefaultsTests(unittest.TestCase):
             after.write_text('added line\n')
             diff = run(['git', 'diff', '--no-index', '--color=always', str(before), str(after)])
             self.assertEqual(diff.returncode, 1, diff.stdout + diff.stderr)
-            self.assertIn('38;2;170;217;76m+', diff.stdout)
-            self.assertIn('38;2;170;217;76madded line', diff.stdout)
-            self.assertIn('38;2;240;113;120m-removed line', diff.stdout)
-            self.assertIn('38;2;230;180;80m@@', diff.stdout)
-            self.command(['git', 'init', directory])
-            status = self.command(['git', '-C', directory, '-c', 'color.ui=always', 'status', '--short'])
-            self.assertIn('38;2;230;180;80m??', status)
-            plain = self.command(['git', '-C', directory, 'status', '--short'])
+            self.assertIn('1;38;2;88;166;255m', diff.stdout)
+            self.assertIn('38;2;63;185;80m+', diff.stdout)
+            self.assertIn('38;2;63;185;80madded line', diff.stdout)
+            self.assertIn('38;2;255;123;114m-removed line', diff.stdout)
+            self.assertIn('38;2;210;168;255m@@', diff.stdout)
+            repo = base / 'repo'
+            self.command(['git', 'init', str(repo)])
+            (repo / 'tracked').write_text('one\n')
+            self.command(['git', '-C', str(repo), 'add', 'tracked'])
+            self.command(['git', '-C', str(repo), '-c', 'user.name=Example',
+                          '-c', 'user.email=agent@example.com', 'commit', '-m', 'first'])
+            (repo / 'tracked').write_text('two\n')
+            (repo / 'untracked').write_text('x\n')
+            status = self.command(['git', '-C', str(repo), '-c', 'color.ui=always', 'status', '--short'])
+            self.assertIn('38;2;255;166;87m??', status)
+            self.assertIn('38;2;210;153;34mM', status)
+            log = self.command(['git', '-C', str(repo), 'log', '--color=always', '--oneline', '-1'])
+            self.assertIn('\x1b[33m', log)
+            plain = self.command(['git', '-C', str(repo), 'status', '--short'])
             self.assertNotIn('\x1b[', plain)
 
     def test_ls_colors_reach_interactive_file_listings(self):

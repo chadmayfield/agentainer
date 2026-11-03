@@ -16,7 +16,6 @@ SEEDED = "rootfs/etc/agentainer/home"
 PENDING = tuple(
     SEEDED + "/" + f
     for f in (
-        ".gitconfig",
         ".config/fzf/config",
         ".tmux.conf",
         ".vim/colors/agentainer.vim",

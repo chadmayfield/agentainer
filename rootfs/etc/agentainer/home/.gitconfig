@@ -6,28 +6,28 @@
     pager = less -FRSX
 [color]
     ui = auto
-# Agentainer RGB colors, inspired by Ayu. Git emits them only when color.ui or the command enables color.
+# GitHub Dark colors. Palette sources: https://github.com/primer/primitives (@primer/primitives 11.10.0) and the maintainer's github-dark.terminal. Git emits them only when color.ui or the command enables color.
 [color "diff"]
-    context = "#bfbdb6"
-    meta = "#e6b450" bold
-    frag = "#e6b450"
-    old = "#f07178"
-    new = "#aad94c"
-    whitespace = "#000000" "#f07178"
+    context = "#e6edf3"
+    meta = "#58a6ff" bold
+    frag = "#d2a8ff"
+    old = "#ff7b72"
+    new = "#3fb950"
+    whitespace = normal "#ff7b72"
 [color "status"]
-    added = "#aad94c"
-    changed = "#e6b450"
-    untracked = "#e6b450"
-    unmerged = "#f07178" bold
-    branch = "#59c2ff"
+    added = "#3fb950"
+    changed = "#d29922"
+    untracked = "#ffa657"
+    unmerged = "#ff7b72" bold
+    branch = "#58a6ff"
 [color "branch"]
-    current = "#e6b450" bold
-    local = "#bfbdb6"
-    remote = "#95e6cb"
+    current = "#58a6ff" bold
+    local = "#e6edf3"
+    remote = "#39c5cf"
 [color "decorate"]
-    branch = "#e6b450" bold
-    remoteBranch = "#59c2ff"
-    tag = "#d2a6ff"
+    branch = "#58a6ff" bold
+    remoteBranch = "#39c5cf"
+    tag = "#d2a8ff"
 [init]
     defaultBranch = main
 [user]
@@ -53,7 +53,7 @@
     summary = log --oneline
     graph = log --graph --oneline --decorate
     changes = log --oneline --reverse
-    lg = "log --graph --abbrev-commit --decorate --format=format:'%C(bold #e6b450)%h%C(reset) - %C(#59c2ff)(%ar)%C(reset) %C(#bfbdb6)%s%C(reset) %C(#747474)- %an%C(reset)%C(auto)%d%C(reset)'"
+    lg = "log --graph --abbrev-commit --decorate --format=format:'%C(bold #d29922)%h%C(reset) - %C(#58a6ff)(%ar)%C(reset) %C(#e6edf3)%s%C(reset) %C(#9198a1)- %an%C(reset)%C(auto)%d%C(reset)'"
 
 [push]
     default = simple
