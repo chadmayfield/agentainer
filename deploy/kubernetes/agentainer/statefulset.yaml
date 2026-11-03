@@ -33,6 +33,14 @@ spec:
           image: ghcr.io/chadmayfield/agentainer:latest
           envFrom:
             - secretRef: {name: agentainer-credentials, optional: true}
+          # Time zone and locale for tmux and the agents. These values repeat the image
+          # defaults. To change them, for example to America/Denver and en_US.UTF-8, edit
+          # the values below. An explicit env entry overrides the same name in the
+          # agentainer-credentials Secret (envFrom). To set TZ or LANG in the Secret
+          # instead, delete the matching entry here.
+          env:
+            - {name: TZ, value: UTC}
+            - {name: LANG, value: C.UTF-8}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
