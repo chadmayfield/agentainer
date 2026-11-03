@@ -22,8 +22,8 @@ PENDING = tuple(
     )
 )
 
-# Paths outside the docs that still say Ayu. Remove a path from this tuple
-# in the commit that converts it.
+# Paths excluded from the Ayu wording check because they still carry the old
+# palette name (screenshots gallery, seeded configs and the defaults checker).
 AYU_PENDING = (
     "tests/visual",
     "artifacts/visual",
