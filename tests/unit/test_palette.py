@@ -18,7 +18,6 @@ PENDING = tuple(
     for f in (
         ".config/fzf/config",
         ".tmux.conf",
-        ".vim/colors/agentainer.vim",
     )
 )
 
