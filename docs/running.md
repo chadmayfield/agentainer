@@ -47,6 +47,23 @@ Limits:
 - Container names also serve as hostnames. They must be at most 64 ASCII characters and start with a letter or digit ([launcher](../bin/agentainer), [hostname limit](https://man7.org/linux/man-pages/man2/sethostname.2.html)).
 - `update` pulls from a registry, so it cannot update a container that runs an image you built locally (`localhost/...`). Use `agentainer down` and `agentainer up --image ...` for those.
 
+### Locale and time zone
+
+`up` passes your shell's locale and time zone into the new container with `-e`:
+
+- `LANG` and `LC_ALL`.
+- The locale categories glibc defines: `LC_CTYPE`, `LC_NUMERIC`, `LC_TIME`, `LC_COLLATE`, `LC_MONETARY`, `LC_MESSAGES`, `LC_PAPER`, `LC_NAME`, `LC_ADDRESS`, `LC_TELEPHONE`, `LC_MEASUREMENT` and `LC_IDENTIFICATION`. Other `LC_` names, such as iTerm2's `LC_TERMINAL`, stay on the host.
+- `TZ`. When `TZ` is unset, the launcher reads the zone name from the `/etc/localtime` link, the part after `zoneinfo/`. On macOS that link is `/var/db/timezone/zoneinfo/America/Denver`, for example.
+
+The launcher skips a value it cannot use:
+
+- A locale must be `C.UTF-8`, or `language_TERRITORY.UTF-8` (or `.utf8`) with an optional `@modifier`, such as `en_US.UTF-8` or `sr_RS.UTF-8@latin`. Other codesets, and macOS's bare `LC_CTYPE=UTF-8`, are skipped, because tmux needs a UTF-8 locale.
+- `TZ` must be a zone name such as `America/Denver` or `UTC`. A value that starts with `:` names a file and is skipped.
+
+Variables your env file sets win. Both runtimes let `-e` override `--env-file`, so the launcher reads the variable names in the env file and does not pass those variables. It reads names only and never prints the file's values.
+
+`up` records what it passed in the `io.github.chadmayfield.agentainer.locale` label. `update` passes those recorded values again and does not read your current shell, so an update from cron or SSH changes nothing. A container created before the label existed gets no locale or time zone from `update`. To change the locale or time zone of a container, run `agentainer down` and then `agentainer up`; the home volume stays.
+
 ## Development server ports
 
 Repeat `--publish` or `-p` before DIR to publish development servers to the host:
@@ -176,7 +193,7 @@ bin/agentainer update
 
 How `update` works:
 
-- `up` records DIR, image, sudo setting, home volume, published ports and the env file's absolute path as container labels. `update` reads them back.
+- `up` records DIR, image, sudo setting, home volume, published ports, the env file's absolute path and the [locale and time zone](#locale-and-time-zone) it passed as container labels. `update` reads them back.
 - `update` changes nothing when the pull fails, when DIR or the env file no longer exists, or when the container has no option labels.
 - After the pull, `update` renames the old container to `cx-agentainer-backup-N` and stops it. It removes the backup only after the new container starts. If creation or startup fails, it restores the old container in its previous running or stopped state. Changes the new container made to the home or workspace are not rolled back.
 - Startup may take up to 180 seconds. The new container counts as started when the entrypoint's completion marker exists; for an older image without the marker, when its tools link exists. If the launcher is killed before it can restore a failed update, inspect `cx-agentainer-backup-N` before you retry. `update` refuses to overwrite an existing backup.
