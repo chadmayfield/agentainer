@@ -157,11 +157,18 @@ locale_env() (
 )
 
 # env_file_keys FILE: print the variable names FILE sets, one per line, never their values.
-# Format: leading whitespace is ignored, "#" starts a comment, KEY or KEY=value
-# (https://github.com/docker/cli/blob/master/pkg/kvfile/kvfile.go).
-env_file_keys() {
-	sed -n -e 's/^[[:space:]]*//' -e '/^#/d' -e 's/=.*//' -e 's/[[:space:]]*$//' -e '/./p' "$1"
-}
+# Format: a UTF-8 byte order mark and leading whitespace are ignored, "#" starts a
+# comment, KEY or KEY=value (https://github.com/docker/cli/blob/master/pkg/kvfile/kvfile.go).
+# The final echo ends a last line that has no newline, which BSD sed would leave open.
+env_file_keys() (
+	bom=$(printf '\357\273\277')
+	{
+		IFS= read -r first || [ -n "$first" ] || exit 0
+		printf '%s\n' "${first#"$bom"}"
+		cat
+		echo
+	} <"$1" | sed -n -e 's/^[[:space:]]*//' -e '/^#/d' -e 's/=.*//' -e 's/[[:space:]]*$//' -e '/./p'
+)
 
 cmd=${1:-}
 [ -n "$cmd" ] || usage
@@ -275,7 +282,7 @@ create() {
 	IFS=' '
 	for pair in $pairs; do
 		valid_locale_pair "$pair" || continue
-		case " $file_keys" in *" ${pair%%=*} "*) continue ;; esac
+		case " $file_keys " in *" ${pair%%=*} "*) continue ;; esac
 		set -- "$@" -e "$pair"
 		passed="${passed:+$passed }$pair"
 	done

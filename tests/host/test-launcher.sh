@@ -221,5 +221,15 @@ assert_absent "the env file wins over the host" "$out" "$img" "TZ=America/Denver
 assert_absent "env file values are never printed" "$out" "$img" "cx-secret-123" "Asia/Tokyo"
 has_line "variables the env file does not set still pass" "LC_TIME=de_DE.UTF-8" "$out"
 has_line "the label records only what passed" "$p.locale=LC_TIME=de_DE.UTF-8" "$out"
+# Docker strips a UTF-8 byte order mark before the first key, so the key still counts.
+printf '\357\273\277%s\n' "TZ=Asia/Tokyo" >"$T/env"
+out=$(AGENTAINER_ENV_FILE="$T/env" TZ=America/Denver pod up "$T/my code" 2>&1)
+assert_absent "an env file with a byte order mark still wins" "$out" "$img" "TZ=America/Denver" "Asia/Tokyo"
+printf '\357\273\277\t%s\n' "LANG=de_DE.UTF-8" >"$T/env"
+out=$(AGENTAINER_ENV_FILE="$T/env" LANG=en_US.UTF-8 pod up "$T/my code" 2>&1)
+assert_absent "a byte order mark before leading whitespace is stripped" "$out" "$img" "LANG=en_US.UTF-8" "de_DE"
+printf '%s' "TZ=Asia/Tokyo" >"$T/env"
+out=$(AGENTAINER_ENV_FILE="$T/env" TZ=America/Denver pod up "$T/my code" 2>&1)
+assert_absent "a one-line env file without a newline still wins" "$out" "$img" "TZ=America/Denver"
 
 finish
