@@ -70,9 +70,10 @@ class DoctorTests(unittest.TestCase):
         (self.state / "active").symlink_to(self.tools, target_is_directory=True)
         self.doctor = load_doctor()
 
-    def collect(self, probe=None):
+    def collect(self, probe=None, locales=None):
         return self.doctor.collect(self.home, self.state, self.manifest, self.env,
-                                   probe=probe or (lambda *args, **kwargs: ("ok", "version probe passed")))
+                                   probe=probe or (lambda *args, **kwargs: ("ok", "version probe passed")),
+                                   locales={"c.utf8"} if locales is None else locales)
 
     def assert_safe(self, checks):
         self.assertNotIn(SECRET, json.dumps(checks))
@@ -87,6 +88,20 @@ class DoctorTests(unittest.TestCase):
         self.assertTrue(all(check["status"] == "ok" for check in checks), checks)
         self.assertEqual(snapshot(), before)
         self.assert_safe(checks)
+
+    def test_missing_locale_warns_without_echoing_the_value(self):
+        self.env["LC_TIME"] = "en_DE.UTF-8"
+        checks = self.collect(locales={"c.utf8", "en_us.utf8"})
+        locale = next(c for c in checks if c["name"] == "locale")
+        self.assertEqual(locale["status"], "warn")
+        self.assertIn("LC_TIME", locale["message"])
+        self.assertNotIn("en_DE", json.dumps(checks))
+
+    def test_available_locale_is_ok(self):
+        self.env["LANG"] = "en_US.UTF-8"
+        checks = self.collect(locales={"c.utf8", "en_us.utf8"})
+        locale = next(c for c in checks if c["name"] == "locale")
+        self.assertEqual(locale["status"], "ok")
 
     def test_invalid_json_and_toml_fail_without_echoing_values(self):
         for relative, text in ((".claude/settings.json", '{"' + SECRET + '":'),
