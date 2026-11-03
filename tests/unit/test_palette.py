@@ -11,12 +11,8 @@ from palette import ALLOWED, colors_in  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 SEEDED = "rootfs/etc/agentainer/home"
 
-# Paths excluded from the Ayu wording check. The visual gallery still
-# carries the old palette name.
-AYU_PENDING = (
-    "tests/visual",
-    "artifacts/visual",
-)
+# Paths excluded from the Ayu wording check.
+AYU_PENDING = ()
 
 
 def git_ls_files(prefix):
