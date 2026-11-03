@@ -11,23 +11,11 @@ from palette import ALLOWED, colors_in  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 SEEDED = "rootfs/etc/agentainer/home"
 
-# Files not yet converted to the GitHub Dark palette. Remove a file from
-# this tuple in the commit that converts it.
-PENDING = tuple(
-    SEEDED + "/" + f
-    for f in (
-    )
-)
-
-# Paths excluded from the Ayu wording check because they still carry the old
-# palette name (screenshots gallery, seeded configs and the defaults checker).
+# Paths excluded from the Ayu wording check. The visual gallery still
+# carries the old palette name.
 AYU_PENDING = (
     "tests/visual",
     "artifacts/visual",
-    "tests/fixtures/check-defaults.py",
-    SEEDED + "/.config/opencode/cli.json",
-    SEEDED + "/.tmux.conf",
-    SEEDED + "/.vim/colors/agentainer.vim",
 )
 
 
@@ -39,10 +27,6 @@ def git_ls_files(prefix):
         capture_output=True,
     ).stdout
     return [p.decode() for p in out.split(b"\0") if p]
-
-
-def pending(path):
-    return path in PENDING
 
 
 class PaletteTests(unittest.TestCase):
@@ -58,16 +42,8 @@ class PaletteTests(unittest.TestCase):
         bad = {
             f: sorted(colors_in((ROOT / f).read_text(errors="replace")) - ALLOWED)
             for f in files
-            if pending(f) is False
         }
         self.assertEqual({k: v for k, v in bad.items() if v}, {})
-
-    def test_pending_files_still_hold_old_colors(self):
-        for f in PENDING:
-            self.assertTrue(
-                colors_in((ROOT / f).read_text()) - ALLOWED,
-                f + " is converted; remove it from PENDING",
-            )
 
     def test_no_ayu_wording_outside_history(self):
         result = subprocess.run(
