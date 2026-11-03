@@ -19,6 +19,17 @@ PENDING = tuple(
     )
 )
 
+# Paths excluded from the Ayu wording check because they still carry the old
+# palette name (screenshots gallery, seeded configs and the defaults checker).
+AYU_PENDING = (
+    "tests/visual",
+    "artifacts/visual",
+    "tests/fixtures/check-defaults.py",
+    SEEDED + "/.config/opencode/cli.json",
+    SEEDED + "/.tmux.conf",
+    SEEDED + "/.vim/colors/agentainer.vim",
+)
+
 
 def git_ls_files(prefix):
     out = subprocess.run(
@@ -57,3 +68,15 @@ class PaletteTests(unittest.TestCase):
                 colors_in((ROOT / f).read_text()) - ALLOWED,
                 f + " is converted; remove it from PENDING",
             )
+
+    def test_no_ayu_wording_outside_history(self):
+        result = subprocess.run(
+            ["git", "grep", "-niw", "ayu", "--", ".",
+             ":!tests/unit/test_palette.py"]
+            + [":!" + p for p in AYU_PENDING],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.returncode, 1)
