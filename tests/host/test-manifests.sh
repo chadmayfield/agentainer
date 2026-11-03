@@ -89,6 +89,11 @@ assert_contains "docs/kubernetes.md shows how to create the seed ConfigMap" \
 	"kubectl -n agentainer create configmap agentainer-seed" "$(cat docs/kubernetes.md)"
 assert_eq "PVCs are kept on delete and scale down" "Retain Retain" \
 	"$(q "$sts.spec.persistentVolumeClaimRetentionPolicy | .whenDeleted + \" \" + .whenScaled")"
+assert_eq "agentainer container sets TZ and LANG" "UTC C.UTF-8" \
+	"$(q "$sts.spec.template.spec.containers[0].env | (map(select(.name==\"TZ\"))[0].value) + \" \" + (map(select(.name==\"LANG\"))[0].value)")"
+# Rendered output drops YAML comments, so check the source file.
+assert_eq "statefulset comment shows a changed time zone" "0" \
+	"$(grep -q 'America/Denver' deploy/kubernetes/agentainer/statefulset.yaml >/dev/null 2>&1 && echo 0 || echo 1)"
 assert_eq "headless Service has no ports" "None 0" \
 	"$(q 'select(.kind=="Service" and .metadata.name=="agentainer").spec | .clusterIP + " " + ((.ports // []) | length | tostring)')"
 assert_eq "every object has part-of agentainer" "agentainer" \
