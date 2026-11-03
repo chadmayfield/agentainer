@@ -8,9 +8,9 @@ filekinds:
   pipe: {foreground: "#d2a8ff"}
   block_device: {foreground: "#d2a8ff", is_bold: true}
   char_device: {foreground: "#d2a8ff", is_bold: true}
-  socket: {foreground: "#39c5cf"}
+  socket: {foreground: "#bc8cff", is_bold: false}
   special: {foreground: "#d2a8ff"}
-  executable: {foreground: "#3fb950", is_bold: true}
+  executable: {foreground: "#3fb950", is_bold: false}
   mount_point: {foreground: "#58a6ff", is_bold: true}
 perms:
   user_read: {foreground: "#e6edf3"}

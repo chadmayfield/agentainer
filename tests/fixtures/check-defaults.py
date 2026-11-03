@@ -109,6 +109,8 @@ class DefaultsTests(unittest.TestCase):
             base = Path(directory)
             (base / 'sample.txt').write_text('example\n')
             (base / 'folder').mkdir()
+            (base / 'tool.sh').write_text('#!/bin/sh\n')
+            (base / 'tool.sh').chmod(0o755)
             with socket.socket(socket.AF_UNIX) as server:
                 server.bind(str(base / 'unix.socket'))
             env = dict(os.environ)
@@ -121,7 +123,9 @@ class DefaultsTests(unittest.TestCase):
             self.assertIn('\x1b[1;38;2;88;166;255mPermissions', result.stdout)
             user = pwd.getpwuid(os.getuid()).pw_name
             self.assertRegex(result.stdout, '\x1b\\[(1;)?38;2;88;166;255m' + re.escape(user) + '\x1b')
-            self.assertIn('38;2;255;166;87', result.stdout)
+            self.assertRegex(result.stdout, 'mr\x1b\\[38;2;255;166;87mw')
+            self.assertIn('\x1b[38;2;63;185;80mtool.sh', result.stdout)
+            self.assertIn('\x1b[38;2;188;140;255munix.socket', result.stdout)
             env['LS_COLORS'] = 'di=38;2;1;2;3'
             overridden = self.command(args, env=env)
             self.assertIn('38;2;1;2;3', overridden)
@@ -144,12 +148,15 @@ class DefaultsTests(unittest.TestCase):
                 else:
                     path.write_text('preview\n')
                 path.chmod(mode)
+            os.mkfifo(base / 'named-pipe')
+            entries.append(('named-pipe', None, '38;2;210;168;255'))
+            entries.append(('/dev/null', None, '01;38;2;210;168;255'))
             with socket.socket(socket.AF_UNIX) as server:
                 path = base / 'unix.socket'
                 server.bind(str(path))
                 entries.append(('unix.socket', None, '38;2;188;140;255'))
                 for name, _, style in entries:
-                    path = str(base / name)
+                    path = str(base / name)  # an absolute name such as /dev/null wins
                     with self.subTest(name=name):
                         output = self.command(['bash', '-ic',
                             'ls --color=always --directory "$1"', 'cx-ls-special', path])
