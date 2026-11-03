@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import pwd
 import pty
 import re
 import select
@@ -88,9 +89,9 @@ class DefaultsTests(unittest.TestCase):
             output = self.command(['bash', '-ic',
                 'test -n "$LS_COLORS" && ls --color=always --directory "$@"',
                 'cx-ls-colors', str(folder), str(executable), str(link)])
-            self.assertIn('38;2;143;181;115m', output)
-            self.assertIn('38;2;170;217;76m', output)
-            self.assertIn('38;2;230;180;80m', output)
+            self.assertIn('\x1b[01;38;2;88;166;255m' + str(folder), output)
+            self.assertIn('\x1b[38;2;63;185;80m' + str(executable), output)
+            self.assertIn('\x1b[38;2;57;197;207m' + str(link), output)
 
     def test_eza_theme_colors_metadata_and_respects_file_color_overrides(self):
         with tempfile.TemporaryDirectory(prefix='cx-eza-colors-') as directory:
@@ -106,25 +107,24 @@ class DefaultsTests(unittest.TestCase):
             result = run(args, env=env)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(result.stderr, '')
-            self.assertIn('38;2;230;180;80', result.stdout)
-            self.assertIn('38;2;116;116;116', result.stdout)
-            self.assertIn('38;2;191;189;182', result.stdout)
-            self.assertIn('38;2;143;181;115', result.stdout)
-            self.assertIn('38;2;149;230;203', result.stdout)
+            self.assertIn('\x1b[1;38;2;88;166;255mPermissions', result.stdout)
+            user = pwd.getpwuid(os.getuid()).pw_name
+            self.assertRegex(result.stdout, '\x1b\\[(1;)?38;2;88;166;255m' + re.escape(user) + '\x1b')
+            self.assertIn('38;2;255;166;87', result.stdout)
             env['LS_COLORS'] = 'di=38;2;1;2;3'
             overridden = self.command(args, env=env)
             self.assertIn('38;2;1;2;3', overridden)
-            self.assertIn('38;2;230;180;80', overridden)
+            self.assertIn('\x1b[1;38;2;88;166;255mPermissions', overridden)
 
     def test_ls_special_file_types_use_theme_colors(self):
         with tempfile.TemporaryDirectory(prefix='cx-ls-special-') as directory:
             base = Path(directory)
             entries = [
-                ('setuid-file', 0o4755, '01;38;2;240;113;120;48;2;58;32;36'),
-                ('setgid-file', 0o2755, '01;38;2;230;180;80;48;2;51;43;28'),
-                ('sticky-shared-dir', 0o1777, '38;2;143;181;115;48;2;30;43;32'),
-                ('writable-dir', 0o777, '01;38;2;240;113;120;48;2;58;32;36'),
-                ('sticky-dir', 0o1755, '38;2;149;230;203;48;2;27;43;48'),
+                ('setuid-file', 0o4755, '01;38;2;255;123;114;48;2;73;2;2'),
+                ('setgid-file', 0o2755, '01;38;2;255;166;87;48;2;61;19;0'),
+                ('sticky-shared-dir', 0o1777, '38;2;88;166;255;48;2;5;29;77'),
+                ('writable-dir', 0o777, '01;38;2;255;123;114;48;2;73;2;2'),
+                ('sticky-dir', 0o1755, '38;2;57;197;207;48;2;5;29;77'),
             ]
             for name, mode, style in entries:
                 path = base / name
@@ -136,7 +136,7 @@ class DefaultsTests(unittest.TestCase):
             with socket.socket(socket.AF_UNIX) as server:
                 path = base / 'unix.socket'
                 server.bind(str(path))
-                entries.append(('unix.socket', None, '38;2;149;230;203'))
+                entries.append(('unix.socket', None, '38;2;188;140;255'))
                 for name, _, style in entries:
                     path = str(base / name)
                     with self.subTest(name=name):
