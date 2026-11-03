@@ -13,6 +13,10 @@ EOF
 cp "$T/podman" "$T/docker"
 chmod +x "$T/podman" "$T/docker"
 export AGENTAINER_ENV_FILE=/nonexistent
+# The host's locale and time zone would otherwise reach the dry-run output.
+unset LANG LC_ALL LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY LC_MESSAGES \
+	LC_PAPER LC_NAME LC_ADDRESS LC_TELEPHONE LC_MEASUREMENT LC_IDENTIFICATION TZ
+export AGENTAINER_LOCALTIME="$T/no-localtime"
 # stdout only: the trace and warnings go to stderr; tests that check them add 2>&1.
 pod() { AGENTAINER_RUNTIME="$T/podman" sh "$L" "$@"; }
 dock() { AGENTAINER_RUNTIME="$T/docker" sh "$L" "$@"; }
@@ -186,5 +190,36 @@ assert_eq "doctor rejects extra arguments" 2 "$rc"
 
 assert_contains "unknown command fails" "usage" "$(sh "$L" bogus 2>&1 || true)"
 assert_contains "no runtime found is an error" "neither podman nor docker" "$(AGENTAINER_RUNTIME='' PATH=/nonexistent /bin/sh "$L" status 2>&1 || true)"
+
+# up passes the host locale and time zone and records them in a label.
+img=ghcr.io/chadmayfield/agentainer:latest
+out=$(LANG=en_US.UTF-8 TZ=America/Denver pod up "$T/my code")
+has_line "up passes locale variables with -e" "-e" "$out"
+has_line "up passes LANG" "LANG=en_US.UTF-8" "$out"
+has_line "up passes TZ" "TZ=America/Denver" "$out"
+has_line "up records the locale" "$p.locale=LANG=en_US.UTF-8 TZ=America/Denver" "$out"
+out=$(TZ=UTC LC_IDENTIFICATION=fr_FR.UTF-8 LC_TIME=de_DE.UTF-8 LC_ALL=en_GB.UTF-8 LC_CTYPE=en_US.UTF-8 LANG=en_US.UTF-8 pod up "$T/my code")
+has_line "up records the locale in a fixed order" \
+	"$p.locale=LANG=en_US.UTF-8 LC_ALL=en_GB.UTF-8 LC_CTYPE=en_US.UTF-8 LC_TIME=de_DE.UTF-8 LC_IDENTIFICATION=fr_FR.UTF-8 TZ=UTC" "$out"
+ln -s /var/db/timezone/zoneinfo/Europe/Paris "$T/lt"
+has_line "up takes TZ from the localtime link" "TZ=Europe/Paris" "$(AGENTAINER_LOCALTIME="$T/lt" pod up "$T/my code")"
+assert_absent "no localtime link and no TZ pass no TZ" "$(pod up "$T/my code")" "$img" "TZ="
+out=$(LC_CTYPE=UTF-8 LANG=en_US.ISO-8859-1 LC_TERMINAL=iTerm2 TZ=:/etc/localtime pod up "$T/my code")
+assert_absent "invalid locale values are skipped" "$out" "$img" "LC_CTYPE=" "LANG=" "LC_TERMINAL=" "TZ="
+assert_absent "a TZ with a space is skipped" "$(TZ='Bad Zone' AGENTAINER_LOCALTIME="$T/lt" pod up "$T/my code")" "$img" "TZ="
+out=$(LANG=C.UTF-8 LC_TIME=en_US.utf8 LC_MESSAGES=sr_RS.UTF-8@latin LC_PAPER=ast_ES.UTF-8 pod up "$T/my code")
+has_line "C.UTF-8 is accepted" "LANG=C.UTF-8" "$out"
+has_line "a .utf8 codeset is accepted" "LC_TIME=en_US.utf8" "$out"
+has_line "a modifier is accepted" "LC_MESSAGES=sr_RS.UTF-8@latin" "$out"
+has_line "a three-letter language is accepted" "LC_PAPER=ast_ES.UTF-8" "$out"
+assert_absent "a bad modifier is skipped" "$(LANG=en_US.UTF-8@ LC_TIME=de_DE.UTF-8@a-b pod up "$T/my code")" "$img" "LANG=" "LC_TIME="
+# The env file wins over the host, and the launcher never prints its values.
+printf '%s\n' "TZ=Asia/Tokyo" "# x" "LANG" "" "  SECRET_TOKEN=cx-secret-123" >"$T/env"
+chmod 600 "$T/env"
+out=$(AGENTAINER_ENV_FILE="$T/env" TZ=America/Denver LANG=en_US.UTF-8 LC_TIME=de_DE.UTF-8 pod up "$T/my code" 2>&1)
+assert_absent "the env file wins over the host" "$out" "$img" "TZ=America/Denver" "LANG=en_US.UTF-8"
+assert_absent "env file values are never printed" "$out" "$img" "cx-secret-123" "Asia/Tokyo"
+has_line "variables the env file does not set still pass" "LC_TIME=de_DE.UTF-8" "$out"
+has_line "the label records only what passed" "$p.locale=LC_TIME=de_DE.UTF-8" "$out"
 
 finish
