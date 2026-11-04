@@ -133,6 +133,9 @@ assert_eq "filebrowser has the agent container's securityContext" "true" \
 	"$(q "$pod | (.containers[1].securityContext | to_json) == (.containers[0].securityContext | to_json)")"
 assert_eq "filebrowser drops ALL and blocks privilege escalation" "false ALL" \
 	"$(q "$fb.securityContext | (.allowPrivilegeEscalation | tostring) + \" \" + (.capabilities.drop | join(\" \"))")"
+assert_eq "filebrowser sets only FILEBROWSER_CONFIG and FILEBROWSER_DATABASE_PATH" \
+	"FILEBROWSER_CONFIG FILEBROWSER_DATABASE_PATH" "$(q "$fb.env | map(.name) | sort | join(\" \")")"
+assert_eq "filebrowser has no envFrom" "0" "$(q "$fb | (.envFrom // []) | length")"
 assert_eq "filebrowser config and database paths" \
 	"/etc/filebrowser/config.yaml /home/filebrowser/data/database.sqlite" \
 	"$(q "$fb.env | (map(select(.name==\"FILEBROWSER_CONFIG\"))[0].value) + \" \" + (map(select(.name==\"FILEBROWSER_DATABASE_PATH\"))[0].value)")"
@@ -157,6 +160,9 @@ assert_eq "filebrowser cacheDir is under the data mount" "/home/filebrowser/data
 assert_eq "filebrowser has one source, /srv/transfer" "/srv/transfer" \
 	"$(q "$fbcfg | from_yaml | .server.sources | map(.path) | join(\" \")")"
 assert_eq "filebrowser password login is enabled" "true" "$(q "$fbcfg | from_yaml | .auth.methods.password.enabled")"
+assert_eq "filebrowser passwords need at least 12 characters" "12" "$(q "$fbcfg | from_yaml | .auth.methods.password.minLength")"
+assert_eq "filebrowser source ignores symlinks from the root" "/ true" \
+	"$(q "$fbcfg | from_yaml | .server.sources[0].config.rules | map(.folderPath + \" \" + (.ignoreSymlinks | tostring)) | join(\",\")")"
 assert_absent "filebrowser config has no noauth and no admin password" "$(q "$fbcfg")" \
 	"disableWebDAV" noauth adminPassword
 assert_absent "no Service in the agentainer namespace exposes port 8080" \
@@ -174,8 +180,12 @@ np=deploy/kubernetes/agentainer/networkpolicy.yaml
 assert_eq "egress policy still allows DNS to any destination" "UDP/53 TCP/53 to=false" \
 	"$(fq '.spec.egress[0] | (.ports | map(.protocol + "/" + (.port | tostring)) | join(" ")) + " to=" + (has("to") | tostring)' "$np")"
 assert_eq "egress 443 rules exclude private ranges" \
-	"0.0.0.0/0 except 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16|::/0 except fc00::/7" \
+	"0.0.0.0/0 except 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16|::/0 except fc00::/7,fe80::/10" \
 	"$(fq '[.spec.egress[] | select(.ports[0].port == 443) | .to[].ipBlock | .cidr + " except " + (.except | join(","))] | join("|")' "$np")"
+for range in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 fc00::/7 fe80::/10; do
+	assert_eq "egress 443 rules exclude $range" "1" \
+		"$(fq "[.spec.egress[] | select(.ports[0].port == 443) | .to[].ipBlock.except[] | select(. == \"$range\")] | length" "$np")"
+done
 assert_eq "egress rules with destinations allow TCP 443 only" "TCP/443 TCP/443" \
 	"$(fq '[.spec.egress[] | select(has("to")) | .ports[] | .protocol + "/" + (.port | tostring)] | join(" ")' "$np")"
 assert_contains "egress policy shows a narrow allow rule example" "203.0.113.0/24" "$(cat "$np")"

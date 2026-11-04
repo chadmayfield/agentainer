@@ -12,6 +12,10 @@
 #   kubectl -n agentainer logs agentainer-0 -c filebrowser | grep 'initial admin password'
 # The database on the transfer volume keeps accounts across restarts.
 #
+# FileBrowser is not a security boundary against the agent container. Both containers
+# share the pod's loopback address, so anything running in the agent container can reach
+# the login page. Give the admin account a unique password that the agent never sees.
+#
 # Analytics is a database setting that is off by default. No config key controls it.
 apiVersion: v1
 kind: ConfigMap
@@ -33,10 +37,20 @@ data:
       cacheDir: /home/filebrowser/data/cache
       sources:
         - path: /srv/transfer
+          # sources[].config.rules (Source, SourceConfig and ConditionalRule in
+          # structs.go). A rule with folderPath "/" applies to the whole source:
+          # ignoreSymlinks on it sets IgnoreAllSymlinks (setConditionals in config.go),
+          # which leaves symbolic links out of the index.
+          config:
+            rules:
+              - folderPath: /
+                ignoreSymlinks: true
     auth:
       methods:
         password:
           enabled: true
+          # minLength in PasswordAuthConfig (auth.go). The default is 5.
+          minLength: 12
         # Single sign-on through a trusted reverse proxy uses proxy login instead
         # (https://filebrowserquantum.com/en/docs/configuration/authentication/proxy/).
         # The proxy must set the header and strip it from client requests, because

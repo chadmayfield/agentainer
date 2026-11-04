@@ -2,11 +2,14 @@
 # destination and TCP 443 to public addresses. NetworkPolicy matches IPs, ports and labels,
 # not domain names, and needs a CNI plugin that enforces it.
 #
-# The 443 rules exclude the private IPv4 ranges (RFC 1918) and IPv6 unique local addresses
-# (fc00::/7). With this policy the agent pod cannot reach the Kubernetes API server or
-# in-cluster HTTPS services at private addresses unless a rule allows them. ContainerSSH
-# runs in its own pod and makes its own API server connection, so SSH sessions keep
-# working. Plain HTTP (port 80) stays blocked.
+# The 443 rules exclude the private IPv4 ranges (RFC 1918), shared address space
+# (100.64.0.0/10, used for carrier-grade NAT and by some clusters), IPv4 and IPv6
+# link-local addresses (169.254.0.0/16, which includes cloud metadata endpoints, and
+# fe80::/10) and IPv6 unique local addresses (fc00::/7). An API server or in-cluster
+# HTTPS service at one of these addresses is unreachable from the agent pod unless a rule
+# allows it; one at a public address stays reachable on 443. ContainerSSH runs in its own
+# pod and makes its own API server connection, so SSH sessions keep working. Plain HTTP
+# (port 80) stays blocked.
 #
 # To allow one internal service, add a narrow rule to the egress list, for example:
 #   - to: [{ipBlock: {cidr: 203.0.113.0/24}}]
@@ -21,7 +24,7 @@ spec:
   policyTypes: [Egress]
   egress:
     - ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
-    - to: [{ipBlock: {cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]}}]
+    - to: [{ipBlock: {cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]}}]
       ports: [{protocol: TCP, port: 443}]
-    - to: [{ipBlock: {cidr: "::/0", except: ["fc00::/7"]}}]
+    - to: [{ipBlock: {cidr: "::/0", except: ["fc00::/7", "fe80::/10"]}}]
       ports: [{protocol: TCP, port: 443}]

@@ -35,7 +35,8 @@ runs:
           exit 1
         }
         # The patch may only modify the files scripts/bump_versions.py writes: versions.env,
-        # the Kubernetes deployments it repins (K8S_IMAGES) and the extras package files.
+        # the Kubernetes manifests it repins (K8S_IMAGES: the deployment.yaml files and
+        # deploy/kubernetes/agentainer/statefulset.yaml) and the extras package files.
         # It may not create, delete, rename or copy a file or change a mode.
         summary=$(git apply --summary "$PATCH_FILE")
         if [ -n "$summary" ]; then
@@ -43,7 +44,7 @@ runs:
           refuse "it creates, deletes, renames or copies a file or changes a mode (listed above)"
         fi
         name='[A-Za-z0-9_][A-Za-z0-9._-]*'
-        allowed="^(versions\.env|deploy/kubernetes/$name/deployment\.yaml|rootfs/usr/local/share/agentainer/extras/$name/package(-lock)?\.json)\$"
+        allowed="^(versions\.env|deploy/kubernetes/$name/deployment\.yaml|deploy/kubernetes/agentainer/statefulset\.yaml|rootfs/usr/local/share/agentainer/extras/$name/package(-lock)?\.json)\$"
         lockfile="^rootfs/usr/local/share/agentainer/extras/$name/package-lock\.json\$"
         git apply --numstat -z "$PATCH_FILE" >"$RUNNER_TEMP/numstat"
         count=0
