@@ -43,8 +43,8 @@ expect_installed "sftp server, poppler and imagemagick installed" \
 
 # "not installed" text from dpkg contains the package name, so check the status string.
 # shellcheck disable=SC2016 # expands in the container
-_xvfb=$(run_in --network none -- sh -c 'echo ran; dpkg-query -W -f="\${Status}" xvfb 2>&1 || true')
-assert_absent "xvfb is not installed" "$_xvfb" "ran" "install ok installed"
+_xvfb=$(run_in --network none -- sh -c 'dpkg-query -W -f="\${Status}" xvfb 2>&1; echo "ran rc=$?"')
+assert_absent "xvfb is not installed" "$_xvfb" "ran rc=" "install ok installed"
 
 assert_eq "playwright mcp uses chromium" "chromium" \
 	"$(run_in --network none -- printenv PLAYWRIGHT_MCP_BROWSER)"
