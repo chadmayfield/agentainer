@@ -1,5 +1,16 @@
-# Optional. Add it to kustomization.yaml to allow DNS ports and TCP 443 to every destination.
-# NetworkPolicy matches IPs, ports and labels, not domain names.
+# Optional. Add it to kustomization.yaml to limit the agentainer pod's egress to DNS on any
+# destination and TCP 443 to public addresses. NetworkPolicy matches IPs, ports and labels,
+# not domain names, and needs a CNI plugin that enforces it.
+#
+# The 443 rules exclude the private IPv4 ranges (RFC 1918) and IPv6 unique local addresses
+# (fc00::/7). With this policy the agent pod cannot reach the Kubernetes API server or
+# in-cluster HTTPS services at private addresses unless a rule allows them. ContainerSSH
+# runs in its own pod and makes its own API server connection, so SSH sessions keep
+# working. Plain HTTP (port 80) stays blocked.
+#
+# To allow one internal service, add a narrow rule to the egress list, for example:
+#   - to: [{ipBlock: {cidr: 203.0.113.0/24}}]
+#     ports: [{protocol: TCP, port: 443}]
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -10,4 +21,7 @@ spec:
   policyTypes: [Egress]
   egress:
     - ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
-    - ports: [{protocol: TCP, port: 443}]
+    - to: [{ipBlock: {cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]}}]
+      ports: [{protocol: TCP, port: 443}]
+    - to: [{ipBlock: {cidr: "::/0", except: ["fc00::/7"]}}]
+      ports: [{protocol: TCP, port: 443}]

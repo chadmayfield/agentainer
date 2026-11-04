@@ -995,7 +995,10 @@ def r_extras():
 K8S_IMAGES = (("CONTAINERSSH_IMAGE", "containerssh/containerssh", "v0.6",
                 "deploy/kubernetes/containerssh/deployment.yaml"),
                ("WEBHOOK_PYTHON_IMAGE", "library/python", "3.14-slim",
-                "deploy/kubernetes/auth-webhook/deployment.yaml"))
+                "deploy/kubernetes/auth-webhook/deployment.yaml"),
+               # 2.0-stable-slim follows 2.0.x patch releases and never crosses a major version.
+               ("FILEBROWSER_IMAGE", "gtstef/filebrowser", "2.0-stable-slim",
+                "deploy/kubernetes/agentainer/statefulset.yaml"))
 
 
 def hub_ref(repo, tag, data):

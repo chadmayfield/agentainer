@@ -373,6 +373,32 @@ class HelperTests(unittest.TestCase):
         text = "      containers:\n        - image: %s\n          command: [x]\n" % old
         self.assertEqual(bv.rewrite_image_ref(text, new), text.replace(old, new))
 
+    def test_k8s_images_rewrites_filebrowser_in_statefulset(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+        rel = os.path.join("deploy", "kubernetes", "agentainer", "statefulset.yaml")
+        with open(os.path.join(root, "versions.env")) as f:
+            env_text = f.read()
+        with open(os.path.join(root, rel)) as f:
+            manifest = f.read()
+        old = bv.values(bv.parse_env(env_text))["FILEBROWSER_IMAGE"]
+        self.assertEqual(manifest.count(old), 1)
+        new = old.split("@")[0] + "@sha256:" + "c" * 64
+        with tempfile.TemporaryDirectory() as d:
+            env = os.path.join(d, "versions.env")
+            with open(env, "w") as f:
+                f.write(env_text)
+            os.makedirs(os.path.join(d, os.path.dirname(rel)))
+            with open(os.path.join(d, rel), "w") as f:
+                f.write(manifest)
+            with patch.object(bv, "fetch_json", return_value={"digest": "sha256:" + "c" * 64}) as fj, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(bv.main(["--file", env, "--only", "r_k8s_images"]), 0)
+            fj.assert_any_call("https://hub.docker.com/v2/repositories/gtstef/filebrowser/tags/2.0-stable-slim")
+            with open(os.path.join(d, rel)) as f:
+                self.assertEqual(f.read(), manifest.replace(old, new))
+            with open(env) as f:
+                self.assertEqual(bv.values(bv.parse_env(f.read()))["FILEBROWSER_IMAGE"], new)
+
     def test_strip_v(self):
         self.assertEqual(bv.strip_v("v2.102.0"), "2.102.0")
         self.assertEqual(bv.strip_v("rust-v0.162.0"), "0.162.0")
