@@ -1,0 +1,142 @@
+"""Approved colors for files seeded into the home directory."""
+import re
+
+TERMINAL = {
+    "black": "#484f58",
+    "red": "#ff7b72",
+    "green": "#3fb950",
+    "yellow": "#d29922",
+    "blue": "#58a6ff",
+    "magenta": "#bc8cff",
+    "cyan": "#39c5cf",
+    "white": "#b1bac4",
+    "bright_black": "#6e7681",
+    "bright_red": "#ffa198",
+    "bright_green": "#56d364",
+    "bright_yellow": "#e3b341",
+    "bright_blue": "#79c0ff",
+    "bright_magenta": "#d2a8ff",
+    "bright_cyan": "#56d4dd",
+    "bright_white": "#ffffff",
+    "background": "#010409",
+    "foreground": "#e6edf3",
+    "selection": "#264f78",
+    "cursor": "#f78166",
+}
+
+# Every hex value in src/tokens/base/color/dark/dark.json5 at the
+# @primer/primitives@11.10.0 tag (github.com/primer/primitives).
+PRIMER = frozenset(
+    (
+        "#000000",
+        "#010409",
+        "#033a16",
+        "#04260f",
+        "#051d4d",
+        "#0c2d6b",
+        "#0d1117",
+        "#0d419d",
+        "#0f5323",
+        "#1158c7",
+        "#151b23",
+        "#196c2e",
+        "#1f6feb",
+        "#212830",
+        "#238636",
+        "#262c36",
+        "#271052",
+        "#2a313c",
+        "#2ea043",
+        "#2f3742",
+        "#341a00",
+        "#388bfd",
+        "#3c1e70",
+        "#3d1300",
+        "#3d444d",
+        "#3fb950",
+        "#42062a",
+        "#460701",
+        "#490202",
+        "#4b2900",
+        "#553098",
+        "#56d364",
+        "#58a6ff",
+        "#5a1e02",
+        "#5e103e",
+        "#640d04",
+        "#656c76",
+        "#67060c",
+        "#693e00",
+        "#6e40c9",
+        "#762d0a",
+        "#79c0ff",
+        "#7d2457",
+        "#7ee787",
+        "#845306",
+        "#872012",
+        "#8957e5",
+        "#8e1519",
+        "#9198a1",
+        "#9b4215",
+        "#9e3670",
+        "#9e6a03",
+        "#a5d6ff",
+        "#ab7df8",
+        "#ac3220",
+        "#aff5b4",
+        "#b62324",
+        "#b7bdc8",
+        "#bb8009",
+        "#bd561d",
+        "#be8fff",
+        "#bf4b8a",
+        "#cae8ff",
+        "#cf462d",
+        "#d1d7e0",
+        "#d29922",
+        "#d2a8ff",
+        "#da3633",
+        "#db61a2",
+        "#db6d28",
+        "#e2c5ff",
+        "#e3b341",
+        "#ea6045",
+        "#eddeff",
+        "#f0883e",
+        "#f0f6fc",
+        "#f2cc60",
+        "#f778ba",
+        "#f78166",
+        "#f85149",
+        "#f8e3a1",
+        "#ff7b72",
+        "#ff9bce",
+        "#ffa198",
+        "#ffa28b",
+        "#ffa657",
+        "#ffbedd",
+        "#ffc1ba",
+        "#ffc2b2",
+        "#ffc680",
+        "#ffdaec",
+        "#ffdcd7",
+        "#ffddd2",
+        "#ffdfb6",
+        "#ffffff",
+    )
+)
+
+ALLOWED = frozenset(TERMINAL.values()) | PRIMER
+
+_HEX = re.compile(r"#([0-9a-fA-F]{6})(?![0-9a-fA-F])")
+_RGB = re.compile(r"(?<![0-9])[34]8;2;(\d{1,3});(\d{1,3});(\d{1,3})(?![0-9])")
+
+
+def colors_in(text):
+    """Return lowercase #rrggbb for each hex color and 38;2/48;2 triple."""
+    found = {"#" + m.group(1).lower() for m in _HEX.finditer(text)}
+    for m in _RGB.finditer(text):
+        r, g, b = (int(v) for v in m.groups())
+        if max(r, g, b) <= 255:
+            found.add("#%02x%02x%02x" % (r, g, b))
+    return found

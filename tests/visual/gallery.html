@@ -7,15 +7,9 @@
 <style>
 /*__FONT__*/
 :root {
-  color-scheme: light dark;
-  --page: #faf8f2; --text: #272b30; --muted: #5c6269; --accent: #805500;
-  --link: #005f87; --panel: #f0ede5; --button: #e7e3d9; --hover: #ddd8cb; --border: #b9b3a5;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --page: #111; --text: #bfbdb6; --muted: #aaa; --accent: #e6b450;
-    --link: #59c2ff; --panel: #171717; --button: #202020; --hover: #292929; --border: #333;
-  }
+  color-scheme: dark;
+  --page: #010409; --text: #e6edf3; --muted: #9198a1; --accent: #58a6ff;
+  --link: #58a6ff; --panel: #0d1117; --button: #151b23; --hover: #212830; --border: #3d444d;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--text); font: 16px/1.6 system-ui, sans-serif; }
@@ -34,9 +28,9 @@ nav a:hover, nav a:focus-visible { color: var(--accent); background: var(--hover
 nav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 760px) { nav { grid-template-columns: minmax(0, 1fr); } }
 section { margin: 36px 0; }
-figure { margin: 0; width: fit-content; max-width: 100%; overflow-x: auto; background: black; border: 1px solid var(--border); border-radius: 6px; }
+figure { margin: 0; width: fit-content; max-width: 100%; overflow-x: auto; background: #010409; border: 1px solid var(--border); border-radius: 6px; }
 figure img { display: block; max-width: 100%; width: auto; height: auto; }
-.terminal { padding: 12px; width: max-content; background: #000; }
+.terminal { padding: 12px; width: max-content; background: #010409; }
 .palette { display: flex; flex-wrap: wrap; gap: 12px; }
 .swatch { border: 1px solid var(--border); border-left: 20px solid var(--color); padding: 2px 8px; }
 /*__XTERM_CSS__*/
@@ -44,17 +38,17 @@ figure img { display: block; max-width: 100%; width: auto; height: auto; }
 </head>
 <body><main>
 <h1>Agentainer color review</h1>
-<p>Agentainer colors, inspired by Ayu. Review readability, selections, file types, diff colors, and the distinct Vim and tmux status bars.</p>
+<p>Agentainer uses GitHub Dark colors on a #010409 background. Review readability, selections, file types, diff colors, and the distinct Vim and tmux status bars.</p>
 <ul class="metadata">__METADATA__</ul>
-<p>Captured from actual tools in an isolated container with generic files. Browser rendering uses a fixed font and an Ayu-inspired reference ANSI palette. Your terminal's ANSI colors and font rendering may differ, especially for bat. The tmux clock and sample timestamps are fixed.</p>
+<p>Captured from actual tools in an isolated container with generic files. Browser rendering uses a fixed font and the GitHub Dark reference ANSI palette from tests/unit/palette.py. Your terminal's ANSI colors and font rendering may differ, especially for bat. The tmux time and date and the sample timestamps are fixed.</p>
 <div class="palette">
-<span class="swatch" style="--color:#000000">Black</span>
-<span class="swatch" style="--color:#202020">Charcoal</span>
-<span class="swatch" style="--color:#bfbdb6">Text</span>
-<span class="swatch" style="--color:#e6b450">Amber</span>
-<span class="swatch" style="--color:#aad94c">Added</span>
-<span class="swatch" style="--color:#f07178">Removed</span>
-<span class="swatch" style="--color:#253340">Vim status</span>
+<span class="swatch" style="--color:#010409">Background</span>
+<span class="swatch" style="--color:#151b23">Bars</span>
+<span class="swatch" style="--color:#e6edf3">Text</span>
+<span class="swatch" style="--color:#58a6ff">Blue</span>
+<span class="swatch" style="--color:#3fb950">Added</span>
+<span class="swatch" style="--color:#ff7b72">Removed</span>
+<span class="swatch" style="--color:#0c2d6b">Vim status</span>
 </div>
 <nav aria-label="Screenshots">__NAV__</nav>
 __CARDS__

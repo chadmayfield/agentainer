@@ -1,4 +1,5 @@
 """Failure paths for the optional visual-review capture driver."""
+import ast
 import base64
 import contextlib
 import copy
@@ -12,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 PATH = Path(__file__).resolve().parents[1] / 'visual/capture.py'
+SCENARIOS = PATH.parent / 'fixtures/scenarios.py'
 SPEC = importlib.util.spec_from_file_location('visual_capture', PATH)
 capture = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(capture)
@@ -107,6 +109,33 @@ class VisualCaptureTests(unittest.TestCase):
                 command = run.call_args_list[0].args[0]
                 name = command[command.index('--name') + 1]
                 self.assertEqual(run.call_args_list[-1].args[0], ['fake-engine', 'rm', '-f', name])
+
+
+class VisualScenarioSourceTests(unittest.TestCase):
+    """Checks on the in-container scenario script, which runs only inside the image."""
+
+    def setUp(self):
+        self.source = SCENARIOS.read_text()
+
+    def scenario_call(self, identifier):
+        for node in ast.walk(ast.parse(self.source)):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'add'
+                    and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == identifier):
+                return node
+        self.fail('no add() call for ' + identifier)
+
+    def test_tmux_scenarios_render_the_configured_status_right(self):
+        for stale in ('Mon 19 Oct 12:00', 'logs#'):
+            self.assertFalse(stale in self.source, 'scenarios.py still contains ' + stale)
+
+    def test_activity_scenario_checks_activity_color(self):
+        keywords = {keyword.arg: keyword.value for keyword in self.scenario_call('tmux-activity').keywords}
+        self.assertIn('colors', keywords)
+        self.assertEqual(ast.literal_eval(keywords['colors']), ['#a5d6ff'])
+
+    def test_ls_colors_is_a_captured_scenario(self):
+        self.assertEqual(capture.SCENARIOS[:2], ('shell', 'ls-colors'))
+        self.scenario_call('ls-colors')
 
 
 if __name__ == '__main__':

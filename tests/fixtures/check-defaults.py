@@ -2,6 +2,8 @@
 import hashlib
 import json
 import os
+import pwd
+import plistlib
 import pty
 import re
 import select
@@ -15,6 +17,7 @@ import fcntl
 from pathlib import Path
 import subprocess
 import tempfile
+import tomllib
 import unittest
 
 HOME = Path.home()
@@ -59,7 +62,7 @@ class DefaultsTests(unittest.TestCase):
             self.assertEqual(set(ignored.splitlines()), set(paths))
             self.assertEqual(run(['git', '-C', directory, 'check-ignore', 'source.py']).returncode, 1)
 
-    def test_git_diff_and_status_use_ayu_colors(self):
+    def test_git_diff_and_status_use_theme_colors(self):
         with tempfile.TemporaryDirectory(prefix='cx-git-colors-') as directory:
             base = Path(directory)
             before, after = base / 'before', base / 'after'
@@ -67,14 +70,25 @@ class DefaultsTests(unittest.TestCase):
             after.write_text('added line\n')
             diff = run(['git', 'diff', '--no-index', '--color=always', str(before), str(after)])
             self.assertEqual(diff.returncode, 1, diff.stdout + diff.stderr)
-            self.assertIn('38;2;170;217;76m+', diff.stdout)
-            self.assertIn('38;2;170;217;76madded line', diff.stdout)
-            self.assertIn('38;2;240;113;120m-removed line', diff.stdout)
-            self.assertIn('38;2;230;180;80m@@', diff.stdout)
-            self.command(['git', 'init', directory])
-            status = self.command(['git', '-C', directory, '-c', 'color.ui=always', 'status', '--short'])
-            self.assertIn('38;2;230;180;80m??', status)
-            plain = self.command(['git', '-C', directory, 'status', '--short'])
+            self.assertIn('1;38;2;88;166;255m', diff.stdout)
+            self.assertIn('38;2;63;185;80m+', diff.stdout)
+            self.assertIn('38;2;63;185;80madded line', diff.stdout)
+            self.assertIn('38;2;255;123;114m-removed line', diff.stdout)
+            self.assertIn('38;2;210;168;255m@@', diff.stdout)
+            repo = base / 'repo'
+            self.command(['git', 'init', str(repo)])
+            (repo / 'tracked').write_text('one\n')
+            self.command(['git', '-C', str(repo), 'add', 'tracked'])
+            self.command(['git', '-C', str(repo), '-c', 'user.name=Example',
+                          '-c', 'user.email=agent@example.com', 'commit', '-m', 'first'])
+            (repo / 'tracked').write_text('two\n')
+            (repo / 'untracked').write_text('x\n')
+            status = self.command(['git', '-C', str(repo), '-c', 'color.ui=always', 'status', '--short'])
+            self.assertIn('38;2;255;166;87m??', status)
+            self.assertIn('38;2;210;153;34mM', status)
+            log = self.command(['git', '-C', str(repo), 'log', '--color=always', '--oneline', '-1'])
+            self.assertIn('\x1b[33m', log)
+            plain = self.command(['git', '-C', str(repo), 'status', '--short'])
             self.assertNotIn('\x1b[', plain)
 
     def test_ls_colors_reach_interactive_file_listings(self):
@@ -88,15 +102,17 @@ class DefaultsTests(unittest.TestCase):
             output = self.command(['bash', '-ic',
                 'test -n "$LS_COLORS" && ls --color=always --directory "$@"',
                 'cx-ls-colors', str(folder), str(executable), str(link)])
-            self.assertIn('38;2;143;181;115m', output)
-            self.assertIn('38;2;170;217;76m', output)
-            self.assertIn('38;2;230;180;80m', output)
+            self.assertIn('\x1b[01;38;2;88;166;255m' + str(folder), output)
+            self.assertIn('\x1b[38;2;63;185;80m' + str(executable), output)
+            self.assertIn('\x1b[38;2;57;197;207m' + str(link), output)
 
     def test_eza_theme_colors_metadata_and_respects_file_color_overrides(self):
         with tempfile.TemporaryDirectory(prefix='cx-eza-colors-') as directory:
             base = Path(directory)
             (base / 'sample.txt').write_text('example\n')
             (base / 'folder').mkdir()
+            (base / 'tool.sh').write_text('#!/bin/sh\n')
+            (base / 'tool.sh').chmod(0o755)
             with socket.socket(socket.AF_UNIX) as server:
                 server.bind(str(base / 'unix.socket'))
             env = dict(os.environ)
@@ -106,25 +122,26 @@ class DefaultsTests(unittest.TestCase):
             result = run(args, env=env)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(result.stderr, '')
-            self.assertIn('38;2;230;180;80', result.stdout)
-            self.assertIn('38;2;116;116;116', result.stdout)
-            self.assertIn('38;2;191;189;182', result.stdout)
-            self.assertIn('38;2;143;181;115', result.stdout)
-            self.assertIn('38;2;149;230;203', result.stdout)
+            self.assertIn('\x1b[1;38;2;88;166;255mPermissions', result.stdout)
+            user = pwd.getpwuid(os.getuid()).pw_name
+            self.assertRegex(result.stdout, '\x1b\\[(1;)?38;2;88;166;255m' + re.escape(user) + '\x1b')
+            self.assertRegex(result.stdout, 'mr\x1b\\[38;2;255;166;87mw')
+            self.assertIn('\x1b[38;2;63;185;80mtool.sh', result.stdout)
+            self.assertIn('\x1b[38;2;188;140;255munix.socket', result.stdout)
             env['LS_COLORS'] = 'di=38;2;1;2;3'
             overridden = self.command(args, env=env)
             self.assertIn('38;2;1;2;3', overridden)
-            self.assertIn('38;2;230;180;80', overridden)
+            self.assertIn('\x1b[1;38;2;88;166;255mPermissions', overridden)
 
     def test_ls_special_file_types_use_theme_colors(self):
         with tempfile.TemporaryDirectory(prefix='cx-ls-special-') as directory:
             base = Path(directory)
             entries = [
-                ('setuid-file', 0o4755, '01;38;2;240;113;120;48;2;58;32;36'),
-                ('setgid-file', 0o2755, '01;38;2;230;180;80;48;2;51;43;28'),
-                ('sticky-shared-dir', 0o1777, '38;2;143;181;115;48;2;30;43;32'),
-                ('writable-dir', 0o777, '01;38;2;240;113;120;48;2;58;32;36'),
-                ('sticky-dir', 0o1755, '38;2;149;230;203;48;2;27;43;48'),
+                ('setuid-file', 0o4755, '01;38;2;255;123;114;48;2;73;2;2'),
+                ('setgid-file', 0o2755, '01;38;2;255;166;87;48;2;61;19;0'),
+                ('sticky-shared-dir', 0o1777, '38;2;88;166;255;48;2;5;29;77'),
+                ('writable-dir', 0o777, '01;38;2;255;123;114;48;2;73;2;2'),
+                ('sticky-dir', 0o1755, '38;2;57;197;207;48;2;5;29;77'),
             ]
             for name, mode, style in entries:
                 path = base / name
@@ -133,12 +150,15 @@ class DefaultsTests(unittest.TestCase):
                 else:
                     path.write_text('preview\n')
                 path.chmod(mode)
+            os.mkfifo(base / 'named-pipe')
+            entries.append(('named-pipe', None, '38;2;210;168;255'))
+            entries.append(('/dev/null', None, '01;38;2;210;168;255'))
             with socket.socket(socket.AF_UNIX) as server:
                 path = base / 'unix.socket'
                 server.bind(str(path))
-                entries.append(('unix.socket', None, '38;2;149;230;203'))
+                entries.append(('unix.socket', None, '38;2;188;140;255'))
                 for name, _, style in entries:
-                    path = str(base / name)
+                    path = str(base / name)  # an absolute name such as /dev/null wins
                     with self.subTest(name=name):
                         output = self.command(['bash', '-ic',
                             'ls --color=always --directory "$1"', 'cx-ls-special', path])
@@ -151,12 +171,21 @@ class DefaultsTests(unittest.TestCase):
         self.assertEqual(claude['outputStyle'], 'Explanatory')
         self.assertIs(claude['showTurnDuration'], True)
         self.assertEqual(claude['preferredNotifChannel'], 'terminal_bell')
+        self.assertEqual(claude['theme'], 'custom:github-dark')
+        theme = json.loads((HOME / '.claude/themes/github-dark.json').read_text())
+        self.assertEqual(theme['base'], 'dark')
+        overrides = theme['overrides']
+        self.assertEqual(overrides['claude'], '#58a6ff')
+        self.assertEqual(overrides['success'], '#3fb950')
+        self.assertEqual(overrides['error'], '#ff7b72')
+        self.assertEqual(overrides['warning'], '#d29922')
+        self.assertEqual(overrides['subtle'], '#9198a1')
         agy = json.loads((HOME / '.gemini/antigravity-cli/settings.json').read_text())
         self.assertEqual(agy['toolPermission'], 'request-review')
         self.assertEqual(agy['colorScheme'], 'terminal')
         self.assertIs(agy['notifications'], True)
         cli = json.loads((HOME / '.config/opencode/cli.json').read_text())
-        self.assertEqual(cli['theme'], {'name': 'ayu', 'mode': 'dark'})
+        self.assertEqual(cli['theme'], {'name': 'github-dark', 'mode': 'dark'})
         self.assertEqual(cli['session']['permissions'], 'prompt')
         self.assertEqual(cli['attention'], {'notifications': True, 'sound': False})
         self.assertEqual(cli['diffs'], {'view': 'auto', 'wrap': 'word', 'tree': True})
@@ -230,14 +259,17 @@ class DefaultsTests(unittest.TestCase):
             os.waitpid(pid, 0)
             os.close(master)
 
-    def assert_opencode_loaded_ayu(self, output):
+    def assert_opencode_loaded_theme(self, output):
         plain = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', output)
         self.assertIn('Ask anything', plain, 'OpenCode did not render its input prompt')
-        self.assertIn('\x1b]12;#bfbdb6\x07', output,
-                      'OpenCode did not apply the configured Ayu cursor color')
+        # Only the seeded github-dark theme paints the #010409 background.
+        self.assertIn('48;2;1;4;9m', output,
+                      'OpenCode did not paint the GitHub Dark background')
+        self.assertIn('\x1b]12;#e6edf3\x07', output,
+                      'OpenCode did not apply the GitHub Dark cursor color')
 
     def test_opencode_native_client_loads_cli_config_and_detects_fallback(self):
-        self.assert_opencode_loaded_ayu(self.opencode_terminal())
+        self.assert_opencode_loaded_theme(self.opencode_terminal())
         path = HOME / '.config/opencode/cli.json'
         original = path.read_bytes()
         try:
@@ -248,9 +280,23 @@ class DefaultsTests(unittest.TestCase):
             plain = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', output)
             self.assertIn('Ask anything', plain, 'OpenCode did not render its input prompt')
             with self.assertRaises(AssertionError):
-                self.assert_opencode_loaded_ayu(output)
+                self.assert_opencode_loaded_theme(output)
         finally:
             path.write_bytes(original)
+
+    def test_codex_theme_is_configured_and_parses(self):
+        with (HOME / '.codex/config.toml').open('rb') as file:
+            config = tomllib.load(file)
+        self.assertEqual(config['tui']['theme'], 'github-dark')
+        with (HOME / '.codex/themes/github-dark.tmTheme').open('rb') as file:
+            theme = plistlib.load(file)
+        self.assertEqual(theme['settings'][0]['settings']['background'], '#010409')
+        scopes = {scope.strip() for item in theme['settings'][1:]
+                  for scope in item['scope'].split(',')}
+        for scope in ('keyword', 'storage', 'string', 'comment', 'entity.name.function',
+                      'entity.name.tag', 'constant', 'variable'):
+            with self.subTest(scope=scope):
+                self.assertIn(scope, scopes)
 
     def test_shell_completion_and_cli_theme_options_are_usable(self):
         output = self.command(['bash', '-ic',
@@ -262,6 +308,20 @@ class DefaultsTests(unittest.TestCase):
         result = self.command(['bash', '-ic', 'printf "probe\\n" | fzf --filter=probe'])
         self.assertEqual(result.strip(), 'probe')
         self.command(['bat', '--paging=never', str(HOME / '.gitconfig')])
+
+    def test_fzf_colors_use_theme(self):
+        text = (HOME / '.config/fzf/config').read_text()
+        lines = [l for l in text.splitlines() if l.startswith('--color=')]
+        self.assertEqual(len(lines), 1, text)
+        colors = dict(item.split(':', 1) for item in lines[0][len('--color='):].split(','))
+        self.assertEqual(colors, {
+            'bg': '#010409', 'bg+': '#151b23',
+            'fg': '#e6edf3', 'fg+': '#e6edf3',
+            'hl': '#58a6ff', 'hl+': '#79c0ff',
+            'info': '#9198a1',
+            'prompt': '#58a6ff', 'pointer': '#58a6ff', 'spinner': '#58a6ff',
+            'marker': '#3fb950', 'header': '#d2a8ff', 'border': '#3d444d',
+        })
 
     def test_vim_honors_project_editorconfig_and_has_no_gutter_underline(self):
         with tempfile.TemporaryDirectory(prefix='cx-vim-defaults-') as directory:
@@ -279,7 +339,15 @@ class DefaultsTests(unittest.TestCase):
                 "call assert_true(isdirectory(expand('~/.vim/undo')))",
                 "call assert_true(isdirectory(expand('~/.vim/swap')))",
                 "call assert_true(isdirectory(expand('~/.vim/backup')))",
-                "call assert_equal('#000000', synIDattr(hlID('Normal'), 'bg#'))",
+                "call assert_equal('#010409', synIDattr(hlID('Normal'), 'bg#'))",
+                "call assert_equal('#0c2d6b', synIDattr(hlID('StatusLine'), 'bg#'))",
+                "call assert_equal('#79c0ff', synIDattr(hlID('StatusLine'), 'fg#'))",
+                "call assert_equal('#264f78', synIDattr(hlID('Visual'), 'bg#'))",
+                "call assert_equal('#9198a1', synIDattr(hlID('Comment'), 'fg#'))",
+                "call assert_equal('#ff7b72', synIDattr(hlID('Statement'), 'fg#'))",
+                "call assert_equal('#a5d6ff', synIDattr(hlID('String'), 'fg#'))",
+                "call assert_equal('#d2a8ff', synIDattr(hlID('Function'), 'fg#'))",
+                "call assert_equal('#656c76', synIDattr(hlID('LineNr'), 'fg#'))",
                 "call assert_notequal('1', synIDattr(hlID('CursorLineNr'), 'underline', 'cterm'))",
                 "call assert_notequal('1', synIDattr(hlID('CursorLine'), 'underline', 'term'))",
                 "call assert_equal(':25Lexplore!<CR>', maparg('\\e', 'n'))",
@@ -293,14 +361,29 @@ class DefaultsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertNotIn('W22:', result.stderr)
 
-    def test_tmux_theme_and_shortcuts_load(self):
+    def test_tmux_theme_status_bar_and_shortcuts_load(self):
         socket = 'cx-defaults-%s' % os.getpid()
         base = ['tmux', '-L', socket]
+        conf = HOME / '.tmux.conf'
         try:
-            self.command(base + ['-f', str(HOME / '.tmux.conf'), 'new-session', '-d', '-s', 'cx-defaults'])
-            style = self.command(base + ['show-options', '-g', 'status-style'])
-            self.assertIn('bg=#202020', style)
-            self.assertIn('fg=#e6b450', style)
+            self.command(base + ['-f', str(conf), 'new-session', '-d', '-s', 'cx-defaults'])
+
+            def option(name):
+                return self.command(base + ['show-options', '-gv', name]).rstrip('\n')
+
+            self.assertEqual(option('status-style'), 'bg=#151b23,fg=#58a6ff')
+            self.assertEqual(option('status-right-length'), '64')
+            self.assertEqual(option('window-status-format'), ' #I:#W ')
+            self.assertEqual(option('window-status-current-format'), ' #I:#W ')
+            self.assertNotIn('#F', option('window-status-format'))
+            self.assertEqual(option('window-status-style'), 'fg=#58a6ff,bg=#151b23')
+            self.assertNotIn('underscore', option('window-status-activity-style'))
+            status_right = option('status-right')
+            self.assertIn('%x', status_right)
+            self.assertIn(' agentainer ', status_right)
+            activity_lines = [line for line in conf.read_text().splitlines()
+                              if re.match(r'\s*set(-option)?\s+.*window-status-activity-style', line)]
+            self.assertEqual(len(activity_lines), 1, activity_lines)
             self.assertIn('1', self.command(base + ['show-options', '-g', 'base-index']))
             for key in ('|', '-', 'r', 'c', 'H', 'J', 'K', 'L'):
                 self.command(base + ['list-keys', '-T', 'prefix', key])

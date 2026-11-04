@@ -11,7 +11,7 @@ import tempfile
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
-SCENARIOS = ('shell', 'eza', 'eza-tree', 'eza-broken', 'git-status', 'git-diff',
+SCENARIOS = ('shell', 'ls-colors', 'eza', 'eza-tree', 'eza-broken', 'git-status', 'git-diff',
              'git-staged', 'git-conflict', 'bat', 'bat-yaml', 'fzf-idle', 'fzf',
              'fzf-selected', 'fzf-empty', 'vim', 'vim-yaml', 'vim-browser',
              'vim-search', 'vim-selection', 'vim-browser-narrow', 'tmux-single',

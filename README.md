@@ -43,7 +43,7 @@ The [documentation index](docs/README.md) lists the same pages.
 | Launcher commands, `docker run` and `podman run`, sudo, file ownership, upgrading | [docs/running.md](docs/running.md) |
 | Signing in to each agent, which Claude login wins, GitHub tokens | [docs/logins.md](docs/logins.md) |
 | Where each agent keeps settings, instructions and skills, status lines, MCP logins | [docs/agents.md](docs/agents.md) |
-| Seeded shell, Git, tmux, Vim, EditorConfig, agent settings and Ayu-inspired Agentainer colors | [docs/defaults.md](docs/defaults.md) |
+| Seeded shell, Git, tmux, Vim, EditorConfig, agent settings and the GitHub Dark colors | [docs/defaults.md](docs/defaults.md) |
 | Your own configs, bind-mounted homes, separate test homes and custom images | [docs/customization.md](docs/customization.md) |
 | The shared `AGENTS.md`, MCP servers, tools that agents install, OpenRouter | [docs/configuration.md](docs/configuration.md) |
 | Python tests and linting, JavaScript tooling, native builds and PostgreSQL scripts | [docs/project-tools.md](docs/project-tools.md) |

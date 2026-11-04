@@ -1,21 +1,29 @@
 # Agentainer color review
 
-Agentainer colors, inspired by Ayu. Review contrast, selections, error colors, gutters and status lines.
+Agentainer uses GitHub Dark colors on a #010409 background. Review contrast, selections, error colors, gutters and status lines.
 
-- Image: localhost/agentainer:dev
+- Image: localhost/agentainer:gdt-int
 - Defaults: image
-- Renderer: 155.0.8059.85
+- Renderer: 156.0.8078.80
 - Terminal: 120 × 32 and narrow 80 × 24, JetBrains Mono 14px.
 
-Captured from actual tools with generic files. Browser rendering uses a fixed font and an Ayu-inspired reference ANSI palette. Your terminal's font rendering and ANSI colors may differ, especially for bat. Sample dates and the tmux clock are fixed.
+Captured from actual tools with generic files. Browser rendering uses a fixed font and the GitHub Dark reference ANSI palette from tests/unit/palette.py. Your terminal's font rendering and ANSI colors may differ, especially for bat. Sample dates and the tmux time and date are fixed.
 
 ## Shell and ls
 
-Amber user, blue hostname, muted green directories, amber links, green executables.
+Blue user, gray hostname, bold white path, blue directories, cyan links and green executables.
 
 Terminal: 120 columns by 32 rows.
 
 ![Shell and ls terminal screenshot](screenshots/shell.png)
+
+## ls file types
+
+Every ls file type the agent user can create, plus /dev/null. Special permissions use red, orange and blue backgrounds. The block-device row is illustrated.
+
+Terminal: 120 columns by 32 rows.
+
+![ls file types terminal screenshot](screenshots/ls-colors.png)
 
 ## eza
 
@@ -51,7 +59,7 @@ Terminal: 120 columns by 32 rows.
 
 ## Git diff
 
-Amber hunk headings, gray context, green additions and red removals.
+Bold blue file headers, purple hunk headings, light context, green additions and red removals.
 
 Terminal: 120 columns by 32 rows.
 
@@ -99,7 +107,7 @@ Terminal: 120 columns by 32 rows.
 
 ## fzf
 
-Black background, charcoal selection, amber prompt and matching highlights.
+Near-black background, dark gray current row, blue prompt and blue matching highlights.
 
 Terminal: 120 columns by 32 rows.
 
@@ -123,7 +131,7 @@ Terminal: 120 columns by 32 rows.
 
 ## Vim
 
-Syntax colors, line numbers, gutter, current line and slate-blue status line.
+Syntax colors, gray line numbers, current line and the dark blue status line.
 
 Terminal: 120 columns by 32 rows.
 
@@ -171,7 +179,7 @@ Terminal: 80 columns by 24 rows.
 
 ## tmux single pane
 
-One window and one pane with the charcoal and amber status bar.
+One window and one pane with the dark status bar, blue session name, time, date and agentainer blocks.
 
 Terminal: 120 columns by 32 rows.
 
@@ -179,7 +187,7 @@ Terminal: 120 columns by 32 rows.
 
 ## tmux
 
-Split panes and multiple windows with the charcoal and amber status bar. Clock fixed for review.
+Split panes and multiple windows. The current window is light blue on blue. Time and date fixed for review.
 
 Terminal: 120 columns by 32 rows.
 
@@ -195,7 +203,7 @@ Terminal: 120 columns by 32 rows.
 
 ## tmux window activity
 
-The background logs window has a verified activity flag and highlighted status entry.
+The background logs window has a verified activity flag and a pale blue status entry.
 
 Terminal: 120 columns by 32 rows.
 
@@ -203,16 +211,10 @@ Terminal: 120 columns by 32 rows.
 
 ## tmux split panes at 80 columns
 
-Split panes, window names and the clock at 80 columns by 24 rows.
+Split panes, window names, time and date at 80 columns by 24 rows.
 
 Terminal: 80 columns by 24 rows.
 
 ![tmux split panes at 80 columns terminal screenshot](screenshots/tmux-narrow.png)
-
-## ls file types
-
-GNU ls file colors, including special permissions. The final two rows illustrate the configured missing-target and block-device styles.
-
-![ls file types reference](screenshots/ls-colors.png)
 
 Screenshots are review artifacts.

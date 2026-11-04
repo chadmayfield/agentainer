@@ -18,7 +18,7 @@ abtop
 
 Upstream documents session, token, process and port monitoring for Claude Code, Codex and OpenCode ([supported agents](https://github.com/graykode/abtop#supported-agents)). Antigravity is not listed. OpenCode monitoring needs `sqlite3`, which the image includes. Inside a container, abtop sees only that container's processes; it is not a host-wide dashboard.
 
-The TUI can terminate processes. `x` targets the selected session, and `X` targets orphan ports. Press `q` to quit and `t` to cycle themes. The theme choice persists in `~/.config/abtop/config.toml` on the home volume. See [upstream key bindings](https://github.com/graykode/abtop#key-bindings) and [configuration](https://github.com/graykode/abtop#configuration).
+The TUI can terminate processes. `x` targets the selected session, and `X` targets orphan ports. Press `q` to quit and `t` to cycle themes. The theme choice persists in `~/.config/abtop/config.toml` on the home volume. abtop keeps its default theme and has no custom themes. Version 0.5.5 compiles its 12 themes in, and `config.toml` only selects one by name. The default background is `#191919` (`Color::Rgb(25, 25, 25)` in [`src/theme.rs`](https://github.com/graykode/abtop/blob/v0.5.5/src/theme.rs)), so it does not match the GitHub Dark `#010409` background. See [upstream key bindings](https://github.com/graykode/abtop#key-bindings) and [configuration](https://github.com/graykode/abtop#configuration).
 
 ## Model calls and controls
 
