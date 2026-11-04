@@ -300,9 +300,12 @@ def r_rust():
     return out
 
 
-def github_tool(prefix, repo, names):
-    """names maps AMD64/ARM64 to a function of the bare version returning the asset name."""
-    rel = gh_latest(repo)
+def github_tool(prefix, repo, names, rel=None):
+    """names maps AMD64/ARM64 to a function of the bare version returning the asset name.
+
+    rel is the release to pin; the default is the repository's latest release.
+    """
+    rel = rel or gh_latest(repo)
     ver = strip_v(rel["tag_name"])
     out = {prefix + "_VERSION": ver}
     for up, fn in names.items():
@@ -338,6 +341,46 @@ def r_ruff():
     return github_tool("RUFF", "astral-sh/ruff", {
         "AMD64": lambda v: "ruff-x86_64-unknown-linux-gnu.tar.gz",
         "ARM64": lambda v: "ruff-aarch64-unknown-linux-gnu.tar.gz"})
+
+
+def r_gosec():
+    # Release archives and gosec_<version>_checksums.txt: https://github.com/securego/gosec/releases
+    return github_tool("GOSEC", "securego/gosec", {
+        "AMD64": lambda v: "gosec_%s_linux_amd64.tar.gz" % v,
+        "ARM64": lambda v: "gosec_%s_linux_arm64.tar.gz" % v})
+
+
+def r_gitleaks():
+    # Release archives name the amd64 build linux_x64: https://github.com/gitleaks/gitleaks/releases
+    return github_tool("GITLEAKS", "gitleaks/gitleaks", {
+        "AMD64": lambda v: "gitleaks_%s_linux_x64.tar.gz" % v,
+        "ARM64": lambda v: "gitleaks_%s_linux_arm64.tar.gz" % v})
+
+
+# ContainerSSH server image tag series -> the ContainerSSH guest agent minor series verified
+# with it. The "v0.6" tag's digest can move between patch releases; the pair that was tested
+# end to end is recorded in docs/kubernetes.md. A new server series needs a reviewed entry.
+CONTAINERSSH_AGENT_SERIES = {"v0.6": "0.11"}
+
+
+def r_containerssh_agent():
+    tags = [tag for key, _, tag, _ in K8S_IMAGES if key == "CONTAINERSSH_IMAGE"]
+    series = CONTAINERSSH_AGENT_SERIES.get(tags[0]) if tags else None
+    if series is None:
+        print("containerssh/agent: no agent series is mapped for the ContainerSSH tag %s; keeping the current pin"
+              % (tags[0] if tags else "(none)"), file=sys.stderr)
+        return {}
+    wanted = re.compile(r"v?%s\.([0-9]+)" % re.escape(series))
+    found = []
+    for rel in fetch_json("https://api.github.com/repos/containerssh/agent/releases?per_page=50"):
+        m = wanted.fullmatch(rel.get("tag_name", ""))
+        if m and not rel.get("prerelease") and not rel.get("draft"):
+            found.append((int(m.group(1)), rel))
+    if not found:
+        raise LookupFailed("containerssh/agent: no stable %s.x release found" % series)
+    return github_tool("CONTAINERSSH_AGENT", "containerssh/agent", {
+        "AMD64": lambda v: "agent_%s_linux_amd64.tar.gz" % v,
+        "ARM64": lambda v: "agent_%s_linux_arm64.tar.gz" % v}, rel=max(found, key=lambda f: f[0])[1])
 
 
 def r_trivy():
@@ -1031,9 +1074,9 @@ def r_buildkit():
                                       fetch_json("https://hub.docker.com/v2/repositories/moby/buildkit/tags/%s" % tag))}
 
 
-RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_abtop, r_unslop, r_golangci,
-             r_kubectl, r_helm, r_awscli, r_tea, r_claude, r_node, r_codex, r_agy, r_opencode, r_k8s_images, r_buildkit,
-             r_extras]
+RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_gosec, r_gitleaks, r_containerssh_agent,
+             r_abtop, r_unslop, r_golangci, r_kubectl, r_helm, r_awscli, r_tea, r_claude, r_node, r_codex, r_agy,
+             r_opencode, r_k8s_images, r_buildkit, r_extras]
 
 
 def write_atomic(path, text):

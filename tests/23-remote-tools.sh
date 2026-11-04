@@ -1,6 +1,8 @@
 #!/bin/sh
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
+# shellcheck source=versions.env
+. "$(dirname "$0")/../versions.env"
 
 # Prints "name=status" for each package, so a failure names the package.
 pkg_status() {
@@ -56,5 +58,15 @@ assert_eq "pdftotext, pdftoppm and magick run" "0 0 0" "$(run_in --network none 
 
 assert_eq "sftp-server is executable" "yes" \
 	"$(run_in --network none -- sh -c 'test -x /usr/lib/openssh/sftp-server && echo yes')"
+
+assert_contains "gosec version" "Version: $GOSEC_VERSION" "$(run_in --network none -- gosec --version 2>&1)"
+assert_contains "gitleaks version" "$GITLEAKS_VERSION" "$(run_in --network none -- gitleaks version)"
+
+# main.go:48-50 at containerssh/agent v0.11.0 prints the help text and exits 0 for --help.
+assert_eq "containerssh-agent --help exits 0" "rc=0" \
+	"$(run_in --network none -- sh -c '/usr/local/bin/containerssh-agent --help >/dev/null 2>&1; echo rc=$?')"
+# shellcheck disable=SC2016 # expands in the container
+assert_eq "/usr/bin/containerssh-agent resolves to the pinned binary" "/usr/local/bin/containerssh-agent" \
+	"$(run_in --network none -- sh -c 'readlink -f /usr/bin/containerssh-agent')"
 
 finish

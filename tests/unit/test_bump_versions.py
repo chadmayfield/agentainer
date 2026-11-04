@@ -85,6 +85,84 @@ class ParserTests(unittest.TestCase):
                                 "RUFF_SHA256_ARM64": "b" * 64})
         self.assertEqual([call.args[2] for call in verify.call_args_list], names)
 
+    def test_gosec_resolver_selects_both_linux_archives(self):
+        names = ["gosec_2.30.0_linux_amd64.tar.gz", "gosec_2.30.0_linux_arm64.tar.gz"]
+        release = {"tag_name": "v2.30.0", "assets": [
+            {"name": name, "digest": "sha256:" + letter * 64} for name, letter in zip(names, "ab")]}
+        with patch.object(bv, "gh_latest", return_value=release) as latest, \
+                patch.object(bv, "verify_asset", return_value=False) as verify:
+            pins = bv.r_gosec()
+        latest.assert_called_once_with("securego/gosec")
+        self.assertEqual(pins, {"GOSEC_VERSION": "2.30.0", "GOSEC_SHA256_AMD64": "a" * 64,
+                                "GOSEC_SHA256_ARM64": "b" * 64})
+        self.assertEqual([c.args[2] for c in verify.call_args_list], names)
+        self.assertIn(bv.r_gosec, bv.RESOLVERS)
+
+    def test_gitleaks_resolver_uses_x64_for_amd64(self):
+        names = ["gitleaks_8.30.1_linux_x64.tar.gz", "gitleaks_8.30.1_linux_arm64.tar.gz"]
+        release = {"tag_name": "v8.30.1", "assets": [
+            {"name": name, "digest": "sha256:" + letter * 64} for name, letter in zip(names, "ab")]}
+        with patch.object(bv, "gh_latest", return_value=release) as latest, \
+                patch.object(bv, "verify_asset", return_value=False) as verify:
+            pins = bv.r_gitleaks()
+        latest.assert_called_once_with("gitleaks/gitleaks")
+        self.assertEqual(pins, {"GITLEAKS_VERSION": "8.30.1", "GITLEAKS_SHA256_AMD64": "a" * 64,
+                                "GITLEAKS_SHA256_ARM64": "b" * 64})
+        self.assertEqual([c.args[2] for c in verify.call_args_list], names)
+        self.assertIn(bv.r_gitleaks, bv.RESOLVERS)
+
+    @staticmethod
+    def _agent_release(version):
+        names = ["agent_%s_linux_amd64.tar.gz" % version, "agent_%s_linux_arm64.tar.gz" % version]
+        return {"tag_name": "v" + version, "prerelease": False, "assets": [
+            {"name": name, "digest": "sha256:" + letter * 64} for name, letter in zip(names, "ab")]}
+
+    def test_agent_series_follows_server_series(self):
+        releases = [self._agent_release(v) for v in ("0.12.0", "0.11.2", "0.11.1", "0.10.9")]
+        with patch.object(bv, "fetch_json", return_value=releases) as fetched, \
+                patch.object(bv, "verify_asset", return_value=False):
+            pins = bv.r_containerssh_agent()
+        self.assertIn("containerssh/agent", fetched.call_args.args[0])
+        self.assertEqual(pins, {"CONTAINERSSH_AGENT_VERSION": "0.11.2",
+                                "CONTAINERSSH_AGENT_SHA256_AMD64": "a" * 64,
+                                "CONTAINERSSH_AGENT_SHA256_ARM64": "b" * 64})
+        self.assertIn(bv.r_containerssh_agent, bv.RESOLVERS)
+
+    def test_agent_series_skips_prereleases(self):
+        pre = self._agent_release("0.11.3")
+        pre["prerelease"] = True
+        releases = [pre, self._agent_release("0.11.2")]
+        with patch.object(bv, "fetch_json", return_value=releases), \
+                patch.object(bv, "verify_asset", return_value=False):
+            pins = bv.r_containerssh_agent()
+        self.assertEqual(pins["CONTAINERSSH_AGENT_VERSION"], "0.11.2")
+
+    def test_agent_held_when_server_series_unmapped(self):
+        images = (("CONTAINERSSH_IMAGE", "containerssh/containerssh", "v0.7", "x.yaml"),)
+        err = io.StringIO()
+        with patch.object(bv, "K8S_IMAGES", images), \
+                patch.object(bv, "fetch_json", side_effect=AssertionError("must not fetch")), \
+                contextlib.redirect_stderr(err):
+            pins = bv.r_containerssh_agent()
+        self.assertEqual(pins, {})
+        self.assertIn("v0.7", err.getvalue())
+
+    def test_agent_without_a_release_in_the_series_is_refused(self):
+        with patch.object(bv, "fetch_json", return_value=[self._agent_release("0.12.0")]):
+            with self.assertRaises(bv.LookupFailed):
+                bv.r_containerssh_agent()
+
+    def test_k8s_containerssh_tag_is_mapped(self):
+        tags = [tag for key, _, tag, _ in bv.K8S_IMAGES if key == "CONTAINERSSH_IMAGE"]
+        self.assertEqual(len(tags), 1)
+        self.assertIn(tags[0], bv.CONTAINERSSH_AGENT_SERIES)
+
+    def test_new_tool_pins_match_value_patterns(self):
+        for prefix in ("GOSEC", "GITLEAKS", "CONTAINERSSH_AGENT"):
+            self.assertIsNone(bv.invalid(prefix + "_VERSION", "1.2.3"))
+            for arch in ("AMD64", "ARM64"):
+                self.assertIsNone(bv.invalid("%s_SHA256_%s" % (prefix, arch), "a" * 64))
+
     def test_bsd_and_per_asset_published_checksums(self):
         checksum = "a" * 64
         for filename, contents in (("checksums-bsd", "SHA256 (tool.tar.gz) = " + checksum),

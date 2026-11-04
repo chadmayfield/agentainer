@@ -71,6 +71,27 @@ ARG TRIVY_SHA256_AMD64
 ARG TRIVY_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh trivy
 
+FROM fetch AS gosec
+ARG TARGETARCH
+ARG GOSEC_VERSION
+ARG GOSEC_SHA256_AMD64
+ARG GOSEC_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh gosec
+
+FROM fetch AS gitleaks
+ARG TARGETARCH
+ARG GITLEAKS_VERSION
+ARG GITLEAKS_SHA256_AMD64
+ARG GITLEAKS_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh gitleaks
+
+FROM fetch AS containerssh-agent
+ARG TARGETARCH
+ARG CONTAINERSSH_AGENT_VERSION
+ARG CONTAINERSSH_AGENT_SHA256_AMD64
+ARG CONTAINERSSH_AGENT_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh containerssh-agent
+
 FROM fetch AS ruff
 ARG TARGETARCH
 ARG RUFF_VERSION
@@ -258,6 +279,9 @@ COPY --from=gh /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=uv /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
 COPY --from=ruff /usr/local/bin/ruff /usr/local/bin/ruff
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
+COPY --from=gosec /usr/local/bin/gosec /usr/local/bin/gosec
+COPY --from=gitleaks /usr/local/bin/gitleaks /usr/local/bin/gitleaks
+COPY --from=containerssh-agent /usr/local/bin/containerssh-agent /usr/local/bin/containerssh-agent
 COPY --from=abtop /usr/local/bin/abtop /usr/local/bin/abtop
 COPY --from=golangci-lint /usr/local/bin/golangci-lint /usr/local/bin/golangci-lint
 COPY --from=tea /usr/local/bin/tea /usr/local/bin/tea
@@ -292,6 +316,7 @@ RUN cd /tmp/agentainer-build/rootfs \
 	&& rm -rf /tmp/agentainer-build/rootfs \
 	&& ln -s /opt/codex/bin/codex /usr/local/bin/codex \
 	&& ln -s /opt/node/bin/node /usr/local/bin/node \
+	&& ln -s /usr/local/bin/containerssh-agent /usr/bin/containerssh-agent \
 	&& ln -s /opt/node/bin/npm /usr/local/bin/npm \
 	&& ln -s /opt/node/bin/npx /usr/local/bin/npx \
 	&& ln -s /usr/local/aws-cli/v2/current/bin/aws /usr/local/bin/aws \

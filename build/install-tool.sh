@@ -11,6 +11,7 @@ amd64)
 	A=AMD64
 	TRIPLE=x86_64
 	TRIVY_ARCH=64bit
+	GITLEAKS_ARCH=x64
 	OC=linux-x64-baseline
 	CLAUDE_PLATFORM=linux-x64
 	NODE_ARCH=x64
@@ -19,6 +20,7 @@ arm64)
 	A=ARM64
 	TRIPLE=aarch64
 	TRIVY_ARCH=ARM64
+	GITLEAKS_ARCH=arm64
 	OC=linux-arm64
 	CLAUDE_PLATFORM=linux-arm64
 	NODE_ARCH=arm64
@@ -189,6 +191,24 @@ trivy)
 	sh $F "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" sha256 "$(pin TRIVY_SHA256)" trivy.tgz
 	tar -xzf trivy.tgz trivy
 	install -m 0755 trivy /usr/local/bin/trivy
+	;;
+gosec)
+	# https://github.com/securego/gosec/releases
+	sh $F "https://github.com/securego/gosec/releases/download/v${GOSEC_VERSION}/gosec_${GOSEC_VERSION}_linux_${TARGETARCH}.tar.gz" sha256 "$(pin GOSEC_SHA256)" gosec.tgz
+	tar -xzf gosec.tgz gosec
+	install -m 0755 gosec /usr/local/bin/gosec
+	;;
+gitleaks)
+	# https://github.com/gitleaks/gitleaks/releases
+	sh $F "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${GITLEAKS_ARCH}.tar.gz" sha256 "$(pin GITLEAKS_SHA256)" gitleaks.tgz
+	tar -xzf gitleaks.tgz gitleaks
+	install -m 0755 gitleaks /usr/local/bin/gitleaks
+	;;
+containerssh-agent)
+	# The ContainerSSH guest agent: https://github.com/containerssh/agent/releases
+	sh $F "https://github.com/containerssh/agent/releases/download/v${CONTAINERSSH_AGENT_VERSION}/agent_${CONTAINERSSH_AGENT_VERSION}_linux_${TARGETARCH}.tar.gz" sha256 "$(pin CONTAINERSSH_AGENT_SHA256)" agent.tgz
+	tar -xzf agent.tgz containerssh-agent
+	install -m 0755 containerssh-agent /usr/local/bin/containerssh-agent
 	;;
 abtop)
 	# Official release archives: https://github.com/graykode/abtop/releases
