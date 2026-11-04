@@ -10,6 +10,49 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# Pinned so the check does not change under a new release. The plugin runs @latest.
+MCP_VERSION = "0.0.84"
+
+# Runs inside the container as the agent user. Starts the server over stdio, lists the
+# tools, opens a page served on 127.0.0.1 and takes a screenshot.
+MCP_CHECK = r"""
+import base64, json, subprocess, sys
+site = subprocess.Popen(["python3", "-m", "http.server", "8765", "--bind", "127.0.0.1",
+                         "--directory", "/tmp/mcp-site"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+server = subprocess.Popen(["npx", "-y", "@playwright/mcp@" + sys.argv[1]], stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, text=True)
+def send(message):
+    server.stdin.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+    server.stdin.flush()
+def call(number, method, params):
+    send({"id": number, "method": method, "params": params})
+    while True:
+        line = server.stdout.readline()
+        if not line:
+            raise SystemExit("MCP server closed its output")
+        reply = json.loads(line)
+        if reply.get("id") == number:
+            if "error" in reply or reply["result"].get("isError"):
+                raise SystemExit("MCP error: " + json.dumps(reply)[:2000])
+            return reply["result"]
+try:
+    call(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                           "clientInfo": {"name": "agentainer-test", "version": "0"}})
+    send({"method": "notifications/initialized"})
+    names = {tool["name"] for tool in call(2, "tools/list", {})["tools"]}
+    assert {"browser_navigate", "browser_take_screenshot"} <= names, sorted(names)
+    page = call(3, "tools/call", {"name": "browser_navigate", "arguments": {"url": "http://127.0.0.1:8765/"}})
+    assert "http://127.0.0.1:8765/" in json.dumps(page), page
+    shot = call(4, "tools/call", {"name": "browser_take_screenshot", "arguments": {}})
+    images = [part for part in shot["content"] if part["type"] == "image"]
+    assert len(images) == 1, shot
+    assert base64.b64decode(images[0]["data"]).startswith(bytes.fromhex("89504e470d0a1a0a"))
+    print("mcp-ok tools=%d" % len(names))
+finally:
+    server.terminate()
+    site.terminate()
+"""
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -41,7 +84,7 @@ def main():
                 "-v", str(ROOT / "tests/fixtures/browser-smoke.spec.cjs") + ":/fixtures/browser-smoke.spec.cjs:ro",
                 "-w", "/workspace",
                 "-e", "PLAYWRIGHT_BROWSERS_PATH=/home/agent/.cache/ms-playwright",
-                "-e", "PYTHONDONTWRITEBYTECODE=1", args.image, "sleep", "infinity")
+                "-e", "PYTHONDONTWRITEBYTECODE=1", "--security-opt", "no-new-privileges", args.image, "sleep", "infinity")
         command("exec", "--user", "root", name, "chown", "agent:agent", "/workspace")
         # The entrypoint and exec can run concurrently after a detached start.
         command("exec", "--user", "agent", name, "sh", "-ec",
@@ -51,9 +94,6 @@ def main():
 
     def execute(name, *arguments, expected=0):
         return command("exec", "--user", "agent", name, *arguments, expected=expected)
-
-    def install_libraries(name):
-        execute(name, "sudo", "./node_modules/.bin/playwright", "install-deps", "chromium")
 
     def browser_inventory(name):
         return execute(name, "python3", "-c",
@@ -85,11 +125,9 @@ def main():
             raise RuntimeError("Missing-browser check failed for an unexpected reason\n" + missing[-4000:])
         passed("browser test fails before browser installation")
         execute(name, "./node_modules/.bin/playwright", "install", "--help")
-        execute(name, "./node_modules/.bin/playwright", "install-deps", "--help")
-        install_libraries(name)
         execute(name, "./node_modules/.bin/playwright", "install", "--only-shell", "chromium")
         smoke(name)
-        passed("headless Chromium renders, clicks and writes a PNG")
+        passed("headless Chromium renders, clicks and writes a PNG without root")
         before = browser_inventory(name)
         if not json.loads(before):
             raise RuntimeError("No browser files in the persistent home")
@@ -104,11 +142,23 @@ def main():
         if browser_inventory(name) != before:
             raise RuntimeError("Browser files changed across container recreation")
         passed("browser files survive container recreation with identical hashes")
-        install_libraries(name)
         smoke(name)
         if browser_inventory(name) != before:
             raise RuntimeError("The second run changed the installed browser files")
-        passed("recreated container uses persisted browsers after OS dependency setup")
+        passed("recreated container uses persisted browsers without any dependency setup")
+        # The MCP server downloads its own browser build into the same cache, so this
+        # runs last. The project's browser files must stay unchanged next to it.
+        execute(name, "sh", "-ec", "mkdir -p /tmp/mcp-site && echo '<h1>mcp-ok</h1>' > /tmp/mcp-site/index.html")
+        execute(name, "npx", "-y", "@playwright/mcp@" + MCP_VERSION, "install-browser", "chromium")
+        report = execute(name, "python3", "-c", MCP_CHECK, MCP_VERSION)
+        if "mcp-ok" not in report:
+            raise RuntimeError("MCP check printed no success marker\n" + report[-4000:])
+        after = json.loads(browser_inventory(name))
+        if not all(after.get(path) == digest for path, digest in json.loads(before).items()):
+            raise RuntimeError("The MCP browser install changed the project's browser files")
+        if len(after) <= len(json.loads(before)):
+            raise RuntimeError("The MCP browser install added no browser files")
+        passed("Playwright MCP server lists tools, opens a local page and takes a screenshot")
         print(f"1..{number}", flush=True)
     finally:
         cleanup_errors = []
