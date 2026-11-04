@@ -6,7 +6,7 @@
 - Namespace `containerssh`: the ContainerSSH server in [persistent mode](https://containerssh.io/v0.6/reference/kubernetes/#persistent-mode), and a small Python webhook that checks SSH public keys and tells ContainerSSH which pod to use. A NetworkPolicy lets only ContainerSSH reach the webhook, if your CNI enforces NetworkPolicy.
 - The ContainerSSH image on Docker Hub is amd64 only, so its Deployment runs on amd64 nodes. The agentainer pod runs on either architecture.
 
-Verified on 2026-11-04 on a Kubernetes v1.36.2 cluster with flannel and kube-network-policies, which enforces NetworkPolicy: SSH logins, SFTP and port forwarding closed by default and opened at runtime, FileBrowser, the egress policy, Playwright in the Restricted pod, and an upgrade from the previous example. The results are quoted in the sections below. The test used test-only namespaces and its own credentials.
+Verified on 2026-11-04 on a Kubernetes cluster whose network plugin enforces NetworkPolicy: SSH logins, SFTP and port forwarding closed by default and opened at runtime, FileBrowser, the egress policy, Playwright in the Restricted pod, and an upgrade from the previous example. The results are quoted in the sections below. The test used test-only namespaces and its own credentials.
 
 ## Contents
 
