@@ -2,7 +2,7 @@
 
 This page shows where each agent keeps its settings, instructions and skills inside the container, and how to set up status lines, plugins and MCP logins. Your settings, instructions and skills live under `/home/agent`, the persistent home, so they survive a new container. Run the commands inside the container (`bin/agentainer shell` or a tmux window).
 
-The pinned versions are in [`versions.env`](../versions.env): Claude Code 2.1.309, Codex 0.166.0, Antigravity CLI 1.4.12 and OpenCode 2.2.5. The commands below exist in those versions (`--help` in the image). [Signing in](logins.md) covers logins.
+The pinned versions are in [`versions.env`](../versions.env). The commands below were checked with `--help` in the image against Claude Code 2.1.309, Codex 0.166.0, Antigravity CLI 1.4.12 and OpenCode 2.2.5. [Signing in](logins.md) covers logins.
 
 ## Contents
 
