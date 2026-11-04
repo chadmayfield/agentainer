@@ -81,11 +81,13 @@ The home volume keeps browser downloads. OS libraries installed with sudo live i
 
 ## The Playwright MCP plugin
 
-Claude Code's `playwright@claude-plugins-official` plugin starts `npx @playwright/mcp@latest` with no arguments ([its `.mcp.json`](https://github.com/anthropics/claude-plugins-official/blob/main/external_plugins/playwright/.mcp.json)). Install it like the other plugins in [plugins.md](plugins.md#claude-code):
+Claude Code's Playwright plugin starts `npx @playwright/mcp@latest` with no arguments ([its `.mcp.json`](https://github.com/anthropics/claude-plugins-official/blob/main/external_plugins/playwright/.mcp.json)). The image's Claude Code has the built-in `anthropic-plugin-directory` marketplace (`claude plugin marketplace list`), so this works with no marketplace step:
 
 ```sh
-claude plugin install playwright@claude-plugins-official --scope user
+claude plugin install playwright@anthropic-plugin-directory --scope user
 ```
+
+`playwright@claude-plugins-official` installs the same plugin after you add that marketplace as described in [plugins.md](plugins.md#claude-code).
 
 The server's default browser is the `chrome` channel, which the image does not have. The image sets `PLAYWRIGHT_MCP_BROWSER=chromium`, which `@playwright/mcp` reads as its `--browser` option, so the server uses Playwright's own Chromium build. With no `DISPLAY` set, the server runs the browser headless.
 

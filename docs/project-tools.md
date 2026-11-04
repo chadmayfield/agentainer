@@ -150,8 +150,8 @@ These two tools are not in the image. Install them yourself when a project needs
 [MarkItDown](https://github.com/microsoft/markitdown) 0.1.9 converts Office documents, PDFs and other formats to Markdown:
 
 ```sh
-uv tool install "markitdown[docx,pptx,xlsx,xls,pdf,outlook]==0.1.9"
-markitdown report.docx > report.md
+uv tool install "markitdown[docx,pptx,xlsx,xls,pdf,outlook]==0.1.9" &&
+  markitdown report.docx > report.md
 ```
 
 The extras select the input formats (`[all]` installs every one). The install was about 240 MB. `uv tool` installs under the tools root, so MarkItDown survives a new container only with `AGENTAINER_TOOLS=persist`; otherwise install it again after the container is recreated ([tools that agents install](configuration.md#tools-that-agents-install)).
@@ -164,13 +164,16 @@ case "$(uname -m)" in
 x86_64) a=amd64 s=38aa33b325a2bc96a4c39409631212db55702f564250bcdbead180b3bf646389 ;;
 aarch64) a=arm64 s=21e1d4ba09bd0b334590d204580fd4f6629b21be4ab6a32b26cc98982e9e0c68 ;;
 esac
-cd "$(mktemp -d)"
-curl -fsSLO "https://github.com/jgm/pandoc/releases/download/$v/pandoc-$v-linux-$a.tar.gz"
-printf '%s  %s\n' "$s" "pandoc-$v-linux-$a.tar.gz" | sha256sum -c -
-tar -xzf "pandoc-$v-linux-$a.tar.gz"
-install -D -m 0755 "pandoc-$v/bin/pandoc" ~/.local/bin/pandoc
-~/.local/bin/pandoc --version | head -n 1
+f="pandoc-$v-linux-$a.tar.gz"
+cd "$(mktemp -d)" &&
+  curl -fsSLO "https://github.com/jgm/pandoc/releases/download/$v/$f" &&
+  printf '%s  %s\n' "$s" "$f" | sha256sum -c - &&
+  tar -xzf "$f" &&
+  install -D -m 0755 "pandoc-$v/bin/pandoc" ~/.local/bin/pandoc &&
+  ~/.local/bin/pandoc --version | head -n 1
 ```
+
+Each step runs only when the one before it succeeded, so a checksum mismatch stops before `tar` and `install`, and an unknown architecture leaves `s` empty, which `sha256sum -c` rejects.
 
 The checksums are the SHA-256 digests GitHub publishes for the release assets (`gh api repos/jgm/pandoc/releases/tags/3.13 --jq '.assets[] | .name + " " + .digest'`). The binary unpacks to about 172 MB.
 

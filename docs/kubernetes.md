@@ -97,7 +97,7 @@ To turn them off again, set both back to `off` the same way.
 ### SFTP
 
 - The subsystem runs as the `agent` user and reaches every file that user can, not only `~/transfer`.
-- Sessions start in the exec's working directory, `/workspace` in this image, and the subsystem takes no arguments. Use absolute paths, for example `put report.pdf /home/agent/transfer/report.pdf`.
+- The subsystem setting takes no arguments, so you cannot choose the starting directory. Not verified: which directory a session starts in. The image's working directory is `/workspace` (`WORKDIR` in the `Containerfile`), and the cluster check used absolute paths only. Use absolute paths, for example `put report.pdf /home/agent/transfer/report.pdf`.
 - With SFTP on, `sftp` works. The default `scp` uses the SFTP protocol since OpenSSH 9.0, so it needs SFTP on too; this is not verified. `scp -O` (the legacy protocol) and `rsync -e ssh` run as commands and should work without the switch; this is not verified either.
 - The cluster check ran `put`, `get` and `ls` in `/home/agent/transfer`, and the downloaded file matched.
 
@@ -119,7 +119,7 @@ The pod mounts `agentainer-transfer` twice. Subpath `files` is `~/transfer` (`/h
 
 To hand a screenshot to an agent, upload it to `~/transfer` and give the agent its path, for example `/home/agent/transfer/screenshot.png`.
 
-[FileBrowser Quantum](https://github.com/gtsteffaniak/filebrowser) v2.0.2 is a web file manager. The example runs it as the second container, so ContainerSSH still opens sessions in the agent container. Its settings are in [`agentainer/filebrowser-config.yaml`](../deploy/kubernetes/agentainer/filebrowser-config.yaml). It listens on `127.0.0.1:8080` only and has no Service. Reach it through the API server:
+[FileBrowser Quantum](https://github.com/gtsteffaniak/filebrowser) is a web file manager. The example pins the `2.0-stable-slim` tag by digest (`FILEBROWSER_IMAGE` in `versions.env`); the settings and behavior described here were checked against the v2.0.2-stable source. The example runs it as the second container, so ContainerSSH still opens sessions in the agent container. Its settings are in [`agentainer/filebrowser-config.yaml`](../deploy/kubernetes/agentainer/filebrowser-config.yaml). It listens on `127.0.0.1:8080` only and has no Service. Reach it through the API server:
 
 ```sh
 kubectl -n agentainer port-forward pod/agentainer-0 8080:8080
@@ -141,8 +141,8 @@ The database lives on the transfer volume, so the account and its new password s
 
 Security:
 
-- **FileBrowser is not a security boundary against the agent container.** Both containers share the pod's network namespace, so anything running in the agent container can reach `127.0.0.1:8080` (confirmed in the cluster check). Give the admin account a unique password that the agent never sees. FileBrowser rate-limits failed logins and locks the account out (`disableRateLimit`, off by default, in FileBrowser's [HTTP settings](https://filebrowserquantum.com/en/docs/configuration/http/)).
-- **Upload only into folders you created.** The agent can create a symbolic link to a folder inside `~/transfer`. In the cluster check, with the example's `ignoreSymlinks` rule on, FileBrowser hid the link from listings, refused to list or read through it ("resolved path escapes scope") and refused to overwrite an existing file through it. A new file uploaded into the link's path through the API was still written to the link's target, a folder in FileBrowser's container. The agent cannot read that folder, so it gets nothing back, but your file lands in the wrong place. This is not fixed. If you can, report it to the [FileBrowser Quantum project](https://github.com/gtsteffaniak/filebrowser/issues).
+- **FileBrowser is not a security boundary against the agent container.** Both containers share the pod's network namespace, so anything running in the agent container can reach `127.0.0.1:8080` (confirmed in the cluster check). Give the admin account a unique password that the agent never sees. FileBrowser limits login attempts per client address and per username, and after 8 failed logins in a row from one address for one username it refuses that pair for 15 minutes (`authFailedLoginMaxAttempts` and `authFailedLoginLockoutMins` in `backend/internal/web/http.go` at v2.0.2-stable; `disableRateLimit` in the [HTTP settings](https://filebrowserquantum.com/en/docs/configuration/http/) turns this off). The lockout is not per account. Through `kubectl port-forward` your browser arrives from `127.0.0.1`, the same address as anything in the agent container, so failed logins from the agent can lock you out of `admin` for 15 minutes.
+- **An upload can follow a link the agent planted.** The agent can replace a folder inside `~/transfer` with a symbolic link to a folder elsewhere, at any time. In the cluster check, with the example's `ignoreSymlinks` rule on, a new file uploaded through the API into the link's path was written to the link's target, a folder in FileBrowser's container. Reading through the link returned 403 ("resolved path escapes scope"), and overwriting an existing file through it failed with 404. The agent cannot read FileBrowser's folders, so it gets nothing back, but your file lands in the wrong place. In a local test of the same image and settings, the rule kept links out of FileBrowser's listings, so a folder that FileBrowser still lists is a real folder at that moment. FileBrowser resolves the folder when the upload arrives, so upload to the top of `~/transfer`, or reload the listing and confirm the folder is still there right before you upload. This is a limitation of FileBrowser, not fixed here. If you can, report it to the [FileBrowser Quantum project](https://github.com/gtsteffaniak/filebrowser/issues).
 
 Single sign-on through a reverse proxy uses FileBrowser's proxy login, which the ConfigMap shows in a comment. It needs a listen address other than `127.0.0.1`, a Service of its own that only the proxy can reach, and a proxy that sets the username header and strips it from client requests ([proxy login](https://filebrowserquantum.com/en/docs/configuration/authentication/proxy/)).
 
@@ -207,7 +207,7 @@ spec:
 
 In the cluster check, with the policy on, HTTPS to a private pod address timed out, while `https://example.com`, the npm registry and the Playwright download CDN worked. A second policy like the one above re-allowed the private address.
 
-[`ingress-policy.yaml`](../deploy/kubernetes/agentainer/ingress-policy.yaml) denies all ingress to the agent pod. SSH sessions use the Kubernetes API (`pods/exec`) and `kubectl port-forward` goes through the API server and the kubelet, so neither needs pod network ingress.
+[`ingress-policy.yaml`](../deploy/kubernetes/agentainer/ingress-policy.yaml) denies all ingress to the agent pod. SSH sessions use the Kubernetes API (`pods/exec`), and `kubectl port-forward` goes through the API server and the kubelet. Not verified: that SSH and `kubectl port-forward` keep working with this policy on. The cluster check did not apply it, and how the kubelet's port-forward traffic meets NetworkPolicy depends on the CNI.
 
 Without the egress policy, the agent pod can reach any address, including the instance metadata address if the cluster allows it.
 

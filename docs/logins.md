@@ -31,7 +31,7 @@ The env file uses the engine's `NAME=value` format, not shell syntax. Do not quo
 
 ## Signing in over SSH
 
-Over SSH, for example through the [Kubernetes example](kubernetes.md), the container has no browser of its own. Each command below prints a URL. Open it in a browser on your own machine and finish the sign-in there. The output and help text were checked on 2026-11-04 in the image with Claude Code 2.1.309, Codex 0.166.0, OpenCode 2.2.5 and Antigravity 1.4.12. None of these sign-ins were completed in that check.
+Over SSH, for example through the [Kubernetes example](kubernetes.md), the container has no browser of its own. `claude auth login` and `codex login --device-auth` print a URL; open it in a browser on your own machine and finish the sign-in there. OpenCode and Antigravity are described in the table. The output and help text were checked on 2026-11-04 in the image with Claude Code 2.1.309, Codex 0.166.0, OpenCode 2.2.5 and Antigravity 1.4.12. None of these sign-ins were completed in that check.
 
 | Agent | Command | What it does |
 |---|---|---|
