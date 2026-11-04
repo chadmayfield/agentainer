@@ -19,6 +19,15 @@ MCP_CHECK = r"""
 import base64, json, subprocess, sys
 site = subprocess.Popen(["python3", "-m", "http.server", "8765", "--bind", "127.0.0.1",
                          "--directory", "/tmp/mcp-site"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+import socket, time
+for _ in range(50):
+    try:
+        socket.create_connection(("127.0.0.1", 8765), timeout=1).close()
+        break
+    except OSError:
+        time.sleep(0.2)
+else:
+    raise SystemExit("the local web server did not start")
 server = subprocess.Popen(["npx", "-y", "@playwright/mcp@" + sys.argv[1]], stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, text=True)
 def send(message):
@@ -43,14 +52,21 @@ try:
     assert {"browser_navigate", "browser_take_screenshot"} <= names, sorted(names)
     page = call(3, "tools/call", {"name": "browser_navigate", "arguments": {"url": "http://127.0.0.1:8765/"}})
     assert "http://127.0.0.1:8765/" in json.dumps(page), page
+    snapshot = call(5, "tools/call", {"name": "browser_snapshot", "arguments": {}})
+    assert "agentainer-mcp-heading" in json.dumps(snapshot), snapshot
     shot = call(4, "tools/call", {"name": "browser_take_screenshot", "arguments": {}})
     images = [part for part in shot["content"] if part["type"] == "image"]
     assert len(images) == 1, shot
     assert base64.b64decode(images[0]["data"]).startswith(bytes.fromhex("89504e470d0a1a0a"))
     print("mcp-ok tools=%d" % len(names))
 finally:
-    server.terminate()
-    site.terminate()
+    for process in (server, site):
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 """
 
 
@@ -148,7 +164,7 @@ def main():
         passed("recreated container uses persisted browsers without any dependency setup")
         # The MCP server downloads its own browser build into the same cache, so this
         # runs last. The project's browser files must stay unchanged next to it.
-        execute(name, "sh", "-ec", "mkdir -p /tmp/mcp-site && echo '<h1>mcp-ok</h1>' > /tmp/mcp-site/index.html")
+        execute(name, "sh", "-ec", "mkdir -p /tmp/mcp-site && echo '<h1>agentainer-mcp-heading</h1>' > /tmp/mcp-site/index.html")
         execute(name, "npx", "-y", "@playwright/mcp@" + MCP_VERSION, "install-browser", "chromium")
         report = execute(name, "python3", "-c", MCP_CHECK, MCP_VERSION)
         if "mcp-ok" not in report:

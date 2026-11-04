@@ -41,10 +41,12 @@ expect_installed "fonts installed" \
 expect_installed "sftp server, poppler and imagemagick installed" \
 	openssh-sftp-server poppler-utils imagemagick
 
+# dpkg-query exits 1 for a package that is not installed; rc=127 (missing command) or any
+# other code fails the marker.
 # "not installed" text from dpkg contains the package name, so check the status string.
 # shellcheck disable=SC2016 # expands in the container
-_xvfb=$(run_in --network none -- sh -c 'dpkg-query -W -f="\${Status}" xvfb 2>&1; echo "ran rc=$?"')
-assert_absent "xvfb is not installed" "$_xvfb" "ran rc=" "install ok installed"
+_xvfb=$(run_in --network none -- sh -c 'dpkg-query -W -f="\${Status}" xvfb 2>&1; echo "ran rc=$? end"')
+assert_absent "xvfb is not installed" "$_xvfb" "ran rc=1 end" "install ok installed"
 
 assert_eq "playwright mcp uses chromium" "chromium" \
 	"$(run_in --network none -- printenv PLAYWRIGHT_MCP_BROWSER)"
