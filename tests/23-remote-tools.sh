@@ -77,8 +77,9 @@ assert_eq "/usr/bin/containerssh-agent resolves to the pinned binary" "/usr/loca
 _webhook="$(dirname "$0")/../deploy/kubernetes/auth-webhook/webhook.py"
 _agent_path=$(sed -n 's/^AGENT_PATH = "\(.*\)"$/\1/p' "$_webhook")
 _sftp_path=$(sed -n 's/^SUBSYSTEMS = {"sftp": "\(.*\)"}$/\1/p' "$_webhook")
-assert_eq "webhook AGENT_PATH was read" "yes" "$([ -n "$_agent_path" ] && echo yes)"
-assert_eq "webhook sftp subsystem path was read" "yes" "$([ -n "$_sftp_path" ] && echo yes)"
+# An empty read only fails. It never prints ok, because these checks run without the image.
+[ -n "$_agent_path" ] || fail "webhook AGENT_PATH was read" "no AGENT_PATH line in $_webhook"
+[ -n "$_sftp_path" ] || fail "webhook sftp subsystem path was read" "no SUBSYSTEMS line in $_webhook"
 # shellcheck disable=SC2016 # expands in the container
 assert_eq "the webhook's agent and sftp paths are executable in the image" "agent=yes sftp=yes" \
 	"$(run_in --network none -- sh -c '
