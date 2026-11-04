@@ -70,9 +70,62 @@ spec:
             - {name: home, mountPath: /home/agent}
             - {name: workspace, mountPath: /workspace}
             - {name: seed, mountPath: /etc/agentainer/seed, readOnly: true}
+            # Shared memory for Chromium. Playwright's Docker docs (docs/src/docker.md) run
+            # Chromium with --ipc=host, because without it Chromium can run out of memory and
+            # crash. Files in this tmpfs count against this container's memory limit
+            # (Kubernetes docs, Volumes, emptyDir).
+            - {name: dshm, mountPath: /dev/shm}
+            # The same directory FileBrowser Quantum serves at /srv/transfer.
+            - {name: transfer, mountPath: /home/agent/transfer, subPath: files}
+        # FileBrowser Quantum (https://github.com/gtsteffaniak/filebrowser), a web file
+        # manager for the transfer directory. It stays the second container: ContainerSSH
+        # opens sessions in consoleContainerNumber, which defaults to the first.
+        # It has no Service and listens on 127.0.0.1 only. Reach it with
+        #   kubectl -n agentainer port-forward pod/agentainer-0 8080:8080
+        # and open http://127.0.0.1:8080. filebrowser-config.yaml explains the first login.
+        # Do not set FILEBROWSER_ADMIN_PASSWORD: Quantum applies it to the admin account on
+        # every start, which undoes a password changed in the UI.
+        - name: filebrowser
+          image: docker.io/gtstef/filebrowser:2.0-stable-slim@sha256:acab24557ffbf1e3bc5025cafd90ae0c697b53a275d2760ab4402bec3aabf207
+          # The image runs as user filebrowser, UID 1000 (USER in _docker/Dockerfile.slim),
+          # the same UID the pod sets.
+          env:
+            - {name: FILEBROWSER_CONFIG, value: /etc/filebrowser/config.yaml}
+            - {name: FILEBROWSER_DATABASE_PATH, value: /home/filebrowser/data/database.sqlite}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          # The image ships curl, and its HEALTHCHECK runs curl -f against /health
+          # (_docker/Dockerfile.slim, v2.0.2-stable). The timings follow that HEALTHCHECK.
+          startupProbe:
+            exec:
+              command: [curl, -fsS, -o, /dev/null, 'http://127.0.0.1:8080/health']
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command: [curl, -fsS, -o, /dev/null, 'http://127.0.0.1:8080/health']
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:  # example values
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts:
+            - {name: filebrowser-config, mountPath: /etc/filebrowser, readOnly: true}
+            # The database (FILEBROWSER_DATABASE_PATH) and server.cacheDir.
+            - {name: transfer, mountPath: /home/filebrowser/data, subPath: filebrowser}
+            - {name: transfer, mountPath: /srv/transfer, subPath: files}
       volumes:
         - name: seed
           configMap: {name: agentainer-seed, optional: true}
+        - name: dshm
+          emptyDir: {medium: Memory, sizeLimit: 1Gi}
+        - name: transfer
+          persistentVolumeClaim: {claimName: agentainer-transfer}
+        - name: filebrowser-config
+          configMap: {name: agentainer-filebrowser}
   volumeClaimTemplates:
     - metadata: {name: home}
       spec:
