@@ -1,6 +1,8 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-resources: [deployment.yaml, service.yaml, networkpolicy.yaml]
+# features.yaml is a plain resource, not a generator, so its name stays the same
+# and edits apply in place.
+resources: [deployment.yaml, service.yaml, networkpolicy.yaml, features.yaml]
 configMapGenerator:
   - name: agentainer-auth-webhook
     namespace: containerssh

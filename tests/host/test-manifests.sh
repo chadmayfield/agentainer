@@ -43,6 +43,24 @@ wh='select(.kind=="NetworkPolicy" and .metadata.name=="agentainer-auth-ingress")
 assert_eq "webhook ingress policy selects the webhook" "agentainer-auth" "$(q "$wh.spec.podSelector.matchLabels.app")"
 assert_eq "webhook ingress admits only ContainerSSH" "containerssh" "$(q "$wh.spec.ingress[0].from[0].podSelector.matchLabels.app")"
 assert_eq "webhook ingress port" "8080" "$(q "$wh.spec.ingress[0].ports[0].port")"
+# The SFTP and forwarding switch. A plain resource keeps its name, so edits apply in
+# place. A whole-directory mount receives ConfigMap updates; a subPath mount does not
+# (Kubernetes ConfigMap docs, "Mounted ConfigMaps are updated automatically").
+fm='select(.kind=="ConfigMap" and .metadata.name=="agentainer-features")'
+assert_eq "features ConfigMap keeps a stable name in containerssh" "agentainer-features containerssh" \
+	"$(q "$fm | .metadata.name + \" \" + .metadata.namespace")"
+assert_eq "features ConfigMap is a resource, not a generator" "resource=true generator=false" \
+	"$("$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" '"resource=" + ((.resources // []) | any_c(. == "features.yaml") | tostring) + " generator=" + ((.configMapGenerator // []) | any_c(.name == "agentainer-features") | tostring)' <deploy/kubernetes/auth-webhook/kustomization.yaml)"
+whp='select(.kind=="Deployment" and .metadata.name=="agentainer-auth").spec.template.spec'
+assert_eq "features volume is optional" "features true" \
+	"$(q "$whp.volumes[] | select(.configMap.name==\"agentainer-features\") | .name + \" \" + (.configMap.optional | tostring)")"
+assert_eq "features volume is a read-only directory mount without subPath" "/etc/agentainer-features true subPath=false" \
+	"$(q "$whp.containers[0].volumeMounts[] | select(.name==\"features\") | .mountPath + \" \" + (.readOnly | tostring) + \" subPath=\" + (has(\"subPath\") | tostring)")"
+assert_eq "features ConfigMap has one key, features" "features" "$(q "$fm.data | keys | join(\" \")")"
+assert_eq "shipped switch has SFTP and forwarding off" "sftp=off forwarding=off" \
+	"$(q "$fm.data.features" | grep -v -e '^#' -e '^$' | paste -sd ' ' -)"
+assert_contains "features.yaml says kubectl apply -k resets the switch" "kubectl apply -k" \
+	"$(cat deploy/kubernetes/auth-webhook/features.yaml 2>/dev/null)"
 
 # ContainerSSH settings, read from the generated ConfigMap.
 csc='select(.kind=="ConfigMap" and (.metadata.name | test("^containerssh-config"))).data["config.yaml"] | from_yaml'

@@ -30,8 +30,14 @@ spec:
           volumeMounts:
             - {name: app, mountPath: /app, readOnly: true}
             - {name: keys, mountPath: /etc/agentainer-auth, readOnly: true}
+            # A whole-directory mount, so ConfigMap edits reach the running pod.
+            # A subPath mount would never be updated.
+            - {name: features, mountPath: /etc/agentainer-features, readOnly: true}
       volumes:
         - name: app
           configMap: {name: agentainer-auth-webhook}
         - name: keys
           secret: {secretName: agentainer-authorized-keys}
+        - name: features
+          # optional: without the ConfigMap the webhook keeps SFTP and forwarding closed.
+          configMap: {name: agentainer-features, optional: true}

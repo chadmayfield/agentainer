@@ -3,7 +3,8 @@
 
 POST /pubkey   accepts the configured user with a key from AUTHORIZED_KEYS
 POST /password always rejects
-POST /config   sends the user to the persistent agentainer pod
+POST /config   sends the user to the persistent agentainer pod, with SFTP and local
+               forwarding set from the switch file FEATURES_FILE (closed by default)
 Standard library only. Formats follow ContainerSSH v0.6.0 containerssh-authconfig-openapi.json.
 """
 import json
@@ -33,9 +34,94 @@ BUSY = (b"HTTP/1.0 503 Service Unavailable\r\nContent-Type: application/json\r\n
         b"Content-Length: %d\r\nConnection: close\r\n\r\n" % len(_BUSY_BODY) + _BUSY_BODY)
 
 
+DEFAULT_FEATURES = "/etc/agentainer-features/features"
+# The switch file is two short lines. Anything larger is not a switch file.
+MAX_FEATURES = 4096
+# Each switch name maps its allowed values to on (True) or off (False).
+FEATURE_VALUES = {
+    "sftp": {"on": True, "off": False},
+    "forwarding": {"local": True, "off": False},
+}
+# Container paths for /config. ContainerSSH v0.6.0 config/kubernetes.go KubernetesPodConfig:
+# agentPath (json "agentPath") runs "forward-server" for port forwarding, and subsystems
+# (json "subsystems") maps a subsystem name to the program it starts.
+AGENT_PATH = "/usr/local/bin/containerssh-agent"
+SUBSYSTEMS = {"sftp": "/usr/lib/openssh/sftp-server"}
+
+
 class Settings:
-    def __init__(self, user, keys_path, pod, namespace):
+    def __init__(self, user, keys_path, pod, namespace, features_path=DEFAULT_FEATURES):
         self.user, self.keys_path, self.pod, self.namespace = user, keys_path, pod, namespace
+        self.features_path = features_path
+
+
+def log(msg):
+    print("webhook: " + msg, file=sys.stderr, flush=True)
+
+
+def _closed(problem):
+    # The message names the problem only. The file's content never reaches the log.
+    log("features file %s; SFTP and forwarding closed" % problem)
+    return {name: False for name in FEATURE_VALUES}
+
+
+def load_features(path):
+    """Return {"sftp": bool, "forwarding": bool} from the switch file. Read on every
+    /config request, so a ConfigMap update applies to the next connection without a
+    restart.
+
+    Each line is "name=value". Blank lines and lines starting with "#" are ignored. A
+    name that is absent is off. A malformed line, an unknown name or value, a duplicate
+    name, undecodable bytes, an oversized file or any read error turns both off."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(MAX_FEATURES + 1)
+    except FileNotFoundError:
+        return _closed("missing")
+    except Exception:  # noqa: BLE001 - any read failure must close, never open
+        return _closed("unreadable")
+    if len(data) > MAX_FEATURES:
+        return _closed("too large")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return _closed("is not UTF-8")
+    found = {}
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, sep, value = line.partition("=")
+        if not sep or not name or "=" in value:
+            return _closed("line %d is not name=value" % number)
+        if name not in FEATURE_VALUES:
+            return _closed("line %d has an unknown name" % number)
+        if name in found:
+            return _closed("line %d repeats a name" % number)
+        if value not in FEATURE_VALUES[name]:
+            return _closed("line %d has an unknown value" % number)
+        found[name] = FEATURE_VALUES[name][value]
+    return {name: found.get(name, False) for name in FEATURE_VALUES}
+
+
+def security_config(features):
+    """The config.security block for /config. Field names and modes follow ContainerSSH
+    v0.6.0 config/security.go: SubsystemConfig (mode, allow) and ForwardingConfig.
+    Mode "filter" runs only the subsystems in allow, and "disable" refuses them all
+    (internal/security/handler_session.go OnSubsystem). forwardingMode covers local
+    forwarding (ssh -L and ssh -D). Reverse, socket and X11 forwarding are always off."""
+    sftp = features.get("sftp") is True
+    forwarding = features.get("forwarding") is True
+    return {
+        "subsystem": {"mode": "filter", "allow": ["sftp"]} if sftp else {"mode": "disable"},
+        "forwarding": {
+            "forwardingMode": "enable" if forwarding else "disable",
+            "reverseForwardingMode": "disable",
+            "socketForwardingMode": "disable",
+            "socketListenMode": "disable",
+            "x11ForwardingMode": "disable",
+        },
+    }
 
 
 def load_keys(path):
@@ -117,6 +203,11 @@ def make_handler(s):
             elif self.path == "/password":
                 out["success"] = False
             elif self.path == "/config":
+                features = load_features(s.features_path)
+                # "config" holds a partial ContainerSSH configuration with the same
+                # structure as the YAML file (ContainerSSH v0.6 configuration server
+                # reference). Security settings go under config.security, the
+                # AppConfig "security" field (ContainerSSH v0.6.0 config/appconfig.go).
                 out["config"] = {"kubernetes": {"pod": {
                     "mode": "persistent",
                     "metadata": {"name": s.pod, "namespace": s.namespace},
@@ -127,7 +218,11 @@ def make_handler(s):
                     # tmux exits with "open terminal failed" when TERM is unset.
                     "shellCommand": ["/usr/bin/env", "TERM=xterm-256color",
                                      "tmux", "new-session", "-A", "-s", "main"],
-                }}}
+                    "agentPath": AGENT_PATH,
+                    "subsystems": dict(SUBSYSTEMS),
+                }}, "security": security_config(features)}
+                self.log_message("config user=%s sftp=%s forwarding=%s", req.get("username"),
+                                 features["sftp"], features["forwarding"])
             else:
                 return self._reply(404, {"message": "not found"})
             return self._reply(200, out)
@@ -220,7 +315,8 @@ def main():
         return 2
     s = Settings(user, os.environ.get("AUTHORIZED_KEYS", "/etc/agentainer-auth/authorized_keys"),
                  os.environ.get("AGENTAINER_POD", "agentainer-0"),
-                 os.environ.get("AGENTAINER_NAMESPACE", "agentainer"))
+                 os.environ.get("AGENTAINER_NAMESPACE", "agentainer"),
+                 os.environ.get("FEATURES_FILE", DEFAULT_FEATURES))
     make_server(("0.0.0.0", int(os.environ.get("LISTEN_PORT", "8080"))), s).serve_forever()
     return 0
 

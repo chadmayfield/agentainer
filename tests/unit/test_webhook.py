@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import os
 import socket
@@ -143,6 +144,170 @@ class WebhookTests(unittest.TestCase):
             with self.subTest(body=body[:5]):
                 self.assertLess(len(body), webhook.MAX_BODY)
                 self.assertEqual(self.raw({"Content-Length": str(len(body))}, body), 400)
+
+
+CLOSED = {"sftp": False, "forwarding": False}
+# ContainerSSH v0.6.0 config/security.go: SubsystemConfig and ForwardingConfig.
+SUBSYSTEM_CLOSED = {"mode": "disable"}
+SUBSYSTEM_SFTP = {"mode": "filter", "allow": ["sftp"]}
+ALWAYS_OFF = ("reverseForwardingMode", "socketForwardingMode", "socketListenMode", "x11ForwardingMode")
+
+
+class FeatureSwitchTests(unittest.TestCase):
+    """The switch file turns SFTP and local forwarding on per connection. Anything
+    other than a well-formed file leaves both closed."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "features")
+        self.keys = os.path.join(self.dir.name, "authorized_keys")
+        with open(self.keys, "w") as f:
+            f.write(KEY + "\n")
+        settings = webhook.Settings(user="dev", keys_path=self.keys, pod="agentainer-0",
+                                    namespace="agentainer", features_path=self.path)
+        self.server = webhook.make_server(("127.0.0.1", 0), settings)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.dir.cleanup()
+
+    def write(self, data):
+        with open(self.path, "wb") as f:
+            f.write(data if isinstance(data, bytes) else data.encode())
+
+    def config(self):
+        body = {"username": "dev", "remoteAddress": "203.0.113.5:5000", "connectionId": "abc"}
+        req = urllib.request.Request("http://127.0.0.1:%d/config" % self.port,
+                                     data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            return json.loads(r.read())
+
+    def assert_closed_response(self, r):
+        sec = r["config"]["security"]
+        self.assertEqual(sec["subsystem"], SUBSYSTEM_CLOSED)
+        self.assertEqual(sec["forwarding"]["forwardingMode"], "disable")
+        for key in ALWAYS_OFF:
+            self.assertEqual(sec["forwarding"][key], "disable")
+
+    def test_settings_reads_features_path_default(self):
+        s = webhook.Settings(user="dev", keys_path=self.keys, pod="p", namespace="n")
+        self.assertEqual(s.features_path, "/etc/agentainer-features/features")
+
+    def test_features_default_closed_without_file(self):
+        self.assertEqual(webhook.load_features(self.path), CLOSED)
+        self.assert_closed_response(self.config())
+
+    def test_each_key_missing_is_closed(self):
+        self.write("sftp=on\n")
+        self.assertEqual(webhook.load_features(self.path), {"sftp": True, "forwarding": False})
+        self.write("forwarding=local\n")
+        self.assertEqual(webhook.load_features(self.path), {"sftp": False, "forwarding": True})
+        self.write("# only a comment\n\n")
+        self.assertEqual(webhook.load_features(self.path), CLOSED)
+
+    def test_blank_lines_and_comments_are_ignored(self):
+        self.write("# switch\n\n  # indented comment\r\nsftp=on\r\n\nforwarding=local\n")
+        self.assertEqual(webhook.load_features(self.path), {"sftp": True, "forwarding": True})
+
+    def test_malformed_line_closes_all(self):
+        for bad in ("sftp\n", "sftp on\n", "=on\n", "sftp=on=on\n", "sftp = on\n", "sftp=on # note\n",
+                    "SFTP=on\n", "telnet=on\n"):
+            with self.subTest(bad=bad):
+                self.write("sftp=on\nforwarding=local\n" + bad)
+                self.assertEqual(webhook.load_features(self.path), CLOSED)
+
+    def test_duplicate_key_closes_all(self):
+        for text in ("sftp=on\nsftp=on\nforwarding=local\n", "sftp=on\nforwarding=local\nforwarding=off\n"):
+            with self.subTest(text=text):
+                self.write(text)
+                self.assertEqual(webhook.load_features(self.path), CLOSED)
+
+    def test_unknown_value_closes_all(self):
+        for bad in ("sftp=yes", "sftp=true", "sftp=ON", "sftp=", "forwarding=on", "forwarding=remote",
+                    "forwarding=all", "sftp=local", "forwarding=enable"):
+            with self.subTest(bad=bad):
+                other = "forwarding=local" if bad.startswith("sftp") else "sftp=on"
+                self.write(other + "\n" + bad + "\n")
+                self.assertEqual(webhook.load_features(self.path), CLOSED)
+
+    def test_undecodable_bytes_close_all(self):
+        self.write(b"sftp=on\nforwarding=local\n# \xff\xfe\n")
+        self.assertEqual(webhook.load_features(self.path), CLOSED)
+
+    def test_oversized_file_closes_all(self):
+        self.write("sftp=on\nforwarding=local\n" + "#" * webhook.MAX_FEATURES + "\n")
+        self.assertEqual(webhook.load_features(self.path), CLOSED)
+
+    def test_read_error_closes_all(self):
+        # Mocking open keeps the test meaningful when it runs as root, which ignores
+        # file modes.
+        self.write("sftp=on\nforwarding=local\n")
+        with mock.patch("builtins.open", side_effect=OSError("denied")):
+            self.assertEqual(webhook.load_features(self.path), CLOSED)
+        with mock.patch("builtins.open", side_effect=IsADirectoryError("dir")):
+            self.assertEqual(webhook.load_features(self.path), CLOSED)
+
+    def test_sftp_on_allows_only_sftp(self):
+        self.write("sftp=on\nforwarding=off\n")
+        sec = self.config()["config"]["security"]
+        self.assertEqual(sec["subsystem"], SUBSYSTEM_SFTP)
+        self.assertEqual(sec["forwarding"]["forwardingMode"], "disable")
+
+    def test_forwarding_local_enables_only_local_forwarding(self):
+        self.write("sftp=off\nforwarding=local\n")
+        sec = self.config()["config"]["security"]
+        self.assertEqual(sec["forwarding"]["forwardingMode"], "enable")
+        self.assertEqual(sec["subsystem"], SUBSYSTEM_CLOSED)
+        for key in ALWAYS_OFF:
+            self.assertEqual(sec["forwarding"][key], "disable")
+
+    def test_reverse_socket_x11_always_disabled(self):
+        for text in ("", "sftp=on\nforwarding=local\n", "sftp=off\nforwarding=off\n", "bad\n"):
+            with self.subTest(text=text):
+                self.write(text)
+                fwd = self.config()["config"]["security"]["forwarding"]
+                self.assertEqual(set(fwd), {"forwardingMode"} | set(ALWAYS_OFF))
+                for key in ALWAYS_OFF:
+                    self.assertEqual(fwd[key], "disable")
+
+    def test_switch_change_applies_on_next_request(self):
+        self.write("sftp=off\nforwarding=off\n")
+        self.assert_closed_response(self.config())
+        self.write("sftp=on\nforwarding=local\n")
+        sec = self.config()["config"]["security"]
+        self.assertEqual(sec["subsystem"], SUBSYSTEM_SFTP)
+        self.assertEqual(sec["forwarding"]["forwardingMode"], "enable")
+        os.unlink(self.path)
+        self.assert_closed_response(self.config())
+
+    def test_features_file_contents_not_logged(self):
+        marker = "Zq7MarkerX"
+        cases = (marker + "=on\n", "sftp=" + marker + "\n", "sftp=on\nsftp=" + marker + "\n",
+                 "sftp " + marker + "\n", ("# " + marker + "\n").encode() + b"\xff\n")
+        for data in cases:
+            with self.subTest(data=data):
+                self.write(data)
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                    self.assertEqual(webhook.load_features(self.path), CLOSED)
+                    self.assert_closed_response(self.config())
+                log = err.getvalue()
+                # The fixed message proves the log was captured.
+                self.assertIn("features file", log)
+                self.assertNotIn(marker, log)
+
+    def test_security_lives_under_config(self):
+        r = self.config()
+        self.assertIn("security", r["config"])
+        self.assertNotIn("security", r)
+        self.assertEqual(set(r), {"username", "remoteAddress", "connectionId", "config"})
+
+    def test_config_sets_agent_path_and_subsystem(self):
+        pod = self.config()["config"]["kubernetes"]["pod"]
+        self.assertEqual(pod["agentPath"], "/usr/local/bin/containerssh-agent")
+        self.assertEqual(pod["subsystems"], {"sftp": "/usr/lib/openssh/sftp-server"})
 
 
 class ConcurrencyLimitTests(unittest.TestCase):
