@@ -300,13 +300,20 @@ def r_rust():
     return out
 
 
-def github_tool(prefix, repo, names, rel=None):
+def github_tool(prefix, repo, names, rel=None, checksums=None):
     """names maps AMD64/ARM64 to a function of the bare version returning the asset name.
 
     rel is the release to pin; the default is the repository's latest release.
     """
     rel = rel or gh_latest(repo)
     ver = strip_v(rel["tag_name"])
+    if checksums:
+        # Only the named checksum list may supply the hashes; an asset digest alone is not enough.
+        listed = checksums(ver)
+        if not any(a["name"] == listed for a in rel.get("assets", [])):
+            raise LookupFailed("%s: release %s has no %s" % (repo, rel["tag_name"], listed))
+        rel = dict(rel, assets=[a for a in rel["assets"] if a["name"] == listed or a["name"] in
+                                [fn(ver) for fn in names.values()]])
     out = {prefix + "_VERSION": ver}
     for up, fn in names.items():
         name = fn(ver)
@@ -347,19 +354,23 @@ def r_gosec():
     # Release archives and gosec_<version>_checksums.txt: https://github.com/securego/gosec/releases
     return github_tool("GOSEC", "securego/gosec", {
         "AMD64": lambda v: "gosec_%s_linux_amd64.tar.gz" % v,
-        "ARM64": lambda v: "gosec_%s_linux_arm64.tar.gz" % v})
+        "ARM64": lambda v: "gosec_%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "gosec_%s_checksums.txt" % v)
 
 
 def r_gitleaks():
     # Release archives name the amd64 build linux_x64: https://github.com/gitleaks/gitleaks/releases
     return github_tool("GITLEAKS", "gitleaks/gitleaks", {
         "AMD64": lambda v: "gitleaks_%s_linux_x64.tar.gz" % v,
-        "ARM64": lambda v: "gitleaks_%s_linux_arm64.tar.gz" % v})
+        "ARM64": lambda v: "gitleaks_%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "gitleaks_%s_checksums.txt" % v)
 
 
 # ContainerSSH server image tag series -> the ContainerSSH guest agent minor series verified
-# with it. The "v0.6" tag's digest can move between patch releases; the pair that was tested
-# end to end is recorded in docs/kubernetes.md. A new server series needs a reviewed entry.
+# with it. The mapping limits proposals to the agent minor series verified against that server
+# series. The "v0.6" tag's digest can move between patch releases, so the verified pair (server
+# digest and agent version) is recorded in docs/versions.md by the cluster verification step.
+# A new server series needs a reviewed entry.
 CONTAINERSSH_AGENT_SERIES = {"v0.6": "0.11"}
 
 
@@ -380,7 +391,8 @@ def r_containerssh_agent():
         raise LookupFailed("containerssh/agent: no stable %s.x release found" % series)
     return github_tool("CONTAINERSSH_AGENT", "containerssh/agent", {
         "AMD64": lambda v: "agent_%s_linux_amd64.tar.gz" % v,
-        "ARM64": lambda v: "agent_%s_linux_arm64.tar.gz" % v}, rel=max(found, key=lambda f: f[0])[1])
+        "ARM64": lambda v: "agent_%s_linux_arm64.tar.gz" % v},
+        rel=max(found, key=lambda f: f[0])[1], checksums=lambda v: "agent_%s_checksums.txt" % v)
 
 
 def r_trivy():
