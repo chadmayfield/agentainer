@@ -40,9 +40,8 @@ assert_eq "rootfs paths have fixed modes" "755 /etc
 	/usr/local/lib/agentainer/entrypoint.d /etc/agentainer/home/.profile \
 	/usr/local/lib/agentainer/entrypoint.d/10-dirs.sh /usr/local/bin/agentainer-entrypoint)"
 
-# Not in the image: the base image's unused Pebble service manager and ImageMagick, which
-# add scanner findings.
+# Not in the image: the base image's unused Pebble service manager, which adds scanner
+# findings. ImageMagick is installed on purpose; tests/23-remote-tools.sh checks it.
 assert_eq "no pebble from the base image" "none" "$(run_in -- sh -c 'ls /usr/bin/pebble /var/lib/pebble 2>/dev/null || echo none')"
-assert_eq "no ImageMagick" "none" "$(run_in -- sh -c 'command -v magick convert || dpkg -l "imagemagick*" 2>/dev/null | grep ^ii || echo none')"
 
 finish
