@@ -372,13 +372,14 @@ def r_gitleaks():
 # reviewed entry.
 CONTAINERSSH_AGENT_SERIES = {"v0.6": "0.11"}
 
-# The server digest and agent version that passed SFTP, ssh -L and ssh -D in a cluster on
-# 2026-11-04 (docs/versions.md). test_pinned_containerssh_pair_is_the_cluster_verified_pair fails
-# when versions.env pins another pair, so a bump pull request fails CI until someone re-verifies
-# and updates this constant and docs/versions.md. The test runs in the build workflow on the pull
-# request, not in the bump job, so the pull request still opens.
+# The server image reference and agent version that passed SFTP, ssh -L and ssh -D in a cluster
+# on 2026-11-04 (docs/versions.md). test_pinned_containerssh_pair_is_the_cluster_verified_pair
+# fails when versions.env pins another pair, so a bump pull request fails CI until someone
+# re-verifies and updates this constant and docs/versions.md. The test runs in the build workflow
+# on the pull request, not in the bump job, so the pull request still opens.
 VERIFIED_CONTAINERSSH_PAIR = {
-    "server_digest": "sha256:f6b195c221739b0f1a43c567bc9df0a0f3b3bd92ccc25ef451e6d4122820c13b",
+    "server_image": "docker.io/containerssh/containerssh:v0.6"
+                    "@sha256:f6b195c221739b0f1a43c567bc9df0a0f3b3bd92ccc25ef451e6d4122820c13b",
     "agent_version": "0.11.0",
 }
 

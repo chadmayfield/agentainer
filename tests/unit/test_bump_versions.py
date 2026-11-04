@@ -190,8 +190,8 @@ class ParserTests(unittest.TestCase):
             pins = bv.values(bv.parse_env(f.read()))
         verified = bv.VERIFIED_CONTAINERSSH_PAIR
         self.assertEqual(
-            (pins["CONTAINERSSH_IMAGE"].split("@")[1], pins["CONTAINERSSH_AGENT_VERSION"]),
-            (verified["server_digest"], verified["agent_version"]),
+            (pins["CONTAINERSSH_IMAGE"], pins["CONTAINERSSH_AGENT_VERSION"]),
+            (verified["server_image"], verified["agent_version"]),
             "CONTAINERSSH_IMAGE or CONTAINERSSH_AGENT_VERSION no longer matches the pair verified in a "
             "cluster. Re-verify before merging: with the new pair deployed and the features ConfigMap set "
             "to sftp=on and forwarding=local, run an sftp put and get, then ssh -L and ssh -D, as "
