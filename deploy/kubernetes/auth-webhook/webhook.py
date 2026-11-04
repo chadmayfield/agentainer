@@ -35,7 +35,9 @@ BUSY = (b"HTTP/1.0 503 Service Unavailable\r\nContent-Type: application/json\r\n
 
 
 DEFAULT_FEATURES = "/etc/agentainer-features/features"
-# The switch file is two short lines. Anything larger is not a switch file.
+# Largest switch file, in bytes, that load_features parses. The file holds two short
+# lines plus comments, so 4096 bytes is ample. The cap bounds the read and parse work
+# done on every /config request, and a larger file closes both switches.
 MAX_FEATURES = 4096
 # Each switch name maps its allowed values to on (True) or off (False).
 FEATURE_VALUES = {
@@ -71,8 +73,9 @@ def load_features(path):
     restart.
 
     Each line is "name=value". Blank lines and lines starting with "#" are ignored. A
-    name that is absent is off. A malformed line, an unknown name or value, a duplicate
-    name, undecodable bytes, an oversized file or any read error turns both off."""
+    name that is absent is off and is logged by name. A malformed line, an unknown name
+    or value, a duplicate name, undecodable bytes, a file over MAX_FEATURES bytes or any
+    read error turns both off."""
     try:
         with open(path, "rb") as f:
             data = f.read(MAX_FEATURES + 1)
@@ -101,6 +104,10 @@ def load_features(path):
         if value not in FEATURE_VALUES[name]:
             return _closed("line %d has an unknown value" % number)
         found[name] = FEATURE_VALUES[name][value]
+    for name in FEATURE_VALUES:
+        if name not in found:
+            # name comes from FEATURE_VALUES, not from the file.
+            log("features file does not set %s; %s closed" % (name, name))
     return {name: found.get(name, False) for name in FEATURE_VALUES}
 
 

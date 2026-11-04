@@ -241,6 +241,50 @@ class FeatureSwitchTests(unittest.TestCase):
         self.write("sftp=on\nforwarding=local\n" + "#" * webhook.MAX_FEATURES + "\n")
         self.assertEqual(webhook.load_features(self.path), CLOSED)
 
+    def sized(self, size):
+        body = "sftp=on\nforwarding=local\n#"
+        return (body + "x" * (size - len(body) - 1) + "\n").encode()
+
+    def test_file_at_size_limit_is_parsed(self):
+        data = self.sized(4096)
+        self.assertEqual(len(data), 4096)
+        self.assertEqual(webhook.MAX_FEATURES, 4096)
+        self.write(data)
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(webhook.load_features(self.path), {"sftp": True, "forwarding": True})
+        self.assertNotIn("closed", err.getvalue())
+
+    def test_file_over_size_limit_closes_all_and_logs(self):
+        data = self.sized(4097)
+        self.assertEqual(len(data), 4097)
+        self.write(data)
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(webhook.load_features(self.path), CLOSED)
+        self.assertIn("features file too large; SFTP and forwarding closed", err.getvalue())
+        self.assertNotIn("xxxx", err.getvalue())
+
+    def test_missing_key_is_logged_without_content(self):
+        marker = "Zq7MarkerX"
+        for text, expect, absent in (
+                ("# " + marker + "\nsftp=on\n", {"sftp": True, "forwarding": False}, "forwarding"),
+                ("# " + marker + "\nforwarding=local\n", {"sftp": False, "forwarding": True}, "sftp")):
+            with self.subTest(absent=absent):
+                self.write(text)
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                    self.assertEqual(webhook.load_features(self.path), expect)
+                log = err.getvalue()
+                self.assertIn("features file does not set %s; %s closed" % (absent, absent), log)
+                present = "sftp" if absent == "forwarding" else "forwarding"
+                self.assertNotIn("does not set %s" % present, log)
+                self.assertNotIn(marker, log)
+        self.write("# " + marker + "\n")
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(webhook.load_features(self.path), CLOSED)
+        log = err.getvalue()
+        self.assertIn("does not set sftp; sftp closed", log)
+        self.assertIn("does not set forwarding; forwarding closed", log)
+        self.assertNotIn(marker, log)
+
     def test_read_error_closes_all(self):
         # Mocking open keeps the test meaningful when it runs as root, which ignores
         # file modes.

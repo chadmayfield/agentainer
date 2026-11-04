@@ -6,8 +6,8 @@
 #   forwarding=local | off local allows ssh -L and ssh -D; reverse, socket and
 #                          X11 forwarding stay off
 #
-# A missing name is off. A malformed line, an unknown name or value, or a repeated
-# name turns both off.
+# A missing name is off. A malformed line, an unknown name or value, a repeated
+# name, or a features value over 4096 bytes turns both off.
 #
 # Re-running kubectl apply -k resets the switch to the values in this file. A
 # change made with kubectl -n containerssh edit configmap agentainer-features
