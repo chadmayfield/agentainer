@@ -368,11 +368,19 @@ def r_gitleaks():
 
 # ContainerSSH server image tag series -> the ContainerSSH guest agent minor series verified
 # with it. The mapping limits proposals to the agent minor series verified against that server
-# series. The "v0.6" tag's digest can move between patch releases. The verified pair is server
-# digest sha256:f6b195c221739b0f1a43c567bc9df0a0f3b3bd92ccc25ef451e6d4122820c13b with agent
-# 0.11.0 (SFTP, ssh -L and ssh -D in a cluster on 2026-11-04; docs/versions.md).
-# A new server series needs a reviewed entry.
+# series. The "v0.6" tag's digest can move between patch releases. A new server series needs a
+# reviewed entry.
 CONTAINERSSH_AGENT_SERIES = {"v0.6": "0.11"}
+
+# The server digest and agent version that passed SFTP, ssh -L and ssh -D in a cluster on
+# 2026-11-04 (docs/versions.md). test_pinned_containerssh_pair_is_the_cluster_verified_pair fails
+# when versions.env pins another pair, so a bump pull request fails CI until someone re-verifies
+# and updates this constant and docs/versions.md. The test runs in the build workflow on the pull
+# request, not in the bump job, so the pull request still opens.
+VERIFIED_CONTAINERSSH_PAIR = {
+    "server_digest": "sha256:f6b195c221739b0f1a43c567bc9df0a0f3b3bd92ccc25ef451e6d4122820c13b",
+    "agent_version": "0.11.0",
+}
 
 
 def r_containerssh_agent():

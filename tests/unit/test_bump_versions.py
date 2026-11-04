@@ -184,6 +184,20 @@ class ParserTests(unittest.TestCase):
             with self.assertRaises(bv.LookupFailed):
                 bv.r_containerssh_agent()
 
+    def test_pinned_containerssh_pair_is_the_cluster_verified_pair(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+        with open(os.path.join(root, "versions.env")) as f:
+            pins = bv.values(bv.parse_env(f.read()))
+        verified = bv.VERIFIED_CONTAINERSSH_PAIR
+        self.assertEqual(
+            (pins["CONTAINERSSH_IMAGE"].split("@")[1], pins["CONTAINERSSH_AGENT_VERSION"]),
+            (verified["server_digest"], verified["agent_version"]),
+            "CONTAINERSSH_IMAGE or CONTAINERSSH_AGENT_VERSION no longer matches the pair verified in a "
+            "cluster. Re-verify before merging: with the new pair deployed and the features ConfigMap set "
+            "to sftp=on and forwarding=local, run an sftp put and get, then ssh -L and ssh -D, as "
+            "docs/kubernetes.md describes. Then update VERIFIED_CONTAINERSSH_PAIR in "
+            "scripts/bump_versions.py and the pair in docs/versions.md.")
+
     def test_k8s_containerssh_tag_is_mapped(self):
         tags = [tag for key, _, tag, _ in bv.K8S_IMAGES if key == "CONTAINERSSH_IMAGE"]
         self.assertEqual(len(tags), 1)

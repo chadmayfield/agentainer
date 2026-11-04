@@ -118,7 +118,7 @@ pkg-config reads installed `.pc` metadata to supply compiler and linker flags. I
 
 ## Go formatting and security scans
 
-The image has no `goimports` command. golangci-lint 2.15.0 includes it as a formatter:
+The image has no `goimports` command. golangci-lint includes it as a formatter:
 
 ```sh
 golangci-lint fmt -E goimports        # rewrite files
@@ -127,7 +127,7 @@ golangci-lint fmt -E goimports -d     # show a diff, change nothing
 
 `-E` (`--enable`) turns on a formatter and `-d` (`--diff`) prints a diff instead of rewriting files (`golangci-lint fmt --help`). With `-d`, it exits with status 1 when a file needs changes. Git hooks, editor settings or Makefiles that call `goimports` must call this command instead. A project's `.golangci.yml` can enable the formatter permanently ([golangci-lint formatters](https://golangci-lint.run/docs/formatters/)).
 
-The image also has gosec 2.30.0 and gitleaks 8.30.1:
+The image also has gosec and gitleaks. Their versions are in `/etc/agentainer/versions.json` in the image and in `versions.env` in the repository:
 
 ```sh
 gosec ./...          # scan the Go packages under the current directory
@@ -139,7 +139,7 @@ Both are upstream release binaries. The build checks their SHA-256 against the p
 
 ## PDFs and images
 
-- `pdftotext file.pdf out.txt` extracts text; add `-layout` to keep the page layout. `pdftoppm -png -r 150 file.pdf page` renders each page to `page-1.png`, `page-2.png` and so on; `-f` and `-l` select the first and last page. Both come from poppler-utils 26.01.
+- `pdftotext file.pdf out.txt` extracts text; add `-layout` to keep the page layout. `pdftoppm -png -r 150 file.pdf page` renders each page to `page-1.png`, `page-2.png` and so on; `-f` and `-l` select the first and last page. Both come from poppler-utils; its installed version is in `/etc/agentainer/versions.json`.
 - ImageMagick 7 (`magick`) converts, resizes and crops images, for example `magick in.png -resize 50% out.jpg`.
 - ImageMagick reads PDF and PostScript through ghostscript, which the image does not install. `magick file.pdf out.png` fails with `gs: not found`. Render PDF pages with `pdftoppm` and process the PNG files with `magick`.
 

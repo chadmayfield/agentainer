@@ -62,7 +62,7 @@ assert_eq "sftp-server is executable" "yes" \
 	"$(run_in --network none -- sh -c 'test -x /usr/lib/openssh/sftp-server && echo yes')"
 
 assert_contains "gosec version" "Version: $GOSEC_VERSION" "$(run_in --network none -- gosec --version 2>&1)"
-assert_contains "gitleaks version" "$GITLEAKS_VERSION" "$(run_in --network none -- gitleaks version)"
+assert_eq "gitleaks version" "$GITLEAKS_VERSION" "$(run_in --network none -- gitleaks version)"
 
 # main.go:48-50 at containerssh/agent v0.11.0 prints the help text and exits 0 for --help.
 assert_eq "containerssh-agent --help exits 0" "rc=0" \
@@ -70,5 +70,21 @@ assert_eq "containerssh-agent --help exits 0" "rc=0" \
 # shellcheck disable=SC2016 # expands in the container
 assert_eq "/usr/bin/containerssh-agent resolves to the pinned binary" "/usr/local/bin/containerssh-agent" \
 	"$(run_in --network none -- sh -c 'readlink -f /usr/bin/containerssh-agent')"
+
+# The example webhook hands ContainerSSH these two paths (AGENT_PATH and the sftp entry in
+# SUBSYSTEMS). A rename on either side must fail here. The values are read on the host and
+# passed in, because the webhook source is not in the image.
+_webhook="$(dirname "$0")/../deploy/kubernetes/auth-webhook/webhook.py"
+_agent_path=$(sed -n 's/^AGENT_PATH = "\(.*\)"$/\1/p' "$_webhook")
+_sftp_path=$(sed -n 's/^SUBSYSTEMS = {"sftp": "\(.*\)"}$/\1/p' "$_webhook")
+assert_eq "webhook AGENT_PATH was read" "yes" "$([ -n "$_agent_path" ] && echo yes)"
+assert_eq "webhook sftp subsystem path was read" "yes" "$([ -n "$_sftp_path" ] && echo yes)"
+# shellcheck disable=SC2016 # expands in the container
+assert_eq "the webhook's agent and sftp paths are executable in the image" "agent=yes sftp=yes" \
+	"$(run_in --network none -- sh -c '
+		a=no; s=no
+		[ -x "$1" ] && [ -f "$1" ] && a=yes
+		[ -x "$2" ] && [ -f "$2" ] && s=yes
+		echo "agent=$a sftp=$s"' sh "$_agent_path" "$_sftp_path")"
 
 finish
