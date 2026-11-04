@@ -368,9 +368,9 @@ def r_gitleaks():
 
 # ContainerSSH server image tag series -> the ContainerSSH guest agent minor series verified
 # with it. The mapping limits proposals to the agent minor series verified against that server
-# series. The "v0.6" tag's digest can move between patch releases, so the verified pair (server
-# digest and agent version) is not recorded yet. The cluster verification step will add it to
-# docs/versions.md.
+# series. The "v0.6" tag's digest can move between patch releases. The verified pair is server
+# digest sha256:f6b195c221739b0f1a43c567bc9df0a0f3b3bd92ccc25ef451e6d4122820c13b with agent
+# 0.11.0 (SFTP, ssh -L and ssh -D in a cluster on 2026-11-04; docs/versions.md).
 # A new server series needs a reviewed entry.
 CONTAINERSSH_AGENT_SERIES = {"v0.6": "0.11"}
 

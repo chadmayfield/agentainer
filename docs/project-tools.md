@@ -11,6 +11,9 @@ The image supplies Python, uv, Node.js and npm. The examples install development
 - [Language servers](#language-servers)
 - [Browser tests](#browser-tests)
 - [Native builds](#native-builds)
+- [Go formatting and security scans](#go-formatting-and-security-scans)
+- [PDFs and images](#pdfs-and-images)
+- [Document conversion with MarkItDown and pandoc](#document-conversion-with-markitdown-and-pandoc)
 - [PostgreSQL scripts](#postgresql-scripts)
 - [Kubernetes and Helm clients](#kubernetes-and-helm-clients)
 - [AWS CLI](#aws-cli)
@@ -90,7 +93,7 @@ See [optional language tooling](language-tooling.md) for gopls, rust-analyzer, P
 
 ## Browser tests
 
-See [optional browser testing](browser-testing.md) for project-local Playwright installation, Linux dependencies, persistent browser downloads and a headless execution check. Browsers are installed only when you choose that setup.
+See [optional browser testing](browser-testing.md) for project-local Playwright installation, persistent browser downloads, the Playwright MCP plugin and a headless execution check. The image has Chromium's OS libraries. Browsers are installed only when you choose that setup.
 
 ## Native builds
 
@@ -112,6 +115,66 @@ Do not run `sudo npm install -g npm`. It replaces npm with a copy that lacks the
 Images up to `0.1.0-dev.20261024.1` installed Node.js from Ubuntu's `nodejs` and `npm` packages (`git show v0.1.0-dev.20261024.1:build/apt-packages.txt`). Projects that relied on commands from those packages must install them themselves.
 
 pkg-config reads installed `.pc` metadata to supply compiler and linker flags. It does not install libraries. Project-specific headers and libraries remain optional dependencies; follow the project's setup instructions. See [Ubuntu's pkg-config manual](https://manpages.ubuntu.com/manpages/resolute/man1/pkg-config.1.html). The package list is [`build/apt-packages.txt`](../build/apt-packages.txt); the existing `APT_SNAPSHOT` pin in [`versions.env`](../versions.env) selects their versions.
+
+## Go formatting and security scans
+
+The image has no `goimports` command. golangci-lint 2.15.0 includes it as a formatter:
+
+```sh
+golangci-lint fmt -E goimports        # rewrite files
+golangci-lint fmt -E goimports -d     # show a diff, change nothing
+```
+
+`-E` (`--enable`) turns on a formatter and `-d` (`--diff`) prints a diff instead of rewriting files (`golangci-lint fmt --help`). With `-d`, it exits with status 1 when a file needs changes. Git hooks, editor settings or Makefiles that call `goimports` must call this command instead. A project's `.golangci.yml` can enable the formatter permanently ([golangci-lint formatters](https://golangci-lint.run/docs/formatters/)).
+
+The image also has gosec 2.30.0 and gitleaks 8.30.1:
+
+```sh
+gosec ./...          # scan the Go packages under the current directory
+gitleaks git .       # scan the repository's history for secrets
+gitleaks dir .       # scan the files in a directory
+```
+
+Both are upstream release binaries. The build checks their SHA-256 against the projects' published checksum files; their publisher signatures are not verified ([versions](versions.md#pinned-inputs)).
+
+## PDFs and images
+
+- `pdftotext file.pdf out.txt` extracts text; add `-layout` to keep the page layout. `pdftoppm -png -r 150 file.pdf page` renders each page to `page-1.png`, `page-2.png` and so on; `-f` and `-l` select the first and last page. Both come from poppler-utils 26.01.
+- ImageMagick 7 (`magick`) converts, resizes and crops images, for example `magick in.png -resize 50% out.jpg`.
+- ImageMagick reads PDF and PostScript through ghostscript, which the image does not install. `magick file.pdf out.png` fails with `gs: not found`. Render PDF pages with `pdftoppm` and process the PNG files with `magick`.
+
+## Document conversion with MarkItDown and pandoc
+
+These two tools are not in the image. Install them yourself when a project needs them. [Versions](versions.md#documented-installs) lists the pinned versions and when they were last checked.
+
+[MarkItDown](https://github.com/microsoft/markitdown) 0.1.9 converts Office documents, PDFs and other formats to Markdown:
+
+```sh
+uv tool install "markitdown[docx,pptx,xlsx,xls,pdf,outlook]==0.1.9"
+markitdown report.docx > report.md
+```
+
+The extras select the input formats (`[all]` installs every one). The install was about 240 MB. `uv tool` installs under the tools root, so MarkItDown survives a new container only with `AGENTAINER_TOOLS=persist`; otherwise install it again after the container is recreated ([tools that agents install](configuration.md#tools-that-agents-install)).
+
+[pandoc](https://pandoc.org) 3.13 converts between markup formats. Install the upstream static binary into `~/.local/bin`, which is on the home volume and on `PATH` in login shells:
+
+```sh
+v=3.13
+case "$(uname -m)" in
+x86_64) a=amd64 s=38aa33b325a2bc96a4c39409631212db55702f564250bcdbead180b3bf646389 ;;
+aarch64) a=arm64 s=21e1d4ba09bd0b334590d204580fd4f6629b21be4ab6a32b26cc98982e9e0c68 ;;
+esac
+cd "$(mktemp -d)"
+curl -fsSLO "https://github.com/jgm/pandoc/releases/download/$v/pandoc-$v-linux-$a.tar.gz"
+printf '%s  %s\n' "$s" "pandoc-$v-linux-$a.tar.gz" | sha256sum -c -
+tar -xzf "pandoc-$v-linux-$a.tar.gz"
+install -D -m 0755 "pandoc-$v/bin/pandoc" ~/.local/bin/pandoc
+~/.local/bin/pandoc --version | head -n 1
+```
+
+The checksums are the SHA-256 digests GitHub publishes for the release assets (`gh api repos/jgm/pandoc/releases/tags/3.13 --jq '.assets[] | .name + " " + .digest'`). The binary unpacks to about 172 MB.
+
+Both installs were run in the image on 2026-11-04: `markitdown 0.1.9` converted a `.docx` that `pandoc 3.13` had written.
 
 ## PostgreSQL scripts
 

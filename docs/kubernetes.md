@@ -1,22 +1,27 @@
 # Kubernetes with ContainerSSH
 
-[`deploy/kubernetes/`](../deploy/kubernetes/) has an example you apply with `kubectl apply -k`. You reach the agent pod over SSH through [ContainerSSH](https://containerssh.io/v0.6/) v0.6.0, and each login lands in the same tmux session.
+[`deploy/kubernetes/`](../deploy/kubernetes/) has an example you apply with `kubectl apply -k`. You reach the agent pod over SSH through [ContainerSSH](https://containerssh.io/v0.6/) v0.6, and each login lands in the same tmux session.
 
-- Namespace `agentainer`: a StatefulSet with one pod, `agentainer-0`, and two volumes, `home` (20 Gi) and `workspace` (50 Gi). It meets the [Restricted Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/), mounts no service account token, and keeps sudo off.
+- Namespace `agentainer`: a StatefulSet with one pod, `agentainer-0`, and two volumes, `home` (20 Gi) and `workspace` (50 Gi). It meets the [Restricted Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/), mounts no service account token, and keeps sudo off. The pod also runs [FileBrowser Quantum](#file-transfer-and-filebrowser) as a second container and mounts a 5 Gi `agentainer-transfer` volume.
 - Namespace `containerssh`: the ContainerSSH server in [persistent mode](https://containerssh.io/v0.6/reference/kubernetes/#persistent-mode), and a small Python webhook that checks SSH public keys and tells ContainerSSH which pod to use. A NetworkPolicy lets only ContainerSSH reach the webhook, if your CNI enforces NetworkPolicy.
 - The ContainerSSH image on Docker Hub is amd64 only, so its Deployment runs on amd64 nodes. The agentainer pod runs on either architecture.
 
-Not verified: this example has not been deployed to a cluster.
+Verified on 2026-11-04 on a Kubernetes v1.36.2 cluster with flannel and kube-network-policies, which enforces NetworkPolicy: SSH logins, SFTP and port forwarding closed by default and opened at runtime, FileBrowser, the egress policy, Playwright in the Restricted pod, and an upgrade from the previous example. The results are quoted in the sections below. The test used test-only namespaces and its own credentials.
 
 ## Contents
 
 - [Install](#install)
 - [Logging in](#logging-in)
+- [SFTP and port forwarding](#sftp-and-port-forwarding)
+- [File transfer and FileBrowser](#file-transfer-and-filebrowser)
+- [Shared memory](#shared-memory)
 - [Limits](#limits)
 - [SSH port access](#ssh-port-access)
 - [Seeding a new home](#seeding-a-new-home)
 - [Network policy](#network-policy)
+- [Your own config server](#your-own-config-server)
 - [Upgrading and removing](#upgrading-and-removing)
+- [Troubleshooting](#troubleshooting)
 - [More than one user](#more-than-one-user)
 
 ## Install
@@ -49,17 +54,110 @@ ssh dev@<containerssh service address>
 - Each login runs tmux with `TERM=xterm-256color`. ContainerSSH does not pass the client's environment to the pod in this setup, and tmux will not start without `TERM`.
 - The pod's time zone and locale come from the `TZ` and `LANG` entries under `env` in `deploy/kubernetes/agentainer/statefulset.yaml` (`UTC` and `C.UTF-8`, the image defaults). tmux in the pod reads them from the container environment, since ContainerSSH does not pass the client's. To change them, edit the values, for example to `America/Denver` and `en_US.UTF-8`. An explicit `env` entry overrides the same name in the `agentainer-credentials` Secret, which the container loads with `envFrom` ([Pod API reference](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/): "Values defined by an Env with a duplicate key will take precedence."). This is the opposite of the launcher's env-file rule. To set `TZ` or `LANG` in the Secret, delete the matching `env` entries.
 - ContainerSSH sends an SSH keepalive every 30 seconds, so load balancer and NAT idle timers do not drop a quiet session.
+- To sign in to the agents from an SSH session, see [Signing in over SSH](logins.md#signing-in-over-ssh).
 
 The agent pod has startup and readiness probes with a three-minute startup allowance. They execute the image's local health command; legacy images fall back to the active-tools link. These checks do not detect every hung agent. A liveness policy needs a separate responsiveness and recovery contract ([probe semantics](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)).
+
+## SFTP and port forwarding
+
+The image contains `sftp-server` (`/usr/lib/openssh/sftp-server`) and the ContainerSSH guest agent (`containerssh-agent`), which ContainerSSH needs for port forwarding. The example webhook keeps both features closed until you turn them on.
+
+Closed, which is the default, an SFTP client gets "subsystem request failed on channel 0", and `ssh -L` and `ssh -D` get "open failed: administratively prohibited: Forwarding is rejected" (cluster check, 2026-11-04).
+
+### The switch
+
+The ConfigMap `agentainer-features` in the `containerssh` namespace ([`auth-webhook/features.yaml`](../deploy/kubernetes/auth-webhook/features.yaml)) holds two settings:
+
+| Setting | Values | Effect |
+|---|---|---|
+| `sftp` | `on` or `off` | `on` allows the `sftp` subsystem and no other subsystem |
+| `forwarding` | `local` or `off` | `local` allows `ssh -L` and `ssh -D`. Reverse (`ssh -R`), socket and X11 forwarding stay off. |
+
+A missing setting is off. A malformed line, an unknown name or value, a repeated name, or a file over 4096 bytes turns both off. The webhook never fails open.
+
+To turn SFTP and forwarding on, edit the ConfigMap:
+
+```sh
+kubectl -n containerssh edit configmap agentainer-features
+```
+
+and change the `features` value to:
+
+```text
+sftp=on
+forwarding=local
+```
+
+To turn them off again, set both back to `off` the same way.
+
+- The webhook reads the file on every new SSH connection, so the next connection gets the new settings. Open connections keep theirs. Nothing restarts: not the agent pod, its tmux session, ContainerSSH or the webhook.
+- The change reaches the webhook pod when the kubelet updates the mounted ConfigMap, which "can be as long as the kubelet sync period + cache propagation delay" ([Mounted ConfigMaps are updated automatically](https://kubernetes.io/docs/concepts/configuration/configmap/#mounted-configmaps-are-updated-automatically)). In the cluster check it took 59 s and 75 s to open and 16 s to close.
+- **`kubectl apply -k deploy/kubernetes` resets `agentainer-features` to the values in `features.yaml`.** A change made with `kubectl edit` lasts until the next apply. To keep a setting, change `features.yaml` in your copy of the repo, or patch it in your GitOps overlay.
+
+### SFTP
+
+- The subsystem runs as the `agent` user and reaches every file that user can, not only `~/transfer`.
+- Sessions start in the exec's working directory, `/workspace` in this image, and the subsystem takes no arguments. Use absolute paths, for example `put report.pdf /home/agent/transfer/report.pdf`.
+- With SFTP on, `sftp` works. The default `scp` uses the SFTP protocol since OpenSSH 9.0, so it needs SFTP on too; this is not verified. `scp -O` (the legacy protocol) and `rsync -e ssh` run as commands and should work without the switch; this is not verified either.
+- The cluster check ran `put`, `get` and `ls` in `/home/agent/transfer`, and the downloaded file matched.
+
+### Port forwarding
+
+```sh
+ssh -L 3000:localhost:3000 dev@<containerssh service address>   # a dev server in the pod
+ssh -D 1080 dev@<containerssh service address>                  # a SOCKS proxy
+```
+
+- `forwarding=local` allows `ssh -L` to any host and port the pod can reach, and `ssh -D` as a SOCKS proxy. The reach is the same as a shell in the pod. The [network policy](#network-policy) decides what that is.
+- ContainerSSH has no port filter. Its forwarding settings are only enable or disable ([forwarding reference](https://containerssh.io/v0.6/reference/forwarding/)), so a port allowlist is not possible.
+- The cluster check reached a service on `127.0.0.1` in the pod through both `ssh -L` and `ssh -D` (SOCKS5).
+- ContainerSSH logs "[Connection error io: read/write on closed pipe]" at the warning level when each forwarded channel closes. The data was delivered; the message is harmless.
+
+## File transfer and FileBrowser
+
+The pod mounts `agentainer-transfer` twice. Subpath `files` is `~/transfer` (`/home/agent/transfer`) in the agent container and the folder FileBrowser serves. Subpath `filebrowser` holds FileBrowser's database and cache. `~/transfer` exists only in this example. With the local launcher, move files through the bind-mounted `/workspace` instead.
+
+To hand a screenshot to an agent, upload it to `~/transfer` and give the agent its path, for example `/home/agent/transfer/screenshot.png`.
+
+[FileBrowser Quantum](https://github.com/gtsteffaniak/filebrowser) v2.0.2 is a web file manager. The example runs it as the second container, so ContainerSSH still opens sessions in the agent container. Its settings are in [`agentainer/filebrowser-config.yaml`](../deploy/kubernetes/agentainer/filebrowser-config.yaml). It listens on `127.0.0.1:8080` only and has no Service. Reach it through the API server:
+
+```sh
+kubectl -n agentainer port-forward pod/agentainer-0 8080:8080
+```
+
+Then open `http://127.0.0.1:8080` on your machine. In the cluster check a connection to the pod's IP on 8080 was refused.
+
+First login:
+
+1. Read the generated admin password. FileBrowser logs it once, on the first start of a new database:
+
+   ```sh
+   kubectl -n agentainer logs agentainer-0 -c filebrowser | grep 'initial admin password'
+   ```
+
+2. Log in as `admin` with it. FileBrowser then requires a new password. The ConfigMap sets the minimum length to 12 characters (`auth.methods.password.minLength`).
+
+The database lives on the transfer volume, so the account and its new password survive a pod restart, and no new password is generated. Do not set `FILEBROWSER_ADMIN_PASSWORD`: FileBrowser applies it to the admin account on every start, which undoes a password changed in the UI. WebDAV is off. Analytics is a database setting that is off by default (`GET /api/settings/analytics` returned `{"enabled":false}` in the cluster check). Changes to the ConfigMap take effect after the pod restarts.
+
+Security:
+
+- **FileBrowser is not a security boundary against the agent container.** Both containers share the pod's network namespace, so anything running in the agent container can reach `127.0.0.1:8080` (confirmed in the cluster check). Give the admin account a unique password that the agent never sees. FileBrowser rate-limits failed logins and locks the account out (`disableRateLimit`, off by default, in FileBrowser's [HTTP settings](https://filebrowserquantum.com/en/docs/configuration/http/)).
+- **Upload only into folders you created.** The agent can create a symbolic link to a folder inside `~/transfer`. In the cluster check, with the example's `ignoreSymlinks` rule on, FileBrowser hid the link from listings, refused to list or read through it ("resolved path escapes scope") and refused to overwrite an existing file through it. A new file uploaded into the link's path through the API was still written to the link's target, a folder in FileBrowser's container. The agent cannot read that folder, so it gets nothing back, but your file lands in the wrong place. This is not fixed. If you can, report it to the [FileBrowser Quantum project](https://github.com/gtsteffaniak/filebrowser/issues).
+
+Single sign-on through a reverse proxy uses FileBrowser's proxy login, which the ConfigMap shows in a comment. It needs a listen address other than `127.0.0.1`, a Service of its own that only the proxy can reach, and a proxy that sets the username header and strips it from client requests ([proxy login](https://filebrowserquantum.com/en/docs/configuration/authentication/proxy/)).
+
+## Shared memory
+
+The agent container mounts a 1 Gi memory-backed `emptyDir` at `/dev/shm` for Chromium ([browser testing](browser-testing.md#shared-memory-and-network-access)). Files in it count against the agent container's memory limit, 8 Gi in the example ([emptyDir](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir)).
 
 ## Limits
 
 - The webhook gives each request a ten-second deadline for headers and body. It runs at most 16 handler threads and answers further connections with HTTP 503 ([implementation](../deploy/kubernetes/auth-webhook/webhook.py)).
 - A cluster has no host folder. Clone repos into `/workspace`. **Work you have not pushed exists only on the workspace volume.**
-- sftp and the default `scp` do not work: since OpenSSH 9.0, `scp` uses the SFTP protocol, and the image has no `sftp-server`. `scp -O` (the legacy protocol) and `rsync -e ssh` should work, because ContainerSSH runs those as commands; this is not verified.
-- Port forwarding (`ssh -L`, `ssh -R`), socket forwarding and X11 forwarding are off: ContainerSSH disables them by default and the example keeps that.
+- SFTP and port forwarding are off until you [switch them on](#the-switch). Reverse, socket and X11 forwarding are always off.
+- The `agentainer-transfer` volume is one ReadWriteOnce claim, so the example runs one replica.
 - The ContainerSSH-to-webhook traffic is plain HTTP inside the cluster. The example has no server-side TLS configuration; adding it requires a server change or TLS-terminating proxy. ContainerSSH's webhook client accepts `cacert`, `cert` and `key` settings for TLS (`config/http.go` in ContainerSSH v0.6.0).
-- Resource requests and limits on all three pods are example values.
+- Resource requests and limits on all pods are example values. FileBrowser requests 50m CPU and 64 Mi memory and is limited to 500m and 256 Mi.
 - [Kandev](extras.md#kandev), an optional extra, listens on `0.0.0.0` by default, and its local mode is "not an authenticated multi-user boundary". In the pod, start it with `KANDEV_SERVER_HOST=127.0.0.1` and reach it with `kubectl -n agentainer port-forward pod/agentainer-0 38429:38429` ([Kandev CLI, Ports and network exposure](https://kandev.ai/docs/cli)). Not verified in a cluster.
 - To turn sudo on, follow the comment in [`agentainer/statefulset.yaml`](../deploy/kubernetes/agentainer/statefulset.yaml). The capability list there is untested, and the pod then needs the Baseline profile.
 
@@ -83,33 +181,77 @@ Both keys are optional. [Configuration](configuration.md) describes both files; 
 
 ## Network policy
 
-[`agentainer/networkpolicy.yaml`](../deploy/kubernetes/agentainer/networkpolicy.yaml) limits the agent pod's outbound traffic.
+The example has two optional policies in `deploy/kubernetes/agentainer/`. Both are off by default and need a CNI that enforces NetworkPolicy. To use one, uncomment it in that folder's `kustomization.yaml`.
 
-- Allowed: DNS on UDP and TCP port 53, and TCP port 443, to every destination, including internal services and any DNS server.
-- Not provided: an internet-only allowlist. This is a port restriction. Before you rely on it to isolate hosts or internal services, restrict the DNS selectors and the pod, service and node ranges for your cluster. NetworkPolicy and address translation behavior depend on the CNI ([Kubernetes policy semantics](https://kubernetes.io/docs/concepts/services-networking/network-policies/)).
-- Enabling it: the policy is off by default. Add it to that folder's `kustomization.yaml`, with a CNI that enforces NetworkPolicy.
+[`networkpolicy.yaml`](../deploy/kubernetes/agentainer/networkpolicy.yaml) limits the agent pod's outbound traffic:
 
-Without it, the agent pod can reach any address, including your cloud provider's instance metadata address (`169.254.169.254`) if the cluster allows it.
+- Allowed: DNS on UDP and TCP port 53 to every destination, and TCP port 443 to `0.0.0.0/0` and `::/0`.
+- Excluded from the 443 rules: `10.0.0.0/8`, `172.16.0.0/12` and `192.168.0.0/16` (private IPv4), `100.64.0.0/10` (shared address space), `169.254.0.0/16` (link-local, which includes the cloud instance metadata address `169.254.169.254`), `fc00::/7` (IPv6 unique local) and `fe80::/10` (IPv6 link-local).
+- Plain HTTP on port 80 is blocked everywhere.
+- An API server or in-cluster HTTPS service at one of the excluded addresses is unreachable from the agent pod unless another rule allows it. One at a public address stays reachable on 443. ContainerSSH makes its own API server connection from its own pod, so SSH sessions keep working.
+- DNS is not restricted, and the policy matches addresses and ports, not names ([Kubernetes policy semantics](https://kubernetes.io/docs/concepts/services-networking/network-policies/)).
+
+To reach one internal service, add a narrow rule, for example in a second policy, since policies add up:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: agentainer-egress-internal, namespace: agentainer}
+spec:
+  podSelector: {matchLabels: {app: agentainer}}
+  policyTypes: [Egress]
+  egress:
+    - to: [{ipBlock: {cidr: 203.0.113.10/32}}]
+      ports: [{protocol: TCP, port: 443}]
+```
+
+In the cluster check, with the policy on, HTTPS to a private pod address timed out, while `https://example.com`, the npm registry and the Playwright download CDN worked. A second policy like the one above re-allowed the private address.
+
+[`ingress-policy.yaml`](../deploy/kubernetes/agentainer/ingress-policy.yaml) denies all ingress to the agent pod. SSH sessions use the Kubernetes API (`pods/exec`) and `kubectl port-forward` goes through the API server and the kubelet, so neither needs pod network ingress.
+
+Without the egress policy, the agent pod can reach any address, including the instance metadata address if the cluster allows it.
+
+## Your own config server
+
+If you replace the example webhook with your own ContainerSSH config server, it decides SFTP and forwarding.
+
+- **Deny the `sftp` subsystem** unless you want it. ContainerSSH maps `sftp` to `/usr/lib/openssh/sftp-server` by default and allows subsystems by default (`Subsystems` in `config/kubernetes.go` at ContainerSSH v0.6.0), and this image now contains that program. Set `security.subsystem.mode` to `disable`, or to `filter` with an `allow` list ([security reference](https://containerssh.io/v0.6/reference/security/)).
+- ContainerSSH's default `agentPath` is `/usr/bin/containerssh-agent` (`AgentPath` in `config/kubernetes.go` at ContainerSSH v0.6.0). The image installs the agent at `/usr/local/bin/containerssh-agent` and links it at that default path, so forwarding works without setting `agentPath`.
+- ContainerSSH disables forwarding by default ([forwarding reference](https://containerssh.io/v0.6/reference/forwarding/)).
 
 ## Upgrading and removing
 
-To upgrade, change `newTag` in `agentainer/kustomization.yaml` and run `kubectl apply -k deploy/kubernetes`. After a stable release publishes `latest`, using `newTag: latest` means the manifest does not change, so restart the pod instead: `kubectl -n agentainer rollout restart statefulset agentainer`. The `home` and `workspace` volumes stay.
+To upgrade, change `newTag` in `agentainer/kustomization.yaml` and run `kubectl apply -k deploy/kubernetes`. After a stable release publishes `latest`, using `newTag: latest` means the manifest does not change, so restart the pod instead: `kubectl -n agentainer rollout restart statefulset agentainer`. The `home` and `workspace` volumes stay. Each apply also resets the [SFTP and forwarding switch](#the-switch).
 
-The StatefulSet keeps the `home` and `workspace` PVCs when it is deleted or scaled down. **`kubectl delete -k deploy/kubernetes` also deletes the `agentainer` namespace, which deletes those PVCs and, with the usual `Delete` reclaim policy, the disks.** To keep your work, delete only the StatefulSet (`kubectl -n agentainer delete statefulset agentainer`), or set the volumes' reclaim policy to `Retain` first.
+The transfer volume is a separate PersistentVolumeClaim, not a `volumeClaimTemplate`, because Kubernetes refuses changes to `volumeClaimTemplates` on an existing StatefulSet. In the cluster check, applying this example over the previous one succeeded, created `agentainer-transfer` and rolled out both containers.
 
-Every object in `deploy/kubernetes` carries the label `app.kubernetes.io/part-of: agentainer`; the Pods and PVCs created from them do not. To list the labelled objects:
+The StatefulSet keeps the `home` and `workspace` PVCs when it is deleted or scaled down. **`kubectl delete -k deploy/kubernetes` deletes the `agentainer` namespace, which deletes those PVCs and `agentainer-transfer` and, with the usual `Delete` reclaim policy, the disks.** To keep your work, delete only the StatefulSet (`kubectl -n agentainer delete statefulset agentainer`), or set the volumes' reclaim policy to `Retain` first.
+
+Every object in `deploy/kubernetes` carries the label `app.kubernetes.io/part-of: agentainer`; the Pods and the PVCs created from the templates do not. To list the labelled objects:
 
 ```sh
-kubectl get namespace,statefulset,deployment,service,configmap,serviceaccount,role,rolebinding,networkpolicy \
+kubectl get namespace,statefulset,deployment,service,configmap,serviceaccount,role,rolebinding,networkpolicy,persistentvolumeclaim \
   -A -l app.kubernetes.io/part-of=agentainer
 ```
+
+## Troubleshooting
+
+- **Short external names resolve to the wrong address.** Pods use `ndots:5` by default ([DNS for Services and Pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/)). If a node's resolv.conf search list includes a domain with wildcard DNS records, a name such as `go.dev` can resolve to that domain's address first, and the egress policy may then block it. Set this in the pod template of `statefulset.yaml`:
+
+  ```yaml
+  dnsConfig:
+    options: [{name: ndots, value: "1"}]
+  ```
+
+- **FileBrowser shows no initial password.** It logs the password only when it creates a new database, so a restart with an existing database prints none.
+- **"Connection error io: read/write on closed pipe" in the ContainerSSH log** after a forwarded connection closes is harmless.
 
 ## More than one user
 
 The example serves one user. Multi-user support is not built; it would need these changes:
 
 - The webhook's `/config` answer would name a per-user pod such as `agentainer-<user>-0`.
-- Each user would get a StatefulSet and volumes, and `authorized_keys` would become a per-user mapping.
+- Each user would get a StatefulSet and volumes, and `authorized_keys` would become a per-user mapping. The transfer volume would need to be per user too.
 - The ContainerSSH Role lists only `agentainer-0` in `resourceNames`. Add each per-user pod to both rules, or give each user a namespace with its own Role and RoleBinding for the ContainerSSH ServiceAccount.
 
 The image stays the same.
