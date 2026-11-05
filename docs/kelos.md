@@ -43,4 +43,4 @@ CI does not build or test the variant, and no release publishes it.
 
 ## Pins
 
-The variant's pins live in `Containerfile.kelos`, not in `versions.env`: the base Agentainer image digest, the `golang` builder image digest, `KELOS_FORK_COMMIT` and `KELOS_CAPTURE_VERSION`. The scheduled update does not change them.
+The variant's pins live in `Containerfile.kelos`, not in `versions.env`: the base Agentainer image digest, the `golang` builder image digest, `KELOS_FORK_COMMIT` and `KELOS_CAPTURE_VERSION`. The scheduled update does not change them. The variant gets the new remote-use tools (`gosec`, `gitleaks`, `pdftotext`, `magick`, the browser libraries and `sftp-server`) when the base image pin in `Containerfile.kelos` moves to a release built from this change.

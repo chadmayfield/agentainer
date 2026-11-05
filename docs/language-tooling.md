@@ -33,6 +33,8 @@ The image defaults to `GOTOOLCHAIN=local`. To let a project select and download 
 
 Configure the client to launch `gopls serve`. Its Go environment must match the project's module and workspace setup. See [gopls editor configuration](https://go.dev/gopls/#editors).
 
+The image has no `goimports` command. Format imports with `golangci-lint fmt -E goimports`, and change hooks or editor settings that call `goimports` ([Go formatting](project-tools.md#go-formatting-and-security-scans)).
+
 ## Python with Pyright
 
 Install Microsoft's npm package, using the image's writable npm prefix ([tools that agents install](configuration.md#tools-that-agents-install)):

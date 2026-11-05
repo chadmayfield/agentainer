@@ -3,8 +3,12 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - service.yaml
+  - transfer-pvc.yaml
+  - filebrowser-config.yaml
   - statefulset.yaml
+  # Optional policies. Both need a CNI plugin that enforces NetworkPolicy.
   # - networkpolicy.yaml
+  # - ingress-policy.yaml
 # Set newTag to a published SemVer release, or replace it with digest: sha256:...
 # "latest" follows only the highest stable release and is absent before the first one.
 images:

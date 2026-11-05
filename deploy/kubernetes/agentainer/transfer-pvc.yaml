@@ -1,0 +1,17 @@
+# Storage for files moved in and out through FileBrowser Quantum. The StatefulSet mounts
+# two subPaths of this claim: files (the transfer directory) and filebrowser (its database
+# and cache). It is a standalone claim, not a volumeClaimTemplate, because Kubernetes
+# rejects changes to volumeClaimTemplates on an existing StatefulSet
+# (ValidateStatefulSetUpdate in kubernetes/kubernetes pkg/apis/apps/validation), so
+# kubectl apply -k keeps working on existing installs. No storageClassName, so the
+# cluster default storage class provisions it.
+# This single ReadWriteOnce claim ties the example to one replica: every replica would
+# mount it, and only one node can.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agentainer-transfer
+  namespace: agentainer
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 5Gi}}

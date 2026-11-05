@@ -1,0 +1,21 @@
+# The SFTP and port forwarding switch. The webhook reads it on every new SSH
+# connection, so an edit applies to the next connection after the kubelet updates
+# the mounted file. Nothing restarts, and open connections keep their settings.
+#
+#   sftp=on | off          on allows only the sftp subsystem
+#   forwarding=local | off local allows ssh -L and ssh -D; reverse, socket and
+#                          X11 forwarding stay off
+#
+# A missing name is off. A malformed line, an unknown name or value, a repeated
+# name, or a features value over 4096 bytes turns both off.
+#
+# Re-running kubectl apply -k resets the switch to the values in this file. A
+# change made with kubectl -n containerssh edit configmap agentainer-features
+# lasts until the next apply.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: agentainer-features, namespace: containerssh}
+data:
+  features: |
+    sftp=off
+    forwarding=off

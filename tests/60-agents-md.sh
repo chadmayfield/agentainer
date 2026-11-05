@@ -42,7 +42,15 @@ test "$(stat -c "%U %a" LICENSE)" = "root 644"
 echo UNSLOP_VERIFIED')"
 # A fresh home: no volume, so every first-start step runs.
 assert_absent "a fresh start prints no warnings" "$(run_in -- echo STARTED 2>&1)" STARTED warning changed
-assert_contains "default AGENTS.md describes the container" "/workspace" "$(run_in $H -- agentainer-entrypoint cat /home/agent/.agentainer/AGENTS.md)"
+seeded=$(run_in $H -- agentainer-entrypoint cat /home/agent/.agentainer/AGENTS.md)
+assert_contains "default AGENTS.md describes the container" "/workspace" "$seeded"
+# The remote-use section: the Kubernetes transfer folder, the PDF and image tools and the
+# no-root browser setup.
+# shellcheck disable=SC2088 # "~/transfer" is literal text in the seeded file
+for needle in "~/transfer" "Kubernetes example" pdftotext pdftoppm magick ghostscript \
+	"install --only-shell chromium" "@playwright/mcp install-browser chromium" "/dev/shm"; do
+	assert_contains "default AGENTS.md mentions $needle" "$needle" "$seeded"
+done
 
 # A user's own global file is kept, with a warning.
 "$RUNTIME" volume rm -f "$VOL" >/dev/null

@@ -11,6 +11,7 @@ No default contains an account, token, private endpoint or signing key. The Git 
 - [Tmux](#tmux)
 - [Vim and EditorConfig](#vim-and-editorconfig)
 - [Agent configurations](#agent-configurations)
+- [Image tools for documents, browsers and remote access](#image-tools-for-documents-browsers-and-remote-access)
 - [Existing homes](#existing-homes)
 
 ## Agentainer colors
@@ -134,6 +135,22 @@ Verified by `tests/55-defaults.sh` on a fresh named home volume: the seeded file
 Notifications depend on the host terminal and tmux settings. Claude uses a terminal bell, so the container needs no desktop notification command. Antigravity's notification option includes a terminal chime. OpenCode's sound option is separate and off.
 
 Customize models, providers, plugins and hooks in your own home files. Keep API keys in the runtime environment or the agent's login store. Claude and Antigravity use strict JSON, so keep notes outside the file. OpenCode supports JSONC, but Agentainer's MCP sync writes `opencode.json` and stops if `opencode.jsonc` exists. Codex's TOML supports comments. No status-line command or hook is seeded; [setting up the agents](agents.md#status-lines) covers each agent's status line.
+
+## Image tools for documents, browsers and remote access
+
+These come with the image, not with a seeded file. `/etc/agentainer/versions.json` lists their versions.
+
+| Tool | What it is for |
+|---|---|
+| `pdftotext`, `pdftoppm` (poppler-utils) | Extract a PDF's text, render its pages as PNG files ([PDFs and images](project-tools.md#pdfs-and-images)) |
+| `magick` (ImageMagick 7) | Convert and resize images. It cannot read PDF or PostScript, because ghostscript is not installed. |
+| `gosec`, `gitleaks` | Go security checks and secret scans ([Go formatting and security scans](project-tools.md#go-formatting-and-security-scans)) |
+| `golangci-lint fmt -E goimports` | Import formatting; there is no `goimports` command |
+| Chromium's OS libraries and fonts | Playwright's Chromium runs without sudo. The browsers download into your home ([browser testing](browser-testing.md)). |
+| `PLAYWRIGHT_MCP_BROWSER=chromium` | Makes the Playwright MCP plugin use Playwright's Chromium instead of the `chrome` channel |
+| `/usr/lib/openssh/sftp-server`, `containerssh-agent` | SFTP and port forwarding through ContainerSSH, closed until the operator turns them on ([Kubernetes](kubernetes.md#sftp-and-port-forwarding)) |
+
+The shared `AGENTS.md` gains a section on `~/transfer`, these tools and the browser setup. A home whose copy was never edited gets the new default on the next start of a release image; an edited copy stays and startup prints how to see the difference ([AGENTS.md](configuration.md#agentsmd)).
 
 ## Existing homes
 

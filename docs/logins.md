@@ -5,6 +5,7 @@ Put API keys and tokens in the env file (`~/.config/agentainer/env`, mode 600; s
 ## Contents
 
 - [Logins per agent](#logins-per-agent)
+- [Signing in over SSH](#signing-in-over-ssh)
 - [Which Claude login wins](#which-claude-login-wins)
 - [GitHub and git](#github-and-git)
 - [Credential exposure](#credential-exposure)
@@ -27,6 +28,17 @@ Antigravity notes:
 Sources: [Claude authentication](https://code.claude.com/docs/en/authentication), [Codex auth](https://learn.chatgpt.com/docs/auth), [Antigravity install](https://antigravity.google/docs/install.md), [OpenCode v2 providers](https://opencode.ai/v2/docs/cli/providers), [gh environment](https://cli.github.com/manual/gh_help_environment), [gh auth setup-git](https://cli.github.com/manual/gh_auth_setup-git), [gh auth login](https://cli.github.com/manual/gh_auth_login).
 
 The env file uses the engine's `NAME=value` format, not shell syntax. Do not quote values, use `export`, put spaces around `=`, or append comments to a value. A bare name imports that variable from the launching host environment ([Podman env files](https://docs.podman.io/en/latest/markdown/podman-run.1.html), [Docker env files](https://docs.docker.com/reference/cli/docker/container/run/#env)).
+
+## Signing in over SSH
+
+Over SSH, for example through the [Kubernetes example](kubernetes.md), the container has no browser of its own. `claude auth login` and `codex login --device-auth` print a URL; open it in a browser on your own machine and finish the sign-in there. OpenCode and Antigravity are described in the table. The output and help text were checked on 2026-11-04 in the image with Claude Code 2.1.309, Codex 0.166.0, OpenCode 2.2.5 and Antigravity 1.4.12. None of these sign-ins were completed in that check.
+
+| Agent | Command | What it does |
+|---|---|---|
+| Claude Code | `claude auth login` | `--help`: "Sign in to your Anthropic account". It prints "If the browser didn't open, visit:" with a URL, then "Paste code here if prompted". `--claudeai` (the default) uses a Claude subscription, `--console` uses Anthropic Console API billing, and `--sso` forces the SSO flow. |
+| Codex | `codex login --device-auth` | Prints a link (`https://auth.openai.com/codex/device`) and a one-time code that expires in 15 minutes. Turn on device code login in your ChatGPT security settings first. |
+| OpenCode | `opencode auth login` | `--help`: "connect an integration". It opens a picker of integrations; `--method` and `--answer` skip the prompts. |
+| Antigravity | `agy` | `agy --help` lists no login subcommand. Start `agy` and follow the sign-in it offers. Over SSH it prints a sign-in URL and asks you to paste back the code it shows. Not verified with this version. |
 
 ## Which Claude login wins
 

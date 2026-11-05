@@ -14,6 +14,7 @@ This page covers what the image pins, how pins are updated, which release tag to
   - [AWS CLI signing key](#aws-cli-signing-key)
 - [Optional extras](#optional-extras)
   - [npm registry keys](#npm-registry-keys)
+- [Documented installs](#documented-installs)
 
 ## Pinned inputs
 
@@ -22,6 +23,10 @@ This page covers what the image pins, how pins are updated, which release tag to
 Node.js is the official Linux tarball from nodejs.org, installed in `/opt/node` with `node`, `npm` and `npx` linked into `/usr/local/bin`. `versions.env` pins `NODE_VERSION` and the two Linux checksums (`NODE_SHA256_AMD64`, `NODE_SHA256_ARM64`), and the scheduled update follows the 26.x line. The image removes `include/`, `share/`, `README.md` and `CHANGELOG.md` from the install. Verification happens in two places: the updater checks the GPG signature on Node.js's checksum list before it writes the pins ([Node.js release keyring](#nodejs-release-keyring)), and the build checks the downloaded tarball against the pinned SHA-256 (`build/install-tool.sh`).
 
 Claude Code is the native binary from Anthropic's release host, the file Anthropic's native installer downloads. The scheduled update checks the release's `manifest.json` against Anthropic's GPG signature before it pins the binary's SHA-256 ([binary integrity](https://code.claude.com/docs/en/setup#binary-integrity-and-code-signing)).
+
+gosec, gitleaks and the ContainerSSH guest agent (`containerssh-agent`) are upstream release archives. The build checks each against the SHA-256 in the project's published `*_checksums.txt` (`GOSEC_`, `GITLEAKS_` and `CONTAINERSSH_AGENT_` pins). The image installs the agent at `/usr/local/bin/containerssh-agent` and links it at `/usr/bin/containerssh-agent`, ContainerSSH's default `agentPath` ([`AgentPath` default in `config/kubernetes.go` at ContainerSSH v0.6.0](https://github.com/ContainerSSH/ContainerSSH/blob/v0.6.0/config/kubernetes.go#L113)). The updater takes these three tools' hashes only from the release's `gosec_<version>_checksums.txt`, `gitleaks_<version>_checksums.txt` and `agent_<version>_checksums.txt`, and refuses a release that lacks the file.
+
+The agent version follows the ContainerSSH server image. `CONTAINERSSH_AGENT_SERIES` in `scripts/bump_versions.py` maps the server's tag series (`v0.6`) to the agent minor series tested with it (`0.11`), and the updater only proposes newer patch releases in that series. If the server tag has no entry, the updater keeps the current agent pin and prints why. The `v0.6` tag's digest can move between patch releases, so a mapping change needs a review of the verified pair of server digest and agent version. The verified pair is the server `docker.io/containerssh/containerssh:v0.6@sha256:f6b195c221739b0f1a43c567bc9df0a0f3b3bd92ccc25ef451e6d4122820c13b` (`CONTAINERSSH_IMAGE`) with `containerssh-agent` 0.11.0 (`CONTAINERSSH_AGENT_VERSION`). On 2026-11-04 SFTP, `ssh -L` and `ssh -D` worked with this pair in a cluster, in persistent mode with `disableAgent: true`. `VERIFIED_CONTAINERSSH_PAIR` in `scripts/bump_versions.py` records this pair, and `test_pinned_containerssh_pair_is_the_cluster_verified_pair` fails when `versions.env` pins a different server image reference (name, tag or digest) or agent version. A pull request from the scheduled update that changes either pin therefore fails CI until someone re-runs the SFTP, `ssh -L` and `ssh -D` check from [docs/kubernetes.md](kubernetes.md#sftp-and-port-forwarding) against the new pair and updates the constant and this paragraph. Do not merge a guest agent or server update before that check. The test runs in the `build` workflow on the pull request, not in the bump job, so the pull request still opens and shows the failure. That day Docker Hub's `v0.6` tag resolved to this digest, `v0.6.1` resolved to a different digest, and no `v0.6.0` tag existed.
 
 Each tool is built in its own stage, so an update downloads only the layers that changed:
 
@@ -140,10 +145,13 @@ The updater requires `gh`, `cosign` and GnuPG in addition to Python. The schedul
 | Node.js | GPG-signed `SHASUMS256.txt` by one of the release keys in `scripts/keys/nodejs-release-keys.asc`. |
 | AWS CLI | GPG signature (`<zip>.sig`) on each installer zip, by the AWS CLI Team key in `scripts/keys/aws-cli-public-key.asc` with the fingerprint pinned in the updater. AWS publishes no checksums, so the updater computes the SHA-256 pins from the verified zips. |
 | Optional extras (npm) | npm registry signature on every lockfile entry, by a key in `scripts/keys/npm-registry-keys.json` ([Optional extras](#optional-extras)). |
+| gosec | Checksum verified; publisher signature not verified. The SHA-256 comes from `gosec_<version>_checksums.txt`. |
+| gitleaks | Checksum verified; publisher signature not verified. The SHA-256 comes from `gitleaks_<version>_checksums.txt`. |
+| ContainerSSH guest agent | Checksum verified; publisher signature not verified. The SHA-256 comes from `agent_<version>_checksums.txt`. |
 
 GitHub provenance checks require the exact workflow certificate identity, repository, source ref and GitHub OIDC issuer ([GitHub CLI verification](https://cli.github.com/manual/gh_attestation_verify), [CLI release workflow](https://github.com/cli/cli/blob/trunk/.github/workflows/deployment.yml), [uv release workflow](https://github.com/astral-sh/uv/blob/main/.github/workflows/release.yml), [Ruff release workflow](https://github.com/astral-sh/ruff/blob/main/.github/workflows/release.yml), [golangci-lint release workflow](https://github.com/golangci/golangci-lint/blob/main/.github/workflows/release.yml)). Sigstore bundle checks require the exact workflow certificate identity and GitHub OIDC issuer ([cosign blob verification](https://docs.sigstore.dev/cosign/verifying/verify_blob/), [yq signing workflow](https://github.com/mikefarah/yq/blob/master/.github/workflows/release.yml), [Trivy signing workflow](https://github.com/aquasecurity/trivy/blob/main/.github/workflows/reusable-release.yaml), [Codex signing action](https://github.com/openai/codex/blob/main/.github/actions/linux-code-sign/action.yml)).
 
-The updater does not check publisher signatures for Go, Rust, abtop, tea, kubectl, Helm, Antigravity, OpenCode or the pinned container images. Their checksum, package-manager and digest checks remain. Some of these projects publish signing material; their trust policies need separate review before the updater enforces them. No unsigned-update fallback exists for the publishers in the table.
+The updater does not check publisher signatures for Go, Rust, abtop, gosec, gitleaks, the ContainerSSH guest agent, tea, kubectl, Helm, Antigravity, OpenCode or the pinned container images. Their checksum, package-manager and digest checks remain. Some of these projects publish signing material; their trust policies need separate review before the updater enforces them. No unsigned-update fallback exists for the publishers in the table.
 
 ### Node.js release keyring
 
@@ -209,7 +217,7 @@ For each extra, [`scripts/bump_versions.py`](../scripts/bump_versions.py):
 
 A failed check for one extra, including a missing `npm` or `openssl`, keeps that extra's pin and catalog files and does not stop the run. The other pins still update. `bump_versions.py --failures FILE` writes one line per failed extra to FILE. In the scheduled workflow, the `extras-failures` job prints those lines in the run summary and fails the run after the pull request for the other pins is open.
 
-The pull request job applies the resolver's patch only when it modifies `versions.env`, `deploy/kubernetes/*/deployment.yaml` or an extras `package.json` or `package-lock.json`, and creates, deletes or renames no file ([`.github/actions/bump-pr/action.yml`](../.github/actions/bump-pr/action.yml)).
+The pull request job applies the resolver's patch only when it modifies `versions.env`, `deploy/kubernetes/*/deployment.yaml`, `deploy/kubernetes/agentainer/statefulset.yaml` (the `FILEBROWSER_IMAGE` pin) or an extras `package.json` or `package-lock.json`, and creates, deletes or renames no file ([`.github/actions/bump-pr/action.yml`](../.github/actions/bump-pr/action.yml)).
 
 CI's `lint-unit` job runs `tests/host/test-extras-catalog.sh` and scans the extras lockfiles with Trivy, using the `TRIVY_SCANNER_IMAGE` pin. The scan is report only: findings go to the job's step summary and never fail the job.
 
@@ -221,3 +229,12 @@ CI's `lint-unit` job runs `tests/host/test-extras-catalog.sh` and scans the extr
 2. Replace `scripts/keys/npm-registry-keys.json` with the downloaded document, unchanged. Every key must have `keytype` and `scheme` `ecdsa-sha2-nistp256`; `bump_versions.py` refuses any other.
 3. Update the date in the comment above `NPM_KEYS` in `scripts/bump_versions.py` and the key list in this section.
 4. Update the key IDs and expiry times in `test_registry_keys_file_pins_both_npm_keys` in `tests/unit/test_bump_versions.py`, then run the unit tests.
+
+## Documented installs
+
+These tools are not in the image. The docs give a version-pinned install command for each. They are manual pins: the scheduled update does not track them, and no check fails when upstream publishes a newer release. The last column records when each pin was last compared with upstream.
+
+| Tool | Pinned version | Install | Integrity check | Last checked |
+|---|---|---|---|---|
+| [MarkItDown](https://pypi.org/project/markitdown/) | 0.1.9 | `uv tool install "markitdown[...]==0.1.9"` ([project tools](project-tools.md#document-conversion-with-markitdown-and-pandoc)) | uv's PyPI download. No hash pin. | 2026-11-04: the newest release on PyPI |
+| [pandoc](https://github.com/jgm/pandoc/releases/tag/3.13) | 3.13 | Static tarball into `~/.local/bin` ([project tools](project-tools.md#document-conversion-with-markitdown-and-pandoc)) | SHA-256 from GitHub's release asset digests, checked with `sha256sum -c`. Publisher signature not verified. | 2026-11-04: the newest release |

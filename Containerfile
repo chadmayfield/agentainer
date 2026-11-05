@@ -71,6 +71,27 @@ ARG TRIVY_SHA256_AMD64
 ARG TRIVY_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh trivy
 
+FROM fetch AS gosec
+ARG TARGETARCH
+ARG GOSEC_VERSION
+ARG GOSEC_SHA256_AMD64
+ARG GOSEC_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh gosec
+
+FROM fetch AS gitleaks
+ARG TARGETARCH
+ARG GITLEAKS_VERSION
+ARG GITLEAKS_SHA256_AMD64
+ARG GITLEAKS_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh gitleaks
+
+FROM fetch AS containerssh-agent
+ARG TARGETARCH
+ARG CONTAINERSSH_AGENT_VERSION
+ARG CONTAINERSSH_AGENT_SHA256_AMD64
+ARG CONTAINERSSH_AGENT_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh containerssh-agent
+
 FROM fetch AS ruff
 ARG TARGETARCH
 ARG RUFF_VERSION
@@ -194,6 +215,11 @@ COPY build/apt-packages.txt build/check-apt-snapshot.py /tmp/agentainer-build/
 #   Always-Include-Phased-Updates makes upgrades take the same (newest) versions
 #   that fresh installs already get, instead of deferring phased ones
 #   (apt_preferences(5), "Phased Updates").
+# - The Chromium libraries and fonts come from Playwright v1.64.1,
+#   packages/playwright-core/src/server/registry/nativeDeps.ts, entry 'ubuntu26.04-x64'
+#   (its "chromium" and "tools" lists; xvfb is left out). The 'ubuntu26.04-arm64'
+#   entry copies the same lists. The browsers themselves are
+#   not in the image.
 # - check-apt-snapshot.py fails the build if any installed version is not in the snapshot.
 # - Failed indexes and archives get five retries. update fails if any index is
 #   unavailable, so installation cannot continue with missing package lists
@@ -254,6 +280,9 @@ COPY --from=gh /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=uv /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
 COPY --from=ruff /usr/local/bin/ruff /usr/local/bin/ruff
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
+COPY --from=gosec /usr/local/bin/gosec /usr/local/bin/gosec
+COPY --from=gitleaks /usr/local/bin/gitleaks /usr/local/bin/gitleaks
+COPY --from=containerssh-agent /usr/local/bin/containerssh-agent /usr/local/bin/containerssh-agent
 COPY --from=abtop /usr/local/bin/abtop /usr/local/bin/abtop
 COPY --from=golangci-lint /usr/local/bin/golangci-lint /usr/local/bin/golangci-lint
 COPY --from=tea /usr/local/bin/tea /usr/local/bin/tea
@@ -288,6 +317,7 @@ RUN cd /tmp/agentainer-build/rootfs \
 	&& rm -rf /tmp/agentainer-build/rootfs \
 	&& ln -s /opt/codex/bin/codex /usr/local/bin/codex \
 	&& ln -s /opt/node/bin/node /usr/local/bin/node \
+	&& ln -s /usr/local/bin/containerssh-agent /usr/bin/containerssh-agent \
 	&& ln -s /opt/node/bin/npm /usr/local/bin/npm \
 	&& ln -s /opt/node/bin/npx /usr/local/bin/npx \
 	&& ln -s /usr/local/aws-cli/v2/current/bin/aws /usr/local/bin/aws \
@@ -312,12 +342,17 @@ LABEL org.opencontainers.image.version="${IMAGE_VERSION}" \
 	org.opencontainers.image.base.name="${BASE_IMAGE}" \
 	io.github.chadmayfield.agentainer.versions="/etc/agentainer/versions.json"
 
+# The Claude Playwright plugin runs `npx @playwright/mcp@latest` with no arguments (its
+# .mcp.json), which defaults to the chrome channel. @playwright/mcp reads
+# PLAYWRIGHT_MCP_BROWSER as the --browser option (the --browser row of its CLI options
+# table), and chromium selects the Playwright-managed build.
 ENV DISABLE_UPDATES=1 \
 	AGY_CLI_DISABLE_AUTO_UPDATE=true \
 	OPENCODE_DISABLE_AUTOUPDATE=1 \
 	NPM_CONFIG_UPDATE_NOTIFIER=false \
 	CLAUDE_CODE_NONBLOCKING_STDOUT=1 \
-	CLAUDE_CODE_TMUX_TRUECOLOR=1
+	CLAUDE_CODE_TMUX_TRUECOLOR=1 \
+	PLAYWRIGHT_MCP_BROWSER=chromium
 
 # Named volumes copy the image's /home/agent on first use, so it carries the same
 # shell defaults the entrypoint seeds into an empty PVC.

@@ -369,6 +369,28 @@ class BumpPrActionTests(unittest.TestCase):
         self.assertIn("X_VERSION: 1.0.0 -> 1.1.0", (d / "body.md").read_text())
         self.assertIn("--base develop", (d / "gh-args").read_text())
 
+    def test_agentainer_statefulset_repin_is_applied(self):
+        sts = "deploy/kubernetes/agentainer/statefulset.yaml"
+
+        def mutate(seed):
+            (seed / "versions.env").write_text("X_VERSION=1.1.0\n")
+            (seed / sts).write_text("image: b\n")
+        result, branches, d = self.run_action(mutate, extra={sts: "image: a\n"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(branches), 1)
+        self.assertEqual(self.show(d, branches[0], sts), "image: b\n")
+
+    def test_other_statefulset_is_refused(self):
+        other = "deploy/kubernetes/containerssh/statefulset.yaml"
+
+        def mutate(seed):
+            (seed / other).write_text("image: b\n")
+        result, branches, d = self.run_action(mutate, extra={other: "image: a\n"})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("refusing the patch", result.stdout + result.stderr)
+        self.assertIn(other, result.stdout + result.stderr)
+        self.assertEqual(branches, [])
+
     def test_extras_lockfile_change_adds_the_live_test_checklist(self):
         def mutate(seed):
             (seed / EXTRAS / "kandev/package.json").write_text('{"v": 2}\n')

@@ -12,6 +12,12 @@ You are running inside an Agentainer container.
 
 Edit this file to add your own instructions. It is `~/.agentainer/AGENTS.md`. Agentainer links each agent to it when that agent's own user instruction file is missing. If that file already exists, Agentainer leaves it as is, and the agent reads this file only if yours imports or links it.
 
+## Files, documents and browsers
+
+- In the Kubernetes example, `~/transfer` (`/home/agent/transfer`) is the folder a user reaches through the FileBrowser web file manager, and through SFTP when the operator turns it on. A user can upload a file there and give you its path. Outside that example `~/transfer` does not exist, and files arrive through `/workspace`.
+- `pdftotext` extracts the text of a PDF, and `pdftoppm -png` renders its pages as images. ImageMagick (`magick`) converts and resizes images. It cannot read PDF or PostScript files, because the image has no ghostscript, so use `pdftoppm` for PDF pages.
+- Chromium's OS libraries are in the image, so a browser needs no sudo. In a Playwright project, run `./node_modules/.bin/playwright install --only-shell chromium` as your user. For the Playwright MCP server, run `npx @playwright/mcp install-browser chromium`, and run it again after the server updates. Browsers download into your home. `/dev/shm` is the container engine's default size unless the deployment sets it (1 GiB in the Kubernetes example).
+
 ## Working rules
 
 - Read the repository's instructions and inspect the relevant code before changing files. Follow its conventions and approval requirements.
