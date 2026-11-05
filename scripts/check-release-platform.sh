@@ -28,6 +28,15 @@ if [ "$metadata" != "$arch|$sha|$version" ]; then
 	echo "release platform: architecture, revision or version does not match the release" >&2
 	exit 1
 fi
+# A release is built from the apt snapshot and never falls back to the archive.
+apt_source=$("$RUNTIME" run --rm --pull=never --platform "linux/$arch" --network none --entrypoint cat "$ref" /usr/local/share/agentainer/apt-source)
+case "$apt_source" in
+"snapshot "*) ;;
+*)
+	echo "release platform: /usr/local/share/agentainer/apt-source does not start with \"snapshot \": $apt_source" >&2
+	exit 1
+	;;
+esac
 # shellcheck disable=SC2016 # id runs inside the published image.
 "$RUNTIME" run --rm --pull=never --platform "linux/$arch" --name "cx-release-$arch" --network none "$ref" sh -ec '
 test "$(id -u)" -ne 0

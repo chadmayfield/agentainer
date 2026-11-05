@@ -37,7 +37,19 @@ Each tool is built in its own stage, so an update downloads only the layers that
 | `scripts/build.sh` with Podman 5.6 or later | Same as a release build |
 | `scripts/build.sh` with an older Podman server | The script leaves the options out and prints a warning. The image works the same, but every layer gets a new digest. |
 
-`/etc/agentainer/versions.json` in the image lists every pin and every installed apt package version.
+`/etc/agentainer/versions.json` in the image lists every pin and every installed apt package version, and an `apt_source` field that says where apt got them.
+
+### apt snapshot and the archive fallback
+
+`APT_SNAPSHOT` pins every apt package to one day of `snapshot.ubuntu.com`. When that service is down or fails, pull request CI and local builds fall back to `archive.ubuntu.com` as it is that day, so a build does not stop on someone else's outage. A fallback build records itself in three places:
+
+- `/usr/local/share/agentainer/apt-source` holds one line, `archive-fallback <UTC date> (snapshot <APT_SNAPSHOT> unavailable)`. A snapshot build holds `snapshot <APT_SNAPSHOT>`.
+- `/etc/agentainer/versions.json` has the same line in `apt_source`.
+- The build report in the job summary prints a `WARNING` line.
+
+A fallback image is not reproducible and cannot be released. Release builds never fall back: the release job does not pass `APT_FALLBACK`, and `scripts/check-release-platform.sh` fails if the pushed image's `apt-source` does not start with `snapshot `.
+
+`scripts/build.sh` passes `--build-arg APT_FALLBACK=archive` by default. To make a local build fail when the snapshot is unavailable, run `scripts/build.sh --strict-apt` or set `APT_FALLBACK=` (empty) in the environment. The `Containerfile` enables the fallback only for the value `archive`. [`build/apt-install.sh`](../build/apt-install.sh) does the install.
 
 `versions.env` also pins the [optional extras](extras.md), which the image carries as lockfiles but does not install ([Optional extras](#optional-extras)).
 

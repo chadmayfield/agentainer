@@ -19,6 +19,9 @@ class ReleasePlatformTests(unittest.TestCase):
 a=sys.argv[1:]
 with open(os.environ['CX_LOG'],'a') as f:f.write(json.dumps(a)+'\\n')
 if a[:2]==['image','inspect']: print(os.environ['CX_METADATA'])
+if a[0]=='run' and '--entrypoint' in a:
+    print(os.environ['CX_APT_SOURCE'])
+    sys.exit(0)
 if a[0]=='run': sys.exit(int(os.environ.get('CX_RUN_RC','0')))
 ''')
             engine.chmod(0o755)
@@ -27,7 +30,8 @@ if a[0]=='run': sys.exit(int(os.environ.get('CX_RUN_RC','0')))
             uname.chmod(0o755)
             env = dict(os.environ, PATH=str(base) + ":" + os.environ["PATH"], RUNTIME=str(engine),
                        CX_LOG=str(base / "calls"), CX_MACHINE="x86_64" if arch == "amd64" else "aarch64",
-                       CX_METADATA=arch + "|" + "a" * 40 + "|0.1.0")
+                       CX_METADATA=arch + "|" + "a" * 40 + "|0.1.0",
+                       CX_APT_SOURCE="snapshot 20261104T000000Z")
             env.update(overrides)
             ref = "registry.example.com/agentainer@sha256:" + "b" * 64
             result = subprocess.run(["sh", str(ROOT / "scripts/check-release-platform.sh"),
@@ -42,11 +46,29 @@ if a[0]=='run': sys.exit(int(os.environ.get('CX_RUN_RC','0')))
                 result, calls, ref = self.check(arch)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(calls[0], ["pull", "--platform", "linux/" + arch, ref])
-                run = next(c for c in calls if c[0] == "run")
+                run = next(c for c in calls if c[0] == "run" and "--entrypoint" not in c)
                 self.assertIn(ref, run)
                 self.assertEqual(run[run.index("--network") + 1], "none")
                 for tool in ("claude", "codex", "agy", "opencode"):
                     self.assertIn(tool + " --version", run[-1])
+
+    def test_release_image_must_record_the_snapshot(self):
+        result, calls, ref = self.check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        read = next(c for c in calls if c[0] == "run" and "--entrypoint" in c)
+        self.assertIn(ref, read)
+        self.assertIn("/usr/local/share/agentainer/apt-source", read)
+        for line in ("archive-fallback 2026-11-05 (snapshot 20261104T000000Z unavailable)", "", "snapshots"):
+            with self.subTest(line=line):
+                result, _, _ = self.check(CX_APT_SOURCE=line)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("apt-source", result.stderr)
+
+    def test_release_build_never_passes_the_apt_fallback(self):
+        workflow = (ROOT / ".github/workflows/build.yml").read_text().split("\n  publish:\n", 1)[1].split("\n  release:\n", 1)[0]
+        self.assertNotIn("APT_FALLBACK=archive", workflow)
+        names = (ROOT / "versions.env").read_text()
+        self.assertNotRegex(names, r"(?m)^APT_FALLBACK=")
 
     def test_failed_startup_fails_the_platform_gate(self):
         result, _, _ = self.check(CX_RUN_RC="42")

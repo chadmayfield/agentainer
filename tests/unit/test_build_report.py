@@ -51,6 +51,19 @@ class BuildReportTests(unittest.TestCase):
         self.assertIn("sha256:ffffffffffff", out)
         self.assertIn("3 apt packages", out)
 
+    def test_versions_warns_when_apt_came_from_the_archive_fallback(self):
+        line = "archive-fallback 2026-11-05 (snapshot 20261104T000000Z unavailable)"
+        out = br.versions(self.write(json.dumps({"pins": {}, "apt": {}, "apt_source": line})))
+        self.assertIn("WARNING", out)
+        self.assertIn(line, out)
+
+    def test_versions_has_no_apt_warning_for_the_snapshot(self):
+        for data in ({"pins": {}, "apt": {}, "apt_source": "snapshot 20261104T000000Z"},
+                     {"pins": {}, "apt": {}}):
+            out = br.versions(self.write(json.dumps(data)))
+            self.assertNotIn("WARNING", out)
+            self.assertIn("apt snapshot", out)
+
     def test_versions_lists_extras_pins_apart_from_the_build(self):
         path = self.write(json.dumps({
             "pins": {"GO_VERSION": "1.27.2", "KANDEV_VERSION": "0.98.0", "OPENCHAMBER_VERSION": "2.5.1",

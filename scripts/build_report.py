@@ -68,6 +68,10 @@ def versions(path):
     for name in KEY_APT:
         if name in apt:
             lines.append("| %s (apt) | %s |" % (name, cell(apt[name])))
+    apt_source = data.get("apt_source", "")
+    if apt_source.startswith("archive-fallback"):
+        lines += ["", "**WARNING: apt packages came from archive.ubuntu.com, not the pinned snapshot (%s). "
+                      "This image is not reproducible and cannot be released.**" % apt_source]
     lines += ["", "Base image: `%s`. apt snapshot: `%s`. %d apt packages; the full list is in "
               "`/etc/agentainer/versions.json` in the image." % (
                   short(pins.get("BASE_IMAGE", "?")), pins.get("APT_SNAPSHOT", "?"), len(apt))]

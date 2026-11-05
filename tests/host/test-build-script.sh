@@ -51,4 +51,15 @@ out=$(PATH="$T:$PATH" RUNTIME=docker "$B" 2>"$T/err")
 has_line "Docker builds keep Docker media types for Podman health checks" "--output=type=image,oci-mediatypes=false" "$out"
 has_line "local Docker builds disable incompatible inline attestations" "--provenance=false" "$out"
 assert_absent "Docker builds get no Podman options" "$out" "build" "--format" "--source-date-epoch" "--rewrite-timestamp"
+
+# Local builds fall back to archive.ubuntu.com when the snapshot is down. APT_FALLBACK= (empty)
+# in the environment asks for a strict build, and --strict-apt does the same.
+out=$(build 5.6.0)
+has_line "default build allows the archive fallback" "APT_FALLBACK=archive" "$out"
+out=$(APT_FALLBACK='' build 5.6.0)
+assert_absent "APT_FALLBACK= in the environment builds strict" "$out" "--format" "APT_FALLBACK="
+out=$(APT_FALLBACK=other build 5.6.0)
+has_line "another APT_FALLBACK value is passed through for the Containerfile to refuse" "APT_FALLBACK=other" "$out"
+out=$(STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --strict-apt 2>"$T/err")
+assert_absent "--strict-apt builds strict" "$out" "--format" "APT_FALLBACK="
 finish

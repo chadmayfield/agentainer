@@ -430,6 +430,8 @@ jobs:
         name: Build arguments, as scripts/build.sh passes them
         # Each pin a Containerfile stage declares with ARG becomes a build argument, plus
         # SOURCE_DATE_EPOCH, which BuildKit reads to fix file times (rewrite-timestamp).
+        # APT_FALLBACK is not in versions.env, so it stays empty here: release builds never
+        # fall back to archive.ubuntu.com (scripts/check-release-platform.sh checks the result).
         run: |
           {
             echo "args<<PINS_EOF"

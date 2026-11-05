@@ -2,6 +2,11 @@
 # Builds the Agentainer image with the pins in versions.env.
 # Usage: scripts/build.sh [--platform linux/amd64] [--tag name] [--uid N] [--gid N]
 #        scripts/build.sh --variant kelos [--from agentainer-image] [--platform ...] [--tag name]
+#        scripts/build.sh --strict-apt ...
+# By default the build falls back to archive.ubuntu.com when snapshot.ubuntu.com fails and
+# records that in /usr/local/share/agentainer/apt-source (APT_FALLBACK=archive; see the apt
+# stage in Containerfile). --strict-apt, or APT_FALLBACK= (empty) in the environment, makes
+# the build fail instead. Release builds never fall back.
 # The build is always local. Pushing an image is a separate step.
 # --variant kelos builds Containerfile.kelos on top of --from (default: the
 # digest-pinned image in Containerfile.kelos). Its default tag is localhost/agentainer-kelos:dev.
@@ -14,6 +19,8 @@ uid=1000
 gid=1000
 variant=""
 from=""
+# Unset means fall back; set but empty means strict.
+fallback=${APT_FALLBACK-archive}
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 	--platform)
@@ -39,6 +46,10 @@ while [ "$#" -gt 0 ]; do
 	--from)
 		from=$2
 		shift 2
+		;;
+	--strict-apt)
+		fallback=""
+		shift
 		;;
 	*)
 		echo "build.sh: unknown option $1" >&2
@@ -122,6 +133,7 @@ elif [ "$RUNTIME" = docker ]; then
 	set -- "$@" --output=type=image,oci-mediatypes=false --provenance=false
 fi
 if [ "$variant" != kelos ]; then
+	[ -z "$fallback" ] || set -- "$@" --build-arg "APT_FALLBACK=$fallback"
 	set -- "$@" --build-arg AGENT_UID="$uid" --build-arg AGENT_GID="$gid" \
 		--build-arg IMAGE_VERSION="${IMAGE_VERSION:-dev}" \
 		--build-arg VCS_REF="$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
