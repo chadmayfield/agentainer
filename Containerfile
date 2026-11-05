@@ -204,7 +204,7 @@ RUN [ -n "${BASH_VERSION:-}" ] && [[ $- == *e* ]] && set -o | grep -Eq '^pipefai
 	&& mkdir -p /usr/local/share/agentainer \
 	&& echo "bash ${BASH_VERSION} errexit pipefail" > /usr/local/share/agentainer/build-shell.txt
 
-COPY build/apt-packages.txt build/check-apt-snapshot.py /tmp/agentainer-build/
+COPY build/apt-packages.txt build/check-apt-snapshot.py build/apt-install.sh /tmp/agentainer-build/
 
 # apt packages from the pinned Ubuntu snapshot.
 # - Both architectures use archive.ubuntu.com: the arm64 image defaults to
@@ -225,22 +225,19 @@ COPY build/apt-packages.txt build/check-apt-snapshot.py /tmp/agentainer-build/
 #   unavailable, so installation cannot continue with missing package lists
 #   (apt-get(8), --error-on=any; apt.conf(5), Acquire::Retries).
 # - The apt and dpkg logs hold build times and are removed.
+# - build/apt-install.sh does the install. If a snapshot step fails and APT_FALLBACK=archive,
+#   it installs from archive.ubuntu.com instead and says so in a warning. Either way it writes
+#   /usr/local/share/agentainer/apt-source ("snapshot <ID>" or "archive-fallback <date> ...").
+#   On the fallback path a version outside the snapshot does not fail the build.
 ARG APT_SNAPSHOT
+# "archive" lets the build fall back to archive.ubuntu.com when the snapshot fails.
+# scripts/build.sh sets it for every build it runs. Empty or any other value is strict, which
+# the release build uses: it never falls back.
+ARG APT_FALLBACK=
 # The bootstrap bundle is available only during this RUN, outside final image layers.
 # https://docs.docker.com/reference/dockerfile/#run---mounttypebind
 RUN --mount=type=bind,from=certs,source=/etc/ssl/certs/ca-certificates.crt,target=/tmp/agentainer-build/ca.crt \
-    test -n "${APT_SNAPSHOT}" \
-	&& export DEBIAN_FRONTEND=noninteractive \
-	&& printf 'Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute resolute-updates resolute-backports\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\nSnapshot: %s\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\nSnapshot: %s\n' "${APT_SNAPSHOT}" "${APT_SNAPSHOT}" > /etc/apt/sources.list.d/ubuntu.sources \
-	&& APT="apt-get -o Acquire::Retries=5 -o Acquire::https::CAInfo=/tmp/agentainer-build/ca.crt -o APT::Get::Always-Include-Phased-Updates=true" \
-	&& $APT update --error-on=any \
-	&& $APT upgrade -y \
-	&& xargs -a /tmp/agentainer-build/apt-packages.txt $APT install -y --no-install-recommends \
-	&& apt-cache policy bash > /usr/local/share/agentainer/apt-policy.txt \
-	&& python3 /tmp/agentainer-build/check-apt-snapshot.py /usr/local/share/agentainer/apt-unpinned.txt \
-	&& sed -i '/^Snapshot: /d' /etc/apt/sources.list.d/ubuntu.sources \
-	&& rm -rf /var/lib/apt/lists/* \
-	&& rm -f /var/log/dpkg.log /var/log/alternatives.log /var/log/apt/history.log /var/log/apt/term.log
+	APT_SNAPSHOT="${APT_SNAPSHOT}" APT_FALLBACK="${APT_FALLBACK}" sh /tmp/agentainer-build/apt-install.sh
 
 # Debian names these binaries fdfind and batcat (their package file lists).
 # ping ships with the cap_net_raw file capability, which fails under runtimes that

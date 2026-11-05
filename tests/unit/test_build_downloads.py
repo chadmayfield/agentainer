@@ -102,11 +102,13 @@ class CurlTransferTests(unittest.TestCase):
 @unittest.skipUnless(shutil.which("apt-get"), "APT required")
 class AptIndexTests(unittest.TestCase):
     def test_snapshot_index_failure_returns_failure(self):
-        text = (ROOT / "Containerfile").read_text()
-        apt = shlex.split(re.search(r'&& APT="([^"]+)"', text)[1])
-        update = shlex.split(re.search(r'&& \$APT (update[^\n]*)', text)[1].rstrip(" \\\t"))
+        text = (ROOT / "build" / "apt-install.sh").read_text()
+        options = re.search(r'^APT_OPTS="([^"]+)"', text, re.M)[1]
+        update = shlex.split(re.search(r'apt-get \$APT_OPTS (update[^&\n]*)', text)[1].strip())
         with tempfile.TemporaryDirectory() as directory, socket.socket() as unavailable:
             root = Path(directory)
+            # $B is the build directory in the image; the http fixture does not use the CA file.
+            apt = ["apt-get"] + shlex.split(options.replace("$B", directory))
             for name in ("parts", "lists", "lists/partial", "cache", "log"):
                 (root / name).mkdir(exist_ok=True)
             (root / "status").write_text("")
