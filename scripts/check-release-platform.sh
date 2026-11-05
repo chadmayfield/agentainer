@@ -28,15 +28,18 @@ if [ "$metadata" != "$arch|$sha|$version" ]; then
 	echo "release platform: architecture, revision or version does not match the release" >&2
 	exit 1
 fi
-# A release is built from the apt snapshot and never falls back to the archive.
-apt_source=$("$RUNTIME" run --rm --pull=never --platform "linux/$arch" --network none --entrypoint cat "$ref" /usr/local/share/agentainer/apt-source)
-case "$apt_source" in
-"snapshot "*) ;;
-*)
-	echo "release platform: /usr/local/share/agentainer/apt-source does not start with \"snapshot \": $apt_source" >&2
+# A release is built from the pinned apt snapshot and never falls back to the archive, so the
+# image's apt-source must be exactly "snapshot <APT_SNAPSHOT>" with the pin in versions.env.
+snapshot=$(sed -n 's/^APT_SNAPSHOT=//p' "$(dirname "$0")/../versions.env")
+if [ -z "$snapshot" ]; then
+	echo "release platform: APT_SNAPSHOT is not set in versions.env" >&2
 	exit 1
-	;;
-esac
+fi
+apt_source=$("$RUNTIME" run --rm --pull=never --platform "linux/$arch" --network none --entrypoint cat "$ref" /usr/local/share/agentainer/apt-source)
+if [ "$apt_source" != "snapshot $snapshot" ]; then
+	echo "release platform: /usr/local/share/agentainer/apt-source is [$apt_source], expected [snapshot $snapshot]" >&2
+	exit 1
+fi
 # shellcheck disable=SC2016 # id runs inside the published image.
 "$RUNTIME" run --rm --pull=never --platform "linux/$arch" --name "cx-release-$arch" --network none "$ref" sh -ec '
 test "$(id -u)" -ne 0

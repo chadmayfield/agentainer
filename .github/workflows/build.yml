@@ -115,6 +115,8 @@ jobs:
         run: sh tests/host/test-launcher.sh
       - name: Build script tests
         run: sh tests/host/test-build-script.sh
+      - name: apt install script tests
+        run: sh tests/host/test-apt-install.sh
       - name: Fetch tests
         run: sh tests/host/test-fetch.sh
       - name: Extras catalog tests
@@ -158,9 +160,8 @@ jobs:
           - {arch: amd64, runner: ubuntu-26.04}
           - {arch: arm64, runner: ubuntu-26.04-arm}
     runs-on: ${{ matrix.runner }}
-    # Recent successful runs of this workflow took 25 to 57 minutes (gh run list, 2026-11-05),
-    # and this job is the longest part. snapshot.ubuntu.com can be slow: on 2026-11-04 apt
-    # fetched 310 MB at 217 kB/s and a 60-minute limit cut the job off.
+    # Recent successful runs of this workflow took 25 to 57 minutes (gh run list), and this
+    # job is the longest part. snapshot.ubuntu.com can be slow, for example 310 MB at 217 kB/s.
     timeout-minutes: 120
     env:
       IMAGE: localhost/agentainer:dev
@@ -168,8 +169,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+          # For a pull request, HEAD is GitHub's test merge commit; depth 2 brings its parents.
+          fetch-depth: 2
       - name: Build
         run: RUNTIME=docker sh scripts/build.sh --tag "$IMAGE"
+      - name: Report an apt snapshot fallback
+        # A fallback keeps this job green, but a release never falls back. The step fails when
+        # the build fell back and the change modifies APT_SNAPSHOT or build/apt-packages.txt.
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: RUNTIME=docker sh scripts/check-apt-fallback.sh "$IMAGE"
       - name: Build report (versions, changed pins, size)
         shell: bash  # -o pipefail: a failing command before | tee must fail the step
         env:
@@ -415,9 +426,9 @@ jobs:
           - {arch: amd64, runner: ubuntu-26.04}
           - {arch: arm64, runner: ubuntu-26.04-arm}
     runs-on: ${{ matrix.runner }}
-    # The build takes 6 to 10 minutes; this job adds a push of about 1 GB and a pull and
-    # scan of the pushed image. The limit is 120 minutes because snapshot.ubuntu.com can be
-    # very slow, as on 2026-11-04. The limit does not change what gets installed.
+    # The job builds, pushes about 1 GB, then pulls and scans the pushed image. The limit is
+    # 120 minutes because snapshot.ubuntu.com can be very slow. It does not change what gets
+    # installed.
     timeout-minutes: 120
     permissions:
       contents: read

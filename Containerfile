@@ -230,9 +230,9 @@ COPY build/apt-packages.txt build/check-apt-snapshot.py build/apt-install.sh /tm
 #   /usr/local/share/agentainer/apt-source ("snapshot <ID>" or "archive-fallback <date> ...").
 #   On the fallback path a version outside the snapshot does not fail the build.
 ARG APT_SNAPSHOT
-# "archive" lets the build fall back to archive.ubuntu.com when the snapshot fails (pull
-# request CI and local builds, through scripts/build.sh). Empty or any other value is strict,
-# which release builds use: they never fall back.
+# "archive" lets the build fall back to archive.ubuntu.com when the snapshot fails.
+# scripts/build.sh sets it for every build it runs. Empty or any other value is strict, which
+# the release build uses: it never falls back.
 ARG APT_FALLBACK=
 # The bootstrap bundle is available only during this RUN, outside final image layers.
 # https://docs.docker.com/reference/dockerfile/#run---mounttypebind

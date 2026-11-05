@@ -41,15 +41,22 @@ Each tool is built in its own stage, so an update downloads only the layers that
 
 ### apt snapshot and the archive fallback
 
-`APT_SNAPSHOT` pins every apt package to one day of `snapshot.ubuntu.com`. When that service is down or fails, pull request CI and local builds fall back to `archive.ubuntu.com` as it is that day, so a build does not stop on someone else's outage. A fallback build records itself in three places:
+`APT_SNAPSHOT` pins every apt package to one day of `snapshot.ubuntu.com`. When that service fails, a build made through `scripts/build.sh` falls back to `archive.ubuntu.com` as it is that day, so a build does not stop on someone else's outage. Every build in `build.yml` except the release `publish` job goes through that script: pull request builds, pushes to `develop` and `main`, and local builds. The `publish` job builds with `docker/build-push-action` from the `versions.env` pins and never falls back.
+
+A fallback build records itself in three places:
 
 - `/usr/local/share/agentainer/apt-source` holds one line, `archive-fallback <UTC date> (snapshot <APT_SNAPSHOT> unavailable)`. A snapshot build holds `snapshot <APT_SNAPSHOT>`.
 - `/etc/agentainer/versions.json` has the same line in `apt_source`.
-- The build report in the job summary prints a `WARNING` line.
+- The build report in the job summary prints a `WARNING` line, and the image job adds a warning annotation to the run.
 
-A fallback image is not reproducible and cannot be released. Release builds never fall back: the release job does not pass `APT_FALLBACK`, and `scripts/check-release-platform.sh` fails if the pushed image's `apt-source` does not start with `snapshot `.
+A fallback image is not reproducible and cannot be released. Two checks keep a fallback from reaching a release:
 
-`scripts/build.sh` passes `--build-arg APT_FALLBACK=archive` by default. To make a local build fail when the snapshot is unavailable, run `scripts/build.sh --strict-apt` or set `APT_FALLBACK=` (empty) in the environment. The `Containerfile` enables the fallback only for the value `archive`. [`build/apt-install.sh`](../build/apt-install.sh) does the install.
+- `scripts/check-release-platform.sh` fails the `publish` job unless the pushed image's `apt-source` is exactly `snapshot <APT_SNAPSHOT>` with the pin from `versions.env`.
+- `scripts/check-apt-fallback.sh` fails the image job when the build fell back and the change modifies `APT_SNAPSHOT` in `versions.env` or `build/apt-packages.txt`, because a release would install those inputs from the snapshot and the fallback build did not test them. A fallback with other changes only warns. Without a base commit to compare with (a manual run, for example), it only warns.
+
+For a local build, the fallback is the default. To make a build fail when the snapshot is unavailable, run `scripts/build.sh --strict-apt` or set `APT_FALLBACK=` (empty) in the environment. The `Containerfile` enables the fallback only for the value `archive`. [`build/apt-install.sh`](../build/apt-install.sh) does the install.
+
+The engine caches the apt layer. After a fallback build, a later default local build can reuse that layer even when the snapshot works again, and the image keeps recording the fallback. `build.sh` prints a warning in that case. To try the snapshot again, run `scripts/build.sh --no-cache`, which passes `--no-cache` to the engine's `build` (`podman build --help` and `docker build --help` list it), or run `--strict-apt`, whose build argument differs and so misses the cached layer.
 
 `versions.env` also pins the [optional extras](extras.md), which the image carries as lockfiles but does not install ([Optional extras](#optional-extras)).
 

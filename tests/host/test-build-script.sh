@@ -14,6 +14,10 @@ if [ "$1" = info ]; then
 	printf '%s\n' "$STUB_SERVER"
 	exit 0
 fi
+if [ "$1" = run ]; then
+	printf '%s\n' "${STUB_APT_SOURCE:-snapshot 20261104T000000Z}"
+	exit 0
+fi
 printf '%s\n' "$@"
 EOF
 chmod +x "$T/podman"
@@ -62,4 +66,10 @@ out=$(APT_FALLBACK=other build 5.6.0)
 has_line "another APT_FALLBACK value is passed through for the Containerfile to refuse" "APT_FALLBACK=other" "$out"
 out=$(STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --strict-apt 2>"$T/err")
 assert_absent "--strict-apt builds strict" "$out" "--format" "APT_FALLBACK="
+out=$(STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --no-cache 2>"$T/err")
+has_line "--no-cache is passed to the build" "--no-cache" "$out"
+assert_absent "a snapshot build prints no fallback warning" "$(cat "$T/err")" "build -f Containerfile" "archive-fallback"
+out=$(STUB_APT_SOURCE='archive-fallback 2026-11-05 (snapshot 20261104T000000Z unavailable)' build 5.6.0)
+assert_contains "a fallback build warns and names the --no-cache rebuild" "--no-cache" "$(cat "$T/err")"
+assert_contains "the fallback warning quotes the record" "archive-fallback 2026-11-05" "$(cat "$T/err")"
 finish

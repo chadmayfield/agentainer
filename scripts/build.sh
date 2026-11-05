@@ -3,10 +3,13 @@
 # Usage: scripts/build.sh [--platform linux/amd64] [--tag name] [--uid N] [--gid N]
 #        scripts/build.sh --variant kelos [--from agentainer-image] [--platform ...] [--tag name]
 #        scripts/build.sh --strict-apt ...
+#        scripts/build.sh --no-cache ...
 # By default the build falls back to archive.ubuntu.com when snapshot.ubuntu.com fails and
 # records that in /usr/local/share/agentainer/apt-source (APT_FALLBACK=archive; see the apt
 # stage in Containerfile). --strict-apt, or APT_FALLBACK= (empty) in the environment, makes
-# the build fail instead. Release builds never fall back.
+# the build fail instead. Release builds never fall back. The engine caches the apt layer, so
+# after a fallback build, rebuild with --no-cache (passed to the engine's build) once the
+# snapshot works again.
 # The build is always local. Pushing an image is a separate step.
 # --variant kelos builds Containerfile.kelos on top of --from (default: the
 # digest-pinned image in Containerfile.kelos). Its default tag is localhost/agentainer-kelos:dev.
@@ -21,6 +24,7 @@ variant=""
 from=""
 # Unset means fall back; set but empty means strict.
 fallback=${APT_FALLBACK-archive}
+nocache=""
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 	--platform)
@@ -49,6 +53,10 @@ while [ "$#" -gt 0 ]; do
 		;;
 	--strict-apt)
 		fallback=""
+		shift
+		;;
+	--no-cache)
+		nocache=1
 		shift
 		;;
 	*)
@@ -139,5 +147,15 @@ if [ "$variant" != kelos ]; then
 		--build-arg VCS_REF="$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
 		--build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
+[ -z "$nocache" ] || set -- "$@" --no-cache
 set -x
 "$RUNTIME" build -f "$containerfile" ${platform:+--platform "$platform"} "$@" -t "$tag" .
+if [ "$variant" != kelos ]; then
+	# The engine can reuse a cached apt layer from an earlier fallback build. Say so.
+	apt_source=$("$RUNTIME" run --rm --entrypoint cat "$tag" /usr/local/share/agentainer/apt-source 2>/dev/null) || apt_source=""
+	case "$apt_source" in
+	archive-fallback*)
+		echo "build.sh: WARNING: this image installed apt packages from the archive, not the snapshot ($apt_source). Rebuild with --no-cache once snapshot.ubuntu.com works to try the snapshot again." >&2
+		;;
+	esac
+fi

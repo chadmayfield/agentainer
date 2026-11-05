@@ -8,6 +8,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+SNAPSHOT = next(line.split("=", 1)[1] for line in (ROOT / "versions.env").read_text().splitlines()
+                if line.startswith("APT_SNAPSHOT="))
 
 
 class ReleasePlatformTests(unittest.TestCase):
@@ -20,8 +22,8 @@ a=sys.argv[1:]
 with open(os.environ['CX_LOG'],'a') as f:f.write(json.dumps(a)+'\\n')
 if a[:2]==['image','inspect']: print(os.environ['CX_METADATA'])
 if a[0]=='run' and '--entrypoint' in a:
-    print(os.environ['CX_APT_SOURCE'])
-    sys.exit(0)
+    print(os.environ['CX_APT_SOURCE'], end=os.environ.get('CX_APT_END', '\\n'))
+    sys.exit(int(os.environ.get('CX_APT_RC', '0')))
 if a[0]=='run': sys.exit(int(os.environ.get('CX_RUN_RC','0')))
 ''')
             engine.chmod(0o755)
@@ -31,7 +33,7 @@ if a[0]=='run': sys.exit(int(os.environ.get('CX_RUN_RC','0')))
             env = dict(os.environ, PATH=str(base) + ":" + os.environ["PATH"], RUNTIME=str(engine),
                        CX_LOG=str(base / "calls"), CX_MACHINE="x86_64" if arch == "amd64" else "aarch64",
                        CX_METADATA=arch + "|" + "a" * 40 + "|0.1.0",
-                       CX_APT_SOURCE="snapshot 20261104T000000Z")
+                       CX_APT_SOURCE="snapshot " + SNAPSHOT)
             env.update(overrides)
             ref = "registry.example.com/agentainer@sha256:" + "b" * 64
             result = subprocess.run(["sh", str(ROOT / "scripts/check-release-platform.sh"),
@@ -52,21 +54,37 @@ if a[0]=='run': sys.exit(int(os.environ.get('CX_RUN_RC','0')))
                 for tool in ("claude", "codex", "agy", "opencode"):
                     self.assertIn(tool + " --version", run[-1])
 
-    def test_release_image_must_record_the_snapshot(self):
+    def test_release_image_must_record_exactly_the_pinned_snapshot(self):
         result, calls, ref = self.check()
         self.assertEqual(result.returncode, 0, result.stderr)
         read = next(c for c in calls if c[0] == "run" and "--entrypoint" in c)
         self.assertIn(ref, read)
         self.assertIn("/usr/local/share/agentainer/apt-source", read)
-        for line in ("archive-fallback 2026-11-05 (snapshot 20261104T000000Z unavailable)", "", "snapshots"):
-            with self.subTest(line=line):
-                result, _, _ = self.check(CX_APT_SOURCE=line)
+        for name, overrides in (
+                ("empty ID", {"CX_APT_SOURCE": "snapshot "}),
+                ("no ID or space", {"CX_APT_SOURCE": "snapshot"}),
+                ("wrong ID", {"CX_APT_SOURCE": "snapshot 20200101T000000Z"}),
+                ("garbage", {"CX_APT_SOURCE": "snapshot garbage"}),
+                ("extra text", {"CX_APT_SOURCE": "snapshot " + SNAPSHOT + " extra"}),
+                ("fallback line", {"CX_APT_SOURCE": "archive-fallback 2026-11-05 (snapshot " + SNAPSHOT + " unavailable)"}),
+                ("empty file", {"CX_APT_SOURCE": ""}),
+                ("missing file", {"CX_APT_SOURCE": "", "CX_APT_RC": "1"}),
+                ("failed read with the right text", {"CX_APT_SOURCE": "snapshot " + SNAPSHOT, "CX_APT_RC": "1"})):
+            with self.subTest(name):
+                result, calls, _ = self.check(**overrides)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("apt-source", result.stderr)
+                self.assertFalse(any(c[0] == "run" and "--entrypoint" not in c for c in calls),
+                                 "the startup check must not run after a bad apt-source")
 
     def test_release_build_never_passes_the_apt_fallback(self):
         workflow = (ROOT / ".github/workflows/build.yml").read_text().split("\n  publish:\n", 1)[1].split("\n  release:\n", 1)[0]
-        self.assertNotIn("APT_FALLBACK=archive", workflow)
+        # The publish job must not mention APT_FALLBACK outside comments: not as a build
+        # argument, an env entry or a template. (The scripts/build.sh path is not used there.)
+        code = "\n".join(line for line in workflow.splitlines() if not line.lstrip().startswith("#"))
+        self.assertNotIn("APT_FALLBACK", code)
+        # It builds with build-push-action from the versions.env pins, not through scripts/build.sh.
+        self.assertNotRegex(code, r"(?m)^\s*(run:|-)\s.*scripts/build\.sh")
+        self.assertIn("docker/build-push-action", code)
         names = (ROOT / "versions.env").read_text()
         self.assertNotRegex(names, r"(?m)^APT_FALLBACK=")
 
