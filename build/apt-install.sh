@@ -58,13 +58,17 @@ elif [ "${APT_FALLBACK:-}" = archive ]; then
 	echo "apt-install.sh: WARNING: the apt snapshot $APT_SNAPSHOT failed; installing from archive.ubuntu.com as it is today. This image is not pinned to the snapshot." >&2
 	source_line="archive-fallback $(date -u +%Y-%m-%d) (snapshot $APT_SNAPSHOT unavailable)"
 	# A failure during dpkg can leave packages unpacked but not configured, and apt refuses to
-	# continue until they are (dpkg(1) --configure -a; apt-get(8) --fix-broken). If a step here
-	# fails, the install below fails the build.
+	# continue until they are (dpkg(1) --configure -a; apt-get(8) --fix-broken). The dpkg step
+	# needs no network. If it fails, the --fix-broken step below reports the problem or repairs
+	# it, so its failure is not fatal here. --fix-broken fetches packages, so it runs only after
+	# the archive sources are active and their lists are loaded, and its failure fails the build.
 	dpkg --configure -a || true
-	# shellcheck disable=SC2086
-	apt-get $APT_OPTS --fix-broken install -y || true
 	write_sources
 	rm -rf "$P"/var/lib/apt/lists/*
+	# shellcheck disable=SC2086
+	apt-get $APT_OPTS update --error-on=any
+	# shellcheck disable=SC2086
+	apt-get $APT_OPTS --fix-broken install -y
 	install_all
 	apt-cache policy bash >"$OUT/apt-policy.txt"
 	# The report is kept, but versions from the archive are expected here.

@@ -102,6 +102,19 @@ class AptFallbackCheckTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("::warning", result.stdout)
 
+    def test_failed_git_diff_fails_the_check(self):
+        real = subprocess.run(["which", "git"], capture_output=True, text=True, check=True).stdout.strip()
+        shim = Path(self.dir.name) / "shim"
+        shim.mkdir()
+        (shim / "git").write_text('#!/bin/sh\n[ "$1" = diff ] && { echo "fatal: bad diff" >&2; exit 128; }\nexec %s "$@"\n' % real)
+        (shim / "git").chmod(0o755)
+        self.write("README.md", "d\n")
+        self.commit("docs")
+        result = self.run_check(FALLBACK, EVENT="push", REF="refs/heads/develop", BEFORE=self.base,
+                                PATH=str(shim) + ":" + os.environ["PATH"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("not checked", result.stdout)
+
     def test_unreadable_apt_source_fails(self):
         result = self.run_check("", rc=1, EVENT="workflow_dispatch")
         self.assertNotEqual(result.returncode, 0)

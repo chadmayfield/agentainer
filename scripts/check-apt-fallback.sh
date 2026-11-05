@@ -38,8 +38,11 @@ if [ -z "$base" ]; then
 	echo "No base commit to compare with, so the change was not checked for snapshot edits."
 	exit 0
 fi
-snapshot_lines=$(git diff -U0 --no-renames "$base" HEAD -- versions.env | grep -c '^[-+]APT_SNAPSHOT=' || true)
-package_files=$(git diff --name-only --no-renames "$base" HEAD -- build/apt-packages.txt | grep -c . || true)
+# A failed git command stops the script (set -e); only a missing base is warn-only.
+snapshot_diff=$(git diff -U0 --no-renames "$base" HEAD -- versions.env)
+package_files=$(git diff --name-only --no-renames "$base" HEAD -- build/apt-packages.txt)
+snapshot_lines=$(printf '%s\n' "$snapshot_diff" | grep -c '^[-+]APT_SNAPSHOT=' || true)
+package_files=$(printf '%s\n' "$package_files" | grep -c . || true)
 if [ "$snapshot_lines" -gt 0 ] || [ "$package_files" -gt 0 ]; then
 	echo "::error title=apt snapshot fallback::This change modifies APT_SNAPSHOT or build/apt-packages.txt, and the build fell back to the archive, so the new snapshot inputs were not tested. Re-run the build when snapshot.ubuntu.com works."
 	exit 1

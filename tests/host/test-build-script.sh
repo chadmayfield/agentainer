@@ -14,6 +14,10 @@ if [ "$1" = info ]; then
 	printf '%s\n' "$STUB_SERVER"
 	exit 0
 fi
+if [ "$1" = run ] && [ -n "${STUB_RUN_FAIL:-}" ]; then
+	echo "exec format error" >&2
+	exit 126
+fi
 if [ "$1" = run ]; then
 	printf '%s\n' "${STUB_APT_SOURCE:-snapshot 20261104T000000Z}"
 	exit 0
@@ -72,4 +76,8 @@ assert_absent "a snapshot build prints no fallback warning" "$(cat "$T/err")" "b
 out=$(STUB_APT_SOURCE='archive-fallback 2026-11-05 (snapshot 20261104T000000Z unavailable)' build 5.6.0)
 assert_contains "a fallback build warns and names the --no-cache rebuild" "--no-cache" "$(cat "$T/err")"
 assert_contains "the fallback warning quotes the record" "archive-fallback 2026-11-05" "$(cat "$T/err")"
+out=$(STUB_RUN_FAIL=1 build 5.6.0)
+assert_contains "an image that cannot run says the apt source was not checked" "apt source not checked: the linux/" "$(cat "$T/err")"
+out=$(STUB_RUN_FAIL=1 STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --platform linux/amd64 2>"$T/err")
+assert_contains "the note names the platform" "linux/amd64 image could not be run" "$(cat "$T/err")"
 finish

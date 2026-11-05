@@ -152,10 +152,14 @@ set -x
 "$RUNTIME" build -f "$containerfile" ${platform:+--platform "$platform"} "$@" -t "$tag" .
 if [ "$variant" != kelos ]; then
 	# The engine can reuse a cached apt layer from an earlier fallback build. Say so.
-	apt_source=$("$RUNTIME" run --rm --entrypoint cat "$tag" /usr/local/share/agentainer/apt-source 2>/dev/null) || apt_source=""
-	case "$apt_source" in
-	archive-fallback*)
-		echo "build.sh: WARNING: this image installed apt packages from the archive, not the snapshot ($apt_source). Rebuild with --no-cache once snapshot.ubuntu.com works to try the snapshot again." >&2
-		;;
-	esac
+	if apt_source=$("$RUNTIME" run --rm --entrypoint cat "$tag" /usr/local/share/agentainer/apt-source 2>/dev/null); then
+		case "$apt_source" in
+		archive-fallback*)
+			echo "build.sh: WARNING: this image installed apt packages from the archive, not the snapshot ($apt_source). Rebuild with --no-cache once snapshot.ubuntu.com works to try the snapshot again." >&2
+			;;
+		esac
+	else
+		# A foreign --platform image may not run on this host.
+		echo "build.sh: apt source not checked: the $platform image could not be run on this host" >&2
+	fi
 fi

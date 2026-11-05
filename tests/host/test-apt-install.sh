@@ -12,7 +12,14 @@ trap 'exit 130' INT TERM
 mkdir "$T/bin"
 cat >"$T/bin/apt-get" <<'STUB'
 #!/bin/sh
-echo "apt-get $*" >>"$STUB_LOG"
+if grep -q '^Snapshot:' "$APT_INSTALL_ROOT/etc/apt/sources.list.d/ubuntu.sources"; then src=snapshot; else src=archive; fi
+echo "apt-get $* [sources=$src]" >>"$STUB_LOG"
+case " $* " in
+*" --fix-broken "*)
+	[ "${STUB_FIXBROKEN_RC:-0}" = 0 ] || echo "E: fix-broken failed" >&2
+	exit "${STUB_FIXBROKEN_RC:-0}"
+	;;
+esac
 case " $* " in
 *" update "*)
 	if [ "${STUB_SNAPSHOT_DOWN:-0}" = 1 ] && grep -q '^Snapshot:' "$APT_INSTALL_ROOT/etc/apt/sources.list.d/ubuntu.sources"; then
@@ -84,8 +91,20 @@ configure=$(log_line "dpkg --configure -a")
 fix=$(log_line "apt-get .*--fix-broken")
 assert_eq "dpkg --configure -a runs before the archive update" yes \
 	"$([ -n "$configure" ] && [ "$configure" -gt "$first_fail" ] && [ "$configure" -lt "$second_update" ] && echo yes)"
-assert_eq "apt-get --fix-broken install runs before the archive update" yes \
-	"$([ -n "$fix" ] && [ "$fix" -gt "$first_fail" ] && [ "$fix" -lt "$second_update" ] && echo yes)"
+assert_eq "apt-get --fix-broken install runs after the archive update" yes \
+	"$([ -n "$fix" ] && [ "$fix" -gt "$second_update" ] && echo yes)"
+assert_contains "the archive update runs with the archive sources" "update --error-on=any [sources=archive]" \
+	"$(sed -n "${second_update}p" "$LOG")"
+assert_contains "apt-get --fix-broken install runs with the archive sources" "[sources=archive]" "$(sed -n "${fix}p" "$LOG")"
+first_install=$(log_line "apt-get .* install -y --no-install-recommends")
+assert_eq "the package install runs after --fix-broken" yes \
+	"$([ -n "$first_install" ] && [ "$first_install" -gt "$fix" ] && echo yes)"
+run_script APT_FALLBACK=archive STUB_SNAPSHOT_DOWN=1 STUB_FIXBROKEN_RC=100
+assert_eq "a --fix-broken failure fails the fallback" yes "$([ "$rc" -ne 0 ] && echo yes)"
+assert_absent "a --fix-broken failure writes no apt-source" "$(
+	ls "$ROOT/usr/local/share/agentainer"
+	echo LS_READ
+)" "LS_READ" "apt-source"
 
 run_script STUB_SNAPSHOT_DOWN=1
 assert_eq "strict exits 1" 1 "$rc"
