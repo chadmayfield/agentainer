@@ -11,15 +11,19 @@ amd64)
 	A=AMD64
 	TRIPLE=x86_64
 	TRIVY_ARCH=64bit
+	GITLEAKS_ARCH=x64
 	OC=linux-x64-baseline
 	CLAUDE_PLATFORM=linux-x64
+	NODE_ARCH=x64
 	;;
 arm64)
 	A=ARM64
 	TRIPLE=aarch64
 	TRIVY_ARCH=ARM64
+	GITLEAKS_ARCH=arm64
 	OC=linux-arm64
 	CLAUDE_PLATFORM=linux-arm64
+	NODE_ARCH=arm64
 	;;
 *)
 	echo "unsupported arch $TARGETARCH" >&2
@@ -98,6 +102,42 @@ normalize_rust_components() {
 	rm -f "$tmp"
 }
 
+# extract_zip ZIP DIR: extracts ZIP into DIR with each entry's Unix permission bits, minus
+# group and other write and the setuid, setgid and sticky bits. The fetch stage has python3
+# but no unzip, and Python's zipfile does not restore permissions itself
+# (https://docs.python.org/3/library/zipfile.html#zipfile.ZipFile.extract). Every entry is
+# checked before anything is written: an entry that is not a regular file or directory,
+# such as a symlink, or whose name is absolute or has a ".." segment stops the extraction.
+# Directory modes are set last, deepest first, so a read-only directory entry cannot block
+# the files extracted into it.
+extract_zip() {
+	python3 - "$1" "$2" <<'EOF'
+import os
+import stat
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as z:
+    entries = z.infolist()
+    for info in entries:
+        mode = info.external_attr >> 16
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+            sys.exit("install-tool.sh: %s in %s is not a regular file or directory" % (info.filename, sys.argv[1]))
+        if info.filename.startswith("/") or ".." in info.filename.split("/"):
+            sys.exit("install-tool.sh: %s in %s leaves the target directory" % (info.filename, sys.argv[1]))
+    dirs = []
+    for info in entries:
+        mode = stat.S_IMODE(info.external_attr >> 16) & 0o755
+        path = z.extract(info, sys.argv[2])
+        if info.is_dir():
+            dirs.append((path, mode))
+        else:
+            os.chmod(path, mode)
+    for path, mode in sorted(dirs, key=lambda d: d[0].count(os.sep), reverse=True):
+        os.chmod(path, mode)
+EOF
+}
+
 W=$(mktemp -d)
 cd "$W"
 
@@ -152,6 +192,24 @@ trivy)
 	tar -xzf trivy.tgz trivy
 	install -m 0755 trivy /usr/local/bin/trivy
 	;;
+gosec)
+	# https://github.com/securego/gosec/releases
+	sh $F "https://github.com/securego/gosec/releases/download/v${GOSEC_VERSION}/gosec_${GOSEC_VERSION}_linux_${TARGETARCH}.tar.gz" sha256 "$(pin GOSEC_SHA256)" gosec.tgz
+	tar -xzf gosec.tgz gosec
+	install -m 0755 gosec /usr/local/bin/gosec
+	;;
+gitleaks)
+	# https://github.com/gitleaks/gitleaks/releases
+	sh $F "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${GITLEAKS_ARCH}.tar.gz" sha256 "$(pin GITLEAKS_SHA256)" gitleaks.tgz
+	tar -xzf gitleaks.tgz gitleaks
+	install -m 0755 gitleaks /usr/local/bin/gitleaks
+	;;
+containerssh-agent)
+	# The ContainerSSH guest agent: https://github.com/containerssh/agent/releases
+	sh $F "https://github.com/containerssh/agent/releases/download/v${CONTAINERSSH_AGENT_VERSION}/agent_${CONTAINERSSH_AGENT_VERSION}_linux_${TARGETARCH}.tar.gz" sha256 "$(pin CONTAINERSSH_AGENT_SHA256)" agent.tgz
+	tar -xzf agent.tgz containerssh-agent
+	install -m 0755 containerssh-agent /usr/local/bin/containerssh-agent
+	;;
 abtop)
 	# Official release archives: https://github.com/graykode/abtop/releases
 	sh $F "https://github.com/graykode/abtop/releases/download/v${ABTOP_VERSION}/abtop-${TRIPLE}-unknown-linux-gnu.tar.xz" sha256 "$(pin ABTOP_SHA256)" abtop.tar.xz
@@ -181,6 +239,19 @@ helm)
 	tar -xzf helm.tgz "linux-${TARGETARCH}/helm"
 	install -m 0755 "linux-${TARGETARCH}/helm" /usr/local/bin/helm
 	;;
+awscli)
+	# The AWS CLI v2 installer zip for one version, and AWS's own installer script inside it
+	# (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-version.html). The
+	# pinned SHA-256 was computed after the zip's PGP signature was verified
+	# (scripts/bump_versions.py, r_awscli). --install-dir and --bin-dir are the installer's
+	# defaults, written out (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html).
+	sh $F "https://awscli.amazonaws.com/awscli-exe-linux-${TRIPLE}-${AWSCLI_VERSION}.zip" sha256 "$(pin AWSCLI_SHA256)" awscli.zip
+	extract_zip awscli.zip .
+	./aws/install --install-dir /usr/local/aws-cli --bin-dir /usr/local/bin
+	chown -R root:root /usr/local/aws-cli
+	test -x "/usr/local/aws-cli/v2/${AWSCLI_VERSION}/dist/aws"
+	/usr/local/bin/aws --version >/dev/null
+	;;
 claude)
 	# The native Claude Code binary from Anthropic's release host, the file the native
 	# installer downloads (https://claude.ai/install.sh). The pinned SHA-256 comes from
@@ -208,6 +279,23 @@ codex)
 	# into the image.
 	/opt/codex/bin/codex --version >/dev/null
 	;;
+node)
+	# The official Linux binary tarball from nodejs.org, with npm and npx inside.
+	sh $F "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" sha256 "$(pin NODE_SHA256)" node.txz
+	mkdir -p /opt/node
+	# As root, tar would keep the archive's owner (uid 1001 for this tarball); the install
+	# must be root-owned.
+	tar --no-same-owner --strip-components=1 -xJf node.txz -C /opt/node
+	# Headers and docs are not needed to run node; keep LICENSE.
+	rm -rf /opt/node/include /opt/node/share /opt/node/README.md /opt/node/CHANGELOG.md
+	# npm's builtin config file, path/to/npm/itself/npmrc
+	# (https://docs.npmjs.com/cli/v11/configuring-npm/npmrc, "Built-in config file").
+	# sudo drops NPM_CONFIG_PREFIX, so root's global installs would go to /opt/node; this
+	# sends them to /usr/local. The agent user's NPM_CONFIG_PREFIX overrides it.
+	echo "prefix=/usr/local" >/opt/node/lib/node_modules/npm/npmrc
+	chown -R root:root /opt/node
+	/opt/node/bin/node --version >/dev/null
+	;;
 agy)
 	# The tarball named in versions.env; the binary inside is "antigravity" (install.sh).
 	sh $F "$(pin AGY_URL)" sha512 "$(pin AGY_SHA512)" agy.tgz
@@ -228,6 +316,11 @@ opencode)
 normalize-rust-components)
 	shift
 	normalize_rust_components "$@"
+	;;
+extract-zip)
+	# Runs the extraction alone, for tests: install-tool.sh extract-zip ZIP DIR
+	shift
+	extract_zip "$@"
 	;;
 check-rust-manifest)
 	# Runs the check alone, for tests: install-tool.sh check-rust-manifest PINNED SHA256 USED UPDATE_HASH

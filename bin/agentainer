@@ -9,6 +9,9 @@ LABEL=io.github.chadmayfield.agentainer=1
 OPT=io.github.chadmayfield.agentainer
 update_token=""
 ports=""
+# update sets these to the recorded locale label, so create replays it instead of the host's.
+replay_locale=""
+replay_locale_set=0
 
 usage() {
 	cat >&2 <<'EOF'
@@ -98,6 +101,73 @@ normalize_port_list() (
 		separator=,
 		case "$rest" in *,*) rest=${rest#*,} ;; *) rest="" ;; esac
 	done
+)
+
+# The locale categories glibc defines. LC_* is never matched as a pattern, because
+# terminals set other names such as LC_TERMINAL.
+LOCALE_KEYS="LANG LC_ALL LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY LC_MESSAGES
+LC_PAPER LC_NAME LC_ADDRESS LC_TELEPHONE LC_MEASUREMENT LC_IDENTIFICATION"
+
+# valid_locale_pair KEY=VALUE: succeed when KEY is a locale variable or TZ and VALUE is
+# safe to pass. Locales must be UTF-8, because tmux checks LC_ALL, LC_CTYPE and LANG for it.
+valid_locale_pair() (
+	case "$1" in *=*) ;; *) return 1 ;; esac
+	key=${1%%=*}
+	value=${1#*=}
+	if [ "$key" = TZ ]; then
+		# A leading ':' names a file path.
+		case "$value" in '' | :* | *[!A-Za-z0-9_+./:-]*) return 1 ;; esac
+		return 0
+	fi
+	case "$key" in
+	LANG | LC_ALL | LC_CTYPE | LC_NUMERIC | LC_TIME | LC_COLLATE | LC_MONETARY | LC_MESSAGES) ;;
+	LC_PAPER | LC_NAME | LC_ADDRESS | LC_TELEPHONE | LC_MEASUREMENT | LC_IDENTIFICATION) ;;
+	*) return 1 ;;
+	esac
+	case "$value" in C.UTF-8 | C.utf8) return 0 ;; esac
+	base=${value%@*}
+	if [ "$base" != "$value" ]; then
+		case "${value#"$base"@}" in '' | *[!A-Za-z0-9]*) return 1 ;; esac
+	fi
+	case "$base" in
+	[a-z][a-z]_[A-Z][A-Z].UTF-8) ;;
+	[a-z][a-z][a-z]_[A-Z][A-Z].UTF-8) ;;
+	[a-z][a-z]_[A-Z][A-Z].utf8) ;;
+	[a-z][a-z][a-z]_[A-Z][A-Z].utf8) ;;
+	*) return 1 ;;
+	esac
+)
+
+# localtime_zone: print the zone name from the /etc/localtime link target, or nothing.
+# macOS links to /var/db/timezone/zoneinfo/ZONE, Linux to /usr/share/zoneinfo/ZONE.
+localtime_zone() (
+	target=$(readlink "${AGENTAINER_LOCALTIME:-/etc/localtime}" 2>/dev/null) || return 0
+	case "$target" in *zoneinfo/?*) printf '%s\n' "${target#*zoneinfo/}" ;; esac
+)
+
+# locale_env: print the host's valid locale and time zone variables as KEY=VALUE lines.
+locale_env() (
+	for key in $LOCALE_KEYS; do
+		is_set="" v=""
+		eval "is_set=\${$key+x} v=\${$key-}"
+		if [ "$is_set" = x ] && valid_locale_pair "$key=$v"; then printf '%s=%s\n' "$key" "$v"; fi
+	done
+	if [ "${TZ+x}" = x ]; then zone=$TZ; else zone=$(localtime_zone); fi
+	if valid_locale_pair "TZ=$zone"; then printf 'TZ=%s\n' "$zone"; fi
+)
+
+# env_file_keys FILE: print the variable names FILE sets, one per line, never their values.
+# Format: a UTF-8 byte order mark and leading whitespace are ignored, "#" starts a
+# comment, KEY or KEY=value (https://github.com/docker/cli/blob/master/pkg/kvfile/kvfile.go).
+# The final echo ends a last line that has no newline, which BSD sed would leave open.
+env_file_keys() (
+	bom=$(printf '\357\273\277')
+	{
+		IFS= read -r first || [ -n "$first" ] || exit 0
+		printf '%s\n' "${first#"$bom"}"
+		cat
+		echo
+	} <"$1" | sed -n -e 's/^[[:space:]]*//' -e '/^#/d' -e 's/=.*//' -e 's/[[:space:]]*$//' -e '/./p'
 )
 
 cmd=${1:-}
@@ -201,6 +271,24 @@ create() {
 		set -- "$@" --publish "${rest%%,*}"
 		case "$rest" in *,*) rest=${rest#*,} ;; *) rest="" ;; esac
 	done
+	# Locale and time zone: the host's on up, the recorded label on update. Both runtimes
+	# let -e override --env-file (readKVStrings in docker/cli opts/parse.go), so a
+	# variable the env file sets is not passed.
+	if [ "$replay_locale_set" = 1 ]; then pairs=$replay_locale; else pairs=$(locale_env | tr '\n' ' '); fi
+	file_keys=""
+	if [ -n "$envf" ]; then file_keys=$(env_file_keys "$envf" 2>/dev/null | tr '\n' ' ') || file_keys=""; fi
+	passed=""
+	set -f
+	IFS=' '
+	for pair in $pairs; do
+		valid_locale_pair "$pair" || continue
+		case " $file_keys " in *" ${pair%%=*} "*) continue ;; esac
+		set -- "$@" -e "$pair"
+		passed="${passed:+$passed }$pair"
+	done
+	unset IFS
+	set +f
+	set -- "$@" --label "$OPT.locale=$passed"
 	run "$@" "$IMAGE"
 }
 
@@ -297,6 +385,9 @@ update)
 	dir=$(label "$name" dir) && sudo=$(label "$name" sudo) &&
 		HOME_VOLUME=$(label "$name" home) && ENV_FILE=$(label "$name" env-file) || exit 1
 	ports=$(label "$name" ports) || exit 1
+	# create checks each recorded pair again. A container without the label gets none.
+	replay_locale=$(label "$name" locale) || exit 1
+	replay_locale_set=1
 	ports=$(normalize_port_list "$ports") || {
 		echo "agentainer: invalid recorded port mapping; nothing changed" >&2
 		exit 1

@@ -9,3 +9,7 @@ sandbox_mode = "danger-full-access"
 
 # https://learn.chatgpt.com/docs/config-file/config-reference
 approval_policy = "on-request"
+
+# Syntax highlighting only. Codex loads the file from $CODEX_HOME/themes/github-dark.tmTheme.
+[tui]
+theme = "github-dark"

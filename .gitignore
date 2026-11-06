@@ -12,3 +12,9 @@ docs/private/
 !/artifacts/visual/screenshots/
 /artifacts/visual/screenshots/*
 !/artifacts/visual/screenshots/*.png
+
+# Local agent scratch directories; never commit them.
+/.superpowers/
+
+# Python bytecode from running tests.
+__pycache__/

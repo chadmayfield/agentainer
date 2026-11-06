@@ -11,8 +11,12 @@ The image supplies Python, uv, Node.js and npm. The examples install development
 - [Language servers](#language-servers)
 - [Browser tests](#browser-tests)
 - [Native builds](#native-builds)
+- [Go formatting and security scans](#go-formatting-and-security-scans)
+- [PDFs and images](#pdfs-and-images)
+- [Document conversion with MarkItDown and pandoc](#document-conversion-with-markitdown-and-pandoc)
 - [PostgreSQL scripts](#postgresql-scripts)
 - [Kubernetes and Helm clients](#kubernetes-and-helm-clients)
+- [AWS CLI](#aws-cli)
 - [Persistence](#persistence)
 
 ## Python tests and linting with uv
@@ -68,7 +72,7 @@ npm exec -- tsc --version
 npm test
 ```
 
-Keep `package.json`, `package-lock.json` and the tests in version control; leave `node_modules` out. `--save-exact` records the selected dependency version without a range. `npm exec` runs the local TypeScript compiler in this example. See [npm install](https://docs.npmjs.com/cli/v9/commands/npm-install/), [npm pkg](https://docs.npmjs.com/cli/v9/commands/npm-pkg/) and [Node's test runner](https://github.com/nodejs/node/blob/v22.x/doc/api/test.md).
+Keep `package.json`, `package-lock.json` and the tests in version control; leave `node_modules` out. `--save-exact` records the selected dependency version without a range. `npm exec` runs the local TypeScript compiler in this example. See [npm install](https://docs.npmjs.com/cli/v9/commands/npm-install/), [npm pkg](https://docs.npmjs.com/cli/v9/commands/npm-pkg/) and [Node's test runner](https://github.com/nodejs/node/blob/v26.x/doc/api/test.md).
 
 For an existing npm project with a committed lockfile and a test script:
 
@@ -79,7 +83,9 @@ npm test
 
 `npm ci` requires the lockfile to agree with `package.json`, replaces `node_modules` and leaves the dependency declarations and lockfile unchanged. Use `npm install` for deliberate dependency changes. Keep any project-specific install flags in the project's configuration so local and CI installs agree ([npm ci](https://docs.npmjs.com/cli/v9/commands/npm-ci/)).
 
-The `packageManager` field records the project's expected package-manager version. Running plain `npm` uses the executable on `PATH`; the field alone does not switch it. Check `npm --version` against the project's requirement. Corepack documents version selection for npm, pnpm and Yarn in its [project configuration](https://github.com/nodejs/corepack#when-authoring-packages). Follow an existing pnpm or Yarn project's setup rather than creating an npm lockfile beside its own lockfile.
+The `packageManager` field records the project's expected package-manager version. Running plain `npm` uses the executable on `PATH`; the field alone does not switch it. Check `npm --version` against the project's requirement.
+
+Node.js 26 does not include Corepack; Node.js shipped it only "up to (but not including) 25.0.0" ([Corepack README](https://github.com/nodejs/corepack#readme)). To use pnpm or Yarn, install it the way the project documents, or run `npm install -g corepack` and then `corepack enable` (same README). Follow an existing pnpm or Yarn project's setup rather than creating an npm lockfile beside its own lockfile.
 
 ## Language servers
 
@@ -87,7 +93,7 @@ See [optional language tooling](language-tooling.md) for gopls, rust-analyzer, P
 
 ## Browser tests
 
-See [optional browser testing](browser-testing.md) for project-local Playwright installation, Linux dependencies, persistent browser downloads and a headless execution check. Browsers are installed only when you choose that setup.
+See [optional browser testing](browser-testing.md) for project-local Playwright installation, persistent browser downloads, the Playwright MCP plugin and a headless execution check. The image has Chromium's OS libraries. Browsers are installed only when you choose that setup.
 
 ## Native builds
 
@@ -100,7 +106,78 @@ cmake --build build
 
 `-S` selects the source directory and `-B` keeps generated files in a separate build directory. `-G Ninja` selects the Ninja generator. See the [CMake command reference](https://cmake.org/cmake/help/latest/manual/cmake.1.html) and [Ninja manual](https://ninja-build.org/manual.html).
 
+Native addons build through `node-gyp`, which downloads the development files (headers) for the target Node.js version. `--devdir` sets the download directory, and the default is the OS cache directory. `--tarball` takes the headers from a local tarball ([node-gyp README](https://github.com/nodejs/node-gyp#readme)). That README does not say when the download happens or how to build offline with the image's Node.js; not verified.
+
+The image installs Node.js from nodejs.org into `/opt/node` and has no `eslint`, `webpack`, `terser`, `node-gyp`, `gyp` or `corepack` command on `PATH`. A project runs its own copies through `npm install` and `npx`. npm builds native addons with the `node-gyp` bundled in npm itself (`/opt/node/lib/node_modules/npm/node_modules/node-gyp/`), so `npm install` needs no separate `node-gyp`.
+
+Do not run `sudo npm install -g npm`. It replaces npm with a copy that lacks the image's builtin config, so root's global prefix falls back to `/opt/node`, whose `bin` directory is not on `PATH`.
+
+Images up to `0.1.0-dev.20261024.1` installed Node.js from Ubuntu's `nodejs` and `npm` packages (`git show v0.1.0-dev.20261024.1:build/apt-packages.txt`). Projects that relied on commands from those packages must install them themselves.
+
 pkg-config reads installed `.pc` metadata to supply compiler and linker flags. It does not install libraries. Project-specific headers and libraries remain optional dependencies; follow the project's setup instructions. See [Ubuntu's pkg-config manual](https://manpages.ubuntu.com/manpages/resolute/man1/pkg-config.1.html). The package list is [`build/apt-packages.txt`](../build/apt-packages.txt); the existing `APT_SNAPSHOT` pin in [`versions.env`](../versions.env) selects their versions.
+
+## Go formatting and security scans
+
+The image has no `goimports` command. golangci-lint includes it as a formatter:
+
+```sh
+golangci-lint fmt -E goimports        # rewrite files
+golangci-lint fmt -E goimports -d     # show a diff, change nothing
+```
+
+`-E` (`--enable`) turns on a formatter and `-d` (`--diff`) prints a diff instead of rewriting files (`golangci-lint fmt --help`). With `-d`, it exits with status 1 when a file needs changes. Git hooks, editor settings or Makefiles that call `goimports` must call this command instead. A project's `.golangci.yml` can enable the formatter permanently ([golangci-lint formatters](https://golangci-lint.run/docs/formatters/)).
+
+The image also has gosec and gitleaks. Their versions are in `/etc/agentainer/versions.json` in the image and in `versions.env` in the repository:
+
+```sh
+gosec ./...          # scan the Go packages under the current directory
+gitleaks git .       # scan the repository's history for secrets
+gitleaks dir .       # scan the files in a directory
+```
+
+Both are upstream release binaries. The build checks their SHA-256 against the projects' published checksum files; their publisher signatures are not verified ([versions](versions.md#pinned-inputs)).
+
+## PDFs and images
+
+- `pdftotext file.pdf out.txt` extracts text; add `-layout` to keep the page layout. `pdftoppm -png -r 150 file.pdf page` renders each page to `page-1.png`, `page-2.png` and so on; `-f` and `-l` select the first and last page. Both come from poppler-utils; its installed version is in `/etc/agentainer/versions.json`.
+- ImageMagick 7 (`magick`) converts, resizes and crops images, for example `magick in.png -resize 50% out.jpg`.
+- ImageMagick reads PDF and PostScript through ghostscript, which the image does not install. `magick file.pdf out.png` fails with `gs: not found`. Render PDF pages with `pdftoppm` and process the PNG files with `magick`.
+
+## Document conversion with MarkItDown and pandoc
+
+These two tools are not in the image. Install them yourself when a project needs them. [Versions](versions.md#documented-installs) lists the pinned versions and when they were last checked.
+
+[MarkItDown](https://github.com/microsoft/markitdown) 0.1.9 converts Office documents, PDFs and other formats to Markdown:
+
+```sh
+uv tool install "markitdown[docx,pptx,xlsx,xls,pdf,outlook]==0.1.9" &&
+  markitdown report.docx > report.md
+```
+
+The extras select the input formats (`[all]` installs every one). The install was about 240 MB. `uv tool` installs under the tools root, so MarkItDown survives a new container only with `AGENTAINER_TOOLS=persist`; otherwise install it again after the container is recreated ([tools that agents install](configuration.md#tools-that-agents-install)).
+
+[pandoc](https://pandoc.org) 3.13 converts between markup formats. Install the upstream static binary into `~/.local/bin`, which is on the home volume and on `PATH` in login shells:
+
+```sh
+v=3.13
+case "$(uname -m)" in
+x86_64) a=amd64 s=38aa33b325a2bc96a4c39409631212db55702f564250bcdbead180b3bf646389 ;;
+aarch64) a=arm64 s=21e1d4ba09bd0b334590d204580fd4f6629b21be4ab6a32b26cc98982e9e0c68 ;;
+esac
+f="pandoc-$v-linux-$a.tar.gz"
+cd "$(mktemp -d)" &&
+  curl -fsSLO "https://github.com/jgm/pandoc/releases/download/$v/$f" &&
+  printf '%s  %s\n' "$s" "$f" | sha256sum -c - &&
+  tar -xzf "$f" &&
+  install -D -m 0755 "pandoc-$v/bin/pandoc" ~/.local/bin/pandoc &&
+  ~/.local/bin/pandoc --version | head -n 1
+```
+
+Each step runs only when the one before it succeeded, so a checksum mismatch stops before `tar` and `install`, and an unknown architecture leaves `s` empty, which `sha256sum -c` rejects.
+
+The checksums are the SHA-256 digests GitHub publishes for the release assets (`gh api repos/jgm/pandoc/releases/tags/3.13 --jq '.assets[] | .name + " " + .digest'`). The binary unpacks to about 172 MB.
+
+Both installs were run in the image on 2026-11-04: `markitdown 0.1.9` converted a `.docx` that `pandoc 3.13` had written.
 
 ## PostgreSQL scripts
 
@@ -116,7 +193,7 @@ psql --no-psqlrc --no-password --set ON_ERROR_STOP=1 --file ./migration.sql
 
 ## Kubernetes and Helm clients
 
-The image includes pinned `kubectl` and Helm release binaries for amd64 and arm64. Their versions and the projects' published SHA-256 checksums live in [`versions.env`](../versions.env). Each tool has its own build stage; the scheduled version updater resolves its stable release and both checksums. See [kubectl binary installation](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/) and [Helm binary installation](https://helm.sh/docs/intro/install/#from-the-binary-releases).
+The image includes `kubectl` and Helm release binaries, pinned in [`versions.env`](../versions.env) ([versions](versions.md)). See [kubectl binary installation](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/) and [Helm binary installation](https://helm.sh/docs/intro/install/#from-the-binary-releases).
 
 Inspect client versions without contacting a cluster:
 
@@ -134,8 +211,18 @@ helm template example-release ./path/to/chart
 
 `kubectl kustomize` reads the local kustomization, and `helm template` renders the local chart. Remote bases, chart dependencies or template options can introduce downloads or cluster access; follow the project's instructions. Agentainer's tests use local fixtures with networking disabled and no kubeconfig. See [kubectl kustomize](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_kustomize/) and [Helm template](https://helm.sh/docs/helm/helm_template/).
 
-Cluster credentials are not included. Supply a kubeconfig at runtime only when you intend to allow cluster access, and check that kubectl is within one minor version of the API server ([kubectl version skew](https://kubernetes.io/releases/version-skew-policy/#kubectl)). Cloud authentication helpers and cloud CLIs are not bundled. Helm 4 is the current stable major selected by the upstream release API; projects requiring Helm 3 must use a compatible custom setup ([Helm releases](https://github.com/helm/helm/releases)).
+Cluster credentials are not included. Supply a kubeconfig at runtime only when you intend to allow cluster access, and check that kubectl is within one minor version of the API server ([kubectl version skew](https://kubernetes.io/releases/version-skew-policy/#kubectl)). The AWS CLI is the only bundled cloud CLI ([AWS CLI](#aws-cli)). Other cloud CLIs and cloud authentication helpers are not bundled. Helm 4 is the current stable major selected by the upstream release API; projects requiring Helm 3 must use a compatible custom setup ([Helm releases](https://github.com/helm/helm/releases)).
+
+## AWS CLI
+
+The image includes AWS CLI v2, installed from AWS's signed installer zip with its own `aws/install` script into `/usr/local/aws-cli`, with `aws` and `aws_completer` in `/usr/local/bin` ([AWS CLI install guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)). The version is pinned in [`versions.env`](../versions.env) ([AWS CLI signing key](versions.md#aws-cli-signing-key)).
+
+```sh
+aws --version
+```
+
+The image carries no AWS configuration or credentials. Supply them at runtime only when you intend to allow AWS access.
 
 ## Persistence
 
-`.venv` and `node_modules` live with the project under the workspace mount. `AGENTAINER_TOOLS=persist` controls supported user-wide tool installations separately. See [customization](customization.md#project-dependencies-and-installed-tools) for recreation and runtime-change guidance. A persistent home does not preserve dependencies installed only in a container's writable layer.
+`.venv` and `node_modules` live with the project under the workspace mount. User-wide tool installations are separate ([tools that agents install](configuration.md#tools-that-agents-install)). See [customization](customization.md#project-dependencies-and-installed-tools) for recreation and runtime-change guidance. A persistent home does not preserve dependencies installed only in a container's writable layer.

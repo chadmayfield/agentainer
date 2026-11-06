@@ -43,6 +43,24 @@ wh='select(.kind=="NetworkPolicy" and .metadata.name=="agentainer-auth-ingress")
 assert_eq "webhook ingress policy selects the webhook" "agentainer-auth" "$(q "$wh.spec.podSelector.matchLabels.app")"
 assert_eq "webhook ingress admits only ContainerSSH" "containerssh" "$(q "$wh.spec.ingress[0].from[0].podSelector.matchLabels.app")"
 assert_eq "webhook ingress port" "8080" "$(q "$wh.spec.ingress[0].ports[0].port")"
+# The SFTP and forwarding switch. A plain resource keeps its name, so edits apply in
+# place. A whole-directory mount receives ConfigMap updates; a subPath mount does not
+# (Kubernetes ConfigMap docs, "Mounted ConfigMaps are updated automatically").
+fm='select(.kind=="ConfigMap" and .metadata.name=="agentainer-features")'
+assert_eq "features ConfigMap keeps a stable name in containerssh" "agentainer-features containerssh" \
+	"$(q "$fm | .metadata.name + \" \" + .metadata.namespace")"
+assert_eq "features ConfigMap is a resource, not a generator" "resource=true generator=false" \
+	"$("$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" '"resource=" + ((.resources // []) | any_c(. == "features.yaml") | tostring) + " generator=" + ((.configMapGenerator // []) | any_c(.name == "agentainer-features") | tostring)' <deploy/kubernetes/auth-webhook/kustomization.yaml)"
+whp='select(.kind=="Deployment" and .metadata.name=="agentainer-auth").spec.template.spec'
+assert_eq "features volume is optional" "features true" \
+	"$(q "$whp.volumes[] | select(.configMap.name==\"agentainer-features\") | .name + \" \" + (.configMap.optional | tostring)")"
+assert_eq "features volume is a read-only directory mount without subPath" "/etc/agentainer-features true subPath=false" \
+	"$(q "$whp.containers[0].volumeMounts[] | select(.name==\"features\") | .mountPath + \" \" + (.readOnly | tostring) + \" subPath=\" + (has(\"subPath\") | tostring)")"
+assert_eq "features ConfigMap has one key, features" "features" "$(q "$fm.data | keys | join(\" \")")"
+assert_eq "shipped switch has SFTP and forwarding off" "sftp=off forwarding=off" \
+	"$(q "$fm.data.features" | grep -v -e '^#' -e '^$' | paste -sd ' ' -)"
+assert_contains "features.yaml says kubectl apply -k resets the switch" "kubectl apply -k" \
+	"$(cat deploy/kubernetes/auth-webhook/features.yaml 2>/dev/null)"
 
 # ContainerSSH settings, read from the generated ConfigMap.
 csc='select(.kind=="ConfigMap" and (.metadata.name | test("^containerssh-config"))).data["config.yaml"] | from_yaml'
@@ -89,6 +107,11 @@ assert_contains "docs/kubernetes.md shows how to create the seed ConfigMap" \
 	"kubectl -n agentainer create configmap agentainer-seed" "$(cat docs/kubernetes.md)"
 assert_eq "PVCs are kept on delete and scale down" "Retain Retain" \
 	"$(q "$sts.spec.persistentVolumeClaimRetentionPolicy | .whenDeleted + \" \" + .whenScaled")"
+assert_eq "agentainer container sets TZ and LANG" "UTC C.UTF-8" \
+	"$(q "$sts.spec.template.spec.containers[0].env | (map(select(.name==\"TZ\"))[0].value) + \" \" + (map(select(.name==\"LANG\"))[0].value)")"
+# Rendered output drops YAML comments, so check the source file.
+assert_eq "statefulset comment shows a changed time zone" "0" \
+	"$(grep -q 'America/Denver' deploy/kubernetes/agentainer/statefulset.yaml >/dev/null 2>&1 && echo 0 || echo 1)"
 assert_eq "headless Service has no ports" "None 0" \
 	"$(q 'select(.kind=="Service" and .metadata.name=="agentainer").spec | .clusterIP + " " + ((.ports // []) | length | tostring)')"
 assert_eq "every object has part-of agentainer" "agentainer" \
@@ -103,5 +126,90 @@ assert_contains "containerssh digest matches versions.env" "$CONTAINERSSH_IMAGE"
 assert_contains "webhook python digest matches versions.env" "$WEBHOOK_PYTHON_IMAGE" "$out"
 private=$(printf '%s\n' "$out" | grep -E '(^|[^0-9.])(10\.[0-9]+\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+)' || true)
 assert_eq "no private IP addresses in manifests" "" "$private"
+
+# The agentainer pod: shared memory, the transfer volume and the FileBrowser Quantum sidecar.
+pod="$sts.spec.template.spec"
+assert_eq "/dev/shm is memory-backed with a 1Gi limit" "Memory 1Gi" \
+	"$(q "$pod.volumes[] | select(.name==\"dshm\").emptyDir | .medium + \" \" + .sizeLimit")"
+assert_eq "agent container mounts dshm at /dev/shm" "/dev/shm" \
+	"$(q "$pod.containers[0].volumeMounts[] | select(.name==\"dshm\").mountPath")"
+assert_eq "agentainer-transfer PVC is 5Gi ReadWriteOnce with the default storage class" \
+	"agentainer 5Gi ReadWriteOnce false" \
+	"$(q 'select(.kind=="PersistentVolumeClaim" and .metadata.name=="agentainer-transfer") | .metadata.namespace + " " + .spec.resources.requests.storage + " " + (.spec.accessModes | join(",")) + " " + (.spec | has("storageClassName") | tostring)')"
+assert_eq "transfer volume uses the agentainer-transfer PVC" "agentainer-transfer" \
+	"$(q "$pod.volumes[] | select(.name==\"transfer\").persistentVolumeClaim.claimName")"
+assert_eq "volumeClaimTemplates are only home and workspace" "home=20Gi workspace=50Gi" \
+	"$(q "$sts.spec.volumeClaimTemplates | map(.metadata.name + \"=\" + .spec.resources.requests.storage) | join(\" \")")"
+assert_eq "agent container mounts transfer/files at /home/agent/transfer" "/home/agent/transfer files" \
+	"$(q "$pod.containers[0].volumeMounts[] | select(.name==\"transfer\") | .mountPath + \" \" + .subPath")"
+assert_eq "agent container stays first, filebrowser is second" "agentainer filebrowser" \
+	"$(q "$pod.containers | map(.name) | join(\" \")")"
+fb="$pod.containers[1]"
+assert_contains "FILEBROWSER_IMAGE in versions.env is pinned by digest" "docker.io/gtstef/filebrowser:2.0-stable-slim@sha256:" "$FILEBROWSER_IMAGE"
+assert_eq "filebrowser image matches FILEBROWSER_IMAGE in versions.env" "$FILEBROWSER_IMAGE" "$(q "$fb.image")"
+assert_eq "filebrowser has the agent container's securityContext" "true" \
+	"$(q "$pod | (.containers[1].securityContext | to_json) == (.containers[0].securityContext | to_json)")"
+assert_eq "filebrowser drops ALL and blocks privilege escalation" "false ALL" \
+	"$(q "$fb.securityContext | (.allowPrivilegeEscalation | tostring) + \" \" + (.capabilities.drop | join(\" \"))")"
+assert_eq "filebrowser sets only FILEBROWSER_CONFIG and FILEBROWSER_DATABASE_PATH" \
+	"FILEBROWSER_CONFIG FILEBROWSER_DATABASE_PATH" "$(q "$fb.env | map(.name) | sort | join(\" \")")"
+assert_eq "filebrowser has no envFrom" "0" "$(q "$fb | (.envFrom // []) | length")"
+assert_eq "filebrowser config and database paths" \
+	"/etc/filebrowser/config.yaml /home/filebrowser/data/database.sqlite" \
+	"$(q "$fb.env | (map(select(.name==\"FILEBROWSER_CONFIG\"))[0].value) + \" \" + (map(select(.name==\"FILEBROWSER_DATABASE_PATH\"))[0].value)")"
+assert_eq "filebrowser mounts" \
+	"filebrowser-config:/etc/filebrowser::true transfer:/home/filebrowser/data:filebrowser:false transfer:/srv/transfer:files:false" \
+	"$(q "$fb.volumeMounts | map(.name + \":\" + .mountPath + \":\" + (.subPath // \"\") + \":\" + ((.readOnly // false) | tostring)) | join(\" \")")"
+assert_eq "filebrowser-config volume is the agentainer-filebrowser ConfigMap" "agentainer-filebrowser" \
+	"$(q "$pod.volumes[] | select(.name==\"filebrowser-config\").configMap.name")"
+for probe in startupProbe livenessProbe; do
+	assert_eq "filebrowser $probe runs curl against 127.0.0.1:8080/health" \
+		"curl -fsS -o /dev/null http://127.0.0.1:8080/health" \
+		"$(q "$fb.$probe.exec.command | join(\" \")")"
+done
+assert_eq "filebrowser resources" "50m 64Mi 500m 256Mi" \
+	"$(q "$fb.resources | .requests.cpu + \" \" + .requests.memory + \" \" + .limits.cpu + \" \" + .limits.memory")"
+fbcfg='select(.kind=="ConfigMap" and .metadata.name=="agentainer-filebrowser").data["config.yaml"]'
+assert_eq "filebrowser listens on 127.0.0.1:8080" "127.0.0.1:8080" \
+	"$(q "$fbcfg | from_yaml | .http.listen + \":\" + (.http.port | tostring)")"
+assert_eq "filebrowser WebDAV is disabled" "true" "$(q "$fbcfg | from_yaml | .http.disableWebDAV")"
+assert_eq "filebrowser cacheDir is under the data mount" "/home/filebrowser/data/cache" \
+	"$(q "$fbcfg | from_yaml | .server.cacheDir")"
+assert_eq "filebrowser has one source, /srv/transfer" "/srv/transfer" \
+	"$(q "$fbcfg | from_yaml | .server.sources | map(.path) | join(\" \")")"
+assert_eq "filebrowser password login is enabled" "true" "$(q "$fbcfg | from_yaml | .auth.methods.password.enabled")"
+assert_eq "filebrowser passwords need at least 12 characters" "12" "$(q "$fbcfg | from_yaml | .auth.methods.password.minLength")"
+assert_eq "filebrowser source ignores symlinks from the root" "/ true" \
+	"$(q "$fbcfg | from_yaml | .server.sources[0].config.rules | map(.folderPath + \" \" + (.ignoreSymlinks | tostring)) | join(\",\")")"
+assert_absent "filebrowser config has no noauth and no admin password" "$(q "$fbcfg")" \
+	"disableWebDAV" noauth adminPassword
+assert_absent "no Service in the agentainer namespace exposes port 8080" \
+	"$(q 'select(.kind=="Service" and .metadata.namespace=="agentainer") | "svc=" + .metadata.name + " ports=" + ((.spec.ports // []) | map((.port | tostring) + ":" + ((.targetPort // .port) | tostring)) | join(","))')" \
+	"svc=agentainer " 8080
+assert_absent "the optional agentainer policies are not rendered by default" \
+	"$(q 'select(.kind=="NetworkPolicy") | .metadata.namespace + "/" + .metadata.name')" \
+	"agentainer-auth-ingress" agentainer/agentainer-egress agentainer/agentainer-ingress
+kz=deploy/kubernetes/agentainer/kustomization.yaml
+assert_contains "kustomization lists the egress policy as optional" "# - networkpolicy.yaml" "$(cat "$kz")"
+assert_contains "kustomization lists the ingress policy as optional" "# - ingress-policy.yaml" "$(cat "$kz")"
+# The optional policies are not rendered, so read their source files.
+fq() { "$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" "$1" <"$2"; }
+np=deploy/kubernetes/agentainer/networkpolicy.yaml
+assert_eq "egress policy still allows DNS to any destination" "UDP/53 TCP/53 to=false" \
+	"$(fq '.spec.egress[0] | (.ports | map(.protocol + "/" + (.port | tostring)) | join(" ")) + " to=" + (has("to") | tostring)' "$np")"
+assert_eq "egress 443 rules exclude private ranges" \
+	"0.0.0.0/0 except 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16|::/0 except fc00::/7,fe80::/10" \
+	"$(fq '[.spec.egress[] | select(.ports[0].port == 443) | .to[].ipBlock | .cidr + " except " + (.except | join(","))] | join("|")' "$np")"
+for range in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 fc00::/7 fe80::/10; do
+	assert_eq "egress 443 rules exclude $range" "1" \
+		"$(fq "[.spec.egress[] | select(.ports[0].port == 443) | .to[].ipBlock.except[] | select(. == \"$range\")] | length" "$np")"
+done
+assert_eq "egress rules with destinations allow TCP 443 only" "TCP/443 TCP/443" \
+	"$(fq '[.spec.egress[] | select(has("to")) | .ports[] | .protocol + "/" + (.port | tostring)] | join(" ")' "$np")"
+assert_contains "egress policy shows a narrow allow rule example" "203.0.113.0/24" "$(cat "$np")"
+ip=deploy/kubernetes/agentainer/ingress-policy.yaml
+assert_eq "ingress policy denies all ingress to the agentainer pod" "agentainer Ingress 0" \
+	"$(fq '.metadata.namespace + " " + (.spec.policyTypes | join(",")) + " " + ((.spec.ingress // []) | length | tostring)' "$ip")"
+assert_eq "ingress policy selects the agentainer pod" "agentainer" "$(fq '.spec.podSelector.matchLabels.app' "$ip")"
 
 finish

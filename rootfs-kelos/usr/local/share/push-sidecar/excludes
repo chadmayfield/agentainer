@@ -1,0 +1,32 @@
+# Patterns the push sidecar keeps out of its "agent WIP" commits. It reads them
+# through core.excludesFile, so they apply to files git does not track yet, on top
+# of the repository's own .gitignore. A file the agent already committed is not
+# affected.
+#
+# Sources checked:
+#   id_rsa*, id_ecdsa*, id_ed25519*  default private key names in ssh-keygen(1),
+#                                    https://man.openbsd.org/ssh-keygen
+#   .npmrc      can hold _authToken and _password,
+#               https://docs.npmjs.com/cli/v10/configuring-npm/npmrc
+#   .pypirc     holds usernames and PyPI tokens in plain text,
+#               https://packaging.python.org/en/latest/specifications/pypirc/
+#   .git-credentials  plain-text file of git-credential-store,
+#               https://git-scm.com/docs/git-credential-store
+#   auth.json   the file this image's Codex entrypoint writes the Codex login to
+# Not backed by a document I fetched, kept as common practice: .env, .env.*,
+# *.pem, *.key, *.p12, *.pfx, *credentials*, .netrc.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ecdsa*
+id_ed25519*
+*credentials*
+.npmrc
+.pypirc
+.netrc
+.git-credentials
+auth.json

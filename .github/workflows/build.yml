@@ -115,8 +115,39 @@ jobs:
         run: sh tests/host/test-launcher.sh
       - name: Build script tests
         run: sh tests/host/test-build-script.sh
+      - name: apt install script tests
+        run: sh tests/host/test-apt-install.sh
       - name: Fetch tests
         run: sh tests/host/test-fetch.sh
+      - name: Extras catalog tests
+        run: sh tests/host/test-extras-catalog.sh
+      - name: Extras lockfile vulnerability scan with trivy (report only)
+        shell: bash
+        run: |
+          set -eu
+          dir=rootfs/usr/local/share/agentainer/extras
+          if [ ! -d "$dir" ]; then
+            echo "No extras catalog at $dir; nothing to scan." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          scanner=$(sed -n 's/^TRIVY_SCANNER_IMAGE=//p' versions.env)
+          test -n "$scanner"
+          report=$RUNNER_TEMP/extras-report
+          mkdir -p "$report" && chmod 777 "$report"
+          # --exit-code 0: findings never fail the job. A scanner image or database
+          # download failure is reported as a warning, because this job gates the image job.
+          if ! docker run --rm -v "$PWD/$dir:/scan:ro" -v "$report:/report" "$scanner" \
+            fs --scanners vuln --exit-code 0 --format json --output /report/extras.json /scan; then
+            echo "::warning::Extras lockfile scan did not run (scanner or database download failed)."
+            echo "Extras lockfile scan did not run." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! out=$(python3 scripts/vuln_summary.py "extras=$report/extras.json"); then
+            echo "::warning::Extras lockfile scan report could not be read."
+            echo "Extras lockfile scan report could not be read." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          { echo "Extras lockfiles in $dir:"; echo; printf '%s\n' "$out"; } >>"$GITHUB_STEP_SUMMARY"
 
   image:
     name: image (${{ matrix.arch }})
@@ -129,16 +160,27 @@ jobs:
           - {arch: amd64, runner: ubuntu-26.04}
           - {arch: arm64, runner: ubuntu-26.04-arm}
     runs-on: ${{ matrix.runner }}
-    # A normal run takes 15 to 20 minutes.
-    timeout-minutes: 60
+    # Recent successful runs of this workflow took 25 to 57 minutes (gh run list), and this
+    # job is the longest part. snapshot.ubuntu.com can be slow, for example 310 MB at 217 kB/s.
+    timeout-minutes: 120
     env:
       IMAGE: localhost/agentainer:dev
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+          # For a pull request, HEAD is GitHub's test merge commit; depth 2 brings its parents.
+          fetch-depth: 2
       - name: Build
         run: RUNTIME=docker sh scripts/build.sh --tag "$IMAGE"
+      - name: Report an apt snapshot fallback
+        # A fallback keeps this job green, but a release never falls back. The step fails when
+        # the build fell back and the change modifies APT_SNAPSHOT or build/apt-packages.txt.
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: RUNTIME=docker sh scripts/check-apt-fallback.sh "$IMAGE"
       - name: Build report (versions, changed pins, size)
         shell: bash  # -o pipefail: a failing command before | tee must fail the step
         env:
@@ -189,7 +231,7 @@ jobs:
           chmod 755 "$(dirname "$SSH_AUTH_SOCK")"
           docker run --rm --user "$(id -u):$(id -g)" --entrypoint ssh-add \
             -v "$SSH_AUTH_SOCK:/run/ssh-agent.sock" -e SSH_AUTH_SOCK=/run/ssh-agent.sock "$IMAGE" -l | grep -q ED25519
-      - name: Agents on a CPU without AVX2
+      - name: Agents and Node.js on a CPU without AVX2
         if: matrix.arch == 'amd64'
         shell: bash  # -o pipefail: a failing agent must fail the step through tee
         run: |
@@ -210,15 +252,16 @@ jobs:
             if qemu-x86_64 -cpu SandyBridge ./avx2 2>/dev/null; then echo "control: AVX2 ran on SandyBridge" >&2; exit 1; fi
             qemu-x86_64 -cpu Haswell ./avx2 || { echo "control: AVX2 failed on Haswell" >&2; exit 1; }
             failed=0
-            echo "| Agent | --version on SandyBridge (no AVX2) |"
+            echo "| Command | --version on SandyBridge (no AVX2) |"
             echo "|---|---|"
-            for c in claude codex agy opencode; do
+            for c in claude codex agy opencode node; do
               bin=$(readlink -f "$(command -v "$c")")
               if out=$(qemu-x86_64 -cpu SandyBridge "$bin" --version 2>&1 </dev/null); then r="runs: $(printf "%s" "$out" | head -1)"
               else r="fails (exit $?): $(printf "%s" "$out" | tail -1)"; failed=1; fi
               echo "| $c | $r |"
             done
-            # The README says every agent starts without AVX2; a bump that breaks it fails here.
+            # The README says every agent starts without AVX2, and Node.js is the runtime
+            # for npm tools. A bump that breaks either fails here.
             exit "$failed"' | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Secret scan (blocks) and vulnerability scan (report only)
         shell: bash
@@ -383,9 +426,10 @@ jobs:
           - {arch: amd64, runner: ubuntu-26.04}
           - {arch: arm64, runner: ubuntu-26.04-arm}
     runs-on: ${{ matrix.runner }}
-    # The build takes 6 to 10 minutes; this job adds a push of about 1 GB and a pull and
-    # scan of the pushed image.
-    timeout-minutes: 60
+    # The job builds, pushes about 1 GB, then pulls and scans the pushed image. The limit is
+    # 120 minutes because snapshot.ubuntu.com can be very slow. It does not change what gets
+    # installed.
+    timeout-minutes: 120
     permissions:
       contents: read
       packages: write
@@ -397,6 +441,8 @@ jobs:
         name: Build arguments, as scripts/build.sh passes them
         # Each pin a Containerfile stage declares with ARG becomes a build argument, plus
         # SOURCE_DATE_EPOCH, which BuildKit reads to fix file times (rewrite-timestamp).
+        # APT_FALLBACK is not in versions.env, so it stays empty here: release builds never
+        # fall back to archive.ubuntu.com (scripts/check-release-platform.sh checks the result).
         run: |
           {
             echo "args<<PINS_EOF"
@@ -411,7 +457,7 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
         with:
           driver-opts: image=${{ steps.pins.outputs.buildkit }}  # pinned in versions.env
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -499,7 +545,7 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
         with:
           driver-opts: image=${{ steps.pins.outputs.buildkit }}  # pinned in versions.env
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

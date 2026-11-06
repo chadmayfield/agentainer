@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class LauncherUpdateTests(unittest.TestCase):
-    def update(self, failure="", running=True):
+    def update(self, failure="", running=True, locale_label="", extra_env=None):
         with tempfile.TemporaryDirectory(prefix="cx-update-") as directory:
             base = Path(directory)
             (base / "workspace").mkdir()
@@ -34,7 +34,8 @@ if cmd=='inspect':
         print((base/'token').read_text() if state[name]['generation']=='new' and (base/'token').exists() else '')
     else:
         values={'image':'example.com/agentainer:test','dir':str(base/'workspace'),
-                'sudo':'0','home':'cx-home','env-file':''}
+                'sudo':'0','home':'cx-home','env-file':'',
+                'locale':os.environ.get('CX_LOCALE','')}
         print(next((v for k,v in values.items() if '.'+k+'"' in fmt),''))
 elif cmd=='pull': sys.exit(1 if failure=='pull' else 0)
 elif cmd=='rename':
@@ -57,7 +58,8 @@ elif cmd=='exec': sys.exit(0)
             engine.chmod(0o755)
             result = subprocess.run(["sh", str(ROOT / "bin/agentainer"), "update", "cx-example"],
                                     env=dict(os.environ, AGENTAINER_RUNTIME=str(engine),
-                                             CX_BASE=str(base), CX_FAILURE=failure),
+                                             CX_BASE=str(base), CX_FAILURE=failure,
+                                             CX_LOCALE=locale_label, **(extra_env or {})),
                                     capture_output=True, text=True)
             calls = [json.loads(line) for line in (base / "calls").read_text().splitlines()]
             return result, json.loads(state.read_text()), calls
@@ -95,3 +97,29 @@ elif cmd=='exec': sys.exit(0)
         self.assertEqual(state.get("cx-agentainer-backup-cx-example"),
                          {"generation": "old", "running": False})
         self.assertFalse(any(c[0] == "rm" and c[-1] == "cx-example" for c in calls))
+
+    def run_call(self, calls):
+        return next(c for c in calls if c[0] == "run")
+
+    def test_replayed_label_is_validated(self):
+        result, _, calls = self.update(locale_label="LANG=en_US.UTF-8 TZ=:/etc/passwd")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run = self.run_call(calls)
+        self.assertIn("LANG=en_US.UTF-8", run)
+        self.assertFalse(any(a.startswith("TZ=") for a in run), run)
+
+    def test_update_replays_recorded_locale_not_the_current_shell(self):
+        result, _, calls = self.update(locale_label="LANG=de_DE.UTF-8 TZ=Europe/Berlin",
+                                       extra_env={"LANG": "en_US.UTF-8", "TZ": "UTC"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run = self.run_call(calls)
+        self.assertIn("LANG=de_DE.UTF-8", run)
+        self.assertIn("TZ=Europe/Berlin", run)
+        self.assertNotIn("TZ=UTC", run)
+        self.assertIn("io.github.chadmayfield.agentainer.locale=LANG=de_DE.UTF-8 TZ=Europe/Berlin", run)
+
+    def test_update_of_a_container_without_locale_label_passes_none(self):
+        result, _, calls = self.update(extra_env={"LANG": "en_US.UTF-8", "TZ": "UTC"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run = self.run_call(calls)
+        self.assertFalse(any(a.startswith(("LANG=", "TZ=")) for a in run), run)

@@ -10,6 +10,7 @@ import re
 import select
 import shutil
 import signal
+import socket
 import struct
 import subprocess
 import sys
@@ -147,16 +148,46 @@ def main():
     captures = []
 
     def add(identifier, title, description, args, expected, cols=COLS, rows=ROWS,
-            backgrounds=(), absent=(), **kwargs):
+            backgrounds=(), colors=(), absent=(), **kwargs):
         captures.append(dict(id=identifier, title=title, description=description,
                              output=terminal(args, expected, cols=cols, rows=rows, **kwargs),
                              expectedText=expected, expectedBackgrounds=list(backgrounds),
-                             absentText=list(absent), cols=cols, rows=rows))
+                             expectedColors=list(colors), absentText=list(absent), cols=cols, rows=rows))
         print('Captured ' + identifier, file=sys.stderr)
 
-    add('shell', 'Shell and ls', 'Amber user, blue hostname, muted green directories, amber links, green executables.',
+    add('shell', 'Shell and ls', 'Blue user, gray hostname, bold white path, blue directories, cyan links and green executables.',
         ['bash', '--noprofile', '--rcfile', str(home / '.bashrc'), '-i'],
         ['@agentainer', 'sample.py', 'run-example'], interactive=True, send=b'ls --color=always\n')
+    types = Path(tempfile.mkdtemp(prefix='cx-visual-types-'))
+    (types / 'file.txt').write_text('Example file\n')
+    (types / 'executable').write_text('#!/bin/sh\n')
+    (types / 'setuid').write_text('#!/bin/sh\n')
+    (types / 'setgid').write_text('#!/bin/sh\n')
+    for name in ('directory', 'sticky', 'other-writable', 'sticky-other-writable'):
+        (types / name).mkdir()
+    (types / 'link').symlink_to('file.txt')
+    (types / 'broken-link').symlink_to('missing-target')
+    os.mkfifo(types / 'pipe')
+    with socket.socket(socket.AF_UNIX) as listener:
+        listener.bind(str(types / 'socket'))
+    # Special bits on files and directories the agent user owns; no capability needed.
+    for name, mode in (('executable', 0o755), ('setuid', 0o4755), ('setgid', 0o2755),
+                       ('sticky', 0o1755), ('other-writable', 0o777), ('sticky-other-writable', 0o1777)):
+        (types / name).chmod(mode)
+    for path in types.iterdir():
+        os.utime(path, (EPOCH, EPOCH), follow_symlinks=False)
+    # /dev/null is a real character device. Creating a block device needs CAP_MKNOD, so the
+    # last row applies the configured bd style to a sample name. --time-style=+ hides dates,
+    # because the /dev/null date comes from the container runtime.
+    list_types = ('cd "$1" && ls -ld --color=always --time-style=+ /dev/null * && '
+                  'bd=$(printf %s "$LS_COLORS" | tr : "\\n" | sed -n "s/^bd=//p") && '
+                  'printf "brw-rw----  1 root   disk    8, 0  \\033[%smblock-device\\033[0m  (illustrated)\\n" "$bd"')
+    add('ls-colors', 'ls file types', 'Every ls file type the agent user can create, plus /dev/null. '
+        'Special permissions use red, orange and blue backgrounds. The block-device row is illustrated.',
+        ['bash', '-ic', list_types, 'cx-types', str(types)],
+        ['/dev/null', 'setuid', 'setgid', 'sticky-other-writable', 'missing-target', 'socket', 'pipe',
+         'block-device', 'illustrated'],
+        backgrounds=['#490202', '#3d1300', '#051d4d'])
     add('eza', 'eza', 'File types, permissions, owners, sizes, dates and Git indicators.',
         ['bash', '-ic', 'eza --color=always --long --group --header --git --icons=never'],
         ['Permissions', 'sample.py', 'settings.yaml'])
@@ -175,7 +206,7 @@ def main():
     add('git-status', 'Git status', 'Staged changes, working-tree changes, deletions and untracked files.',
         ['bash', '-ic', 'git -c color.ui=always status --short --branch'],
         ['sample.py', 'settings.yaml', 'notes.txt'])
-    add('git-diff', 'Git diff', 'Amber hunk headings, gray context, green additions and red removals.',
+    add('git-diff', 'Git diff', 'Bold blue file headers, purple hunk headings, light context, green additions and red removals.',
         ['bash', '-ic', 'git --no-pager diff --color=always -- sample.py'],
         ['DEBUG', 'RETRIES'])
     add('git-staged', 'Git staged diff', 'The diff of staged changes, separate from working-tree edits.',
@@ -209,7 +240,7 @@ def main():
     add('fzf-idle', 'fzf before filtering', 'All candidates with an empty search prompt and the current row selected.',
         ['bash', '-ic', "printf '%s\\n' sample.py settings.yaml scripts/example.py notes.txt | fzf --header='Example files'"],
         ['sample.py', 'settings.yaml', 'Example files'], interactive=True)
-    add('fzf', 'fzf', 'Black background, charcoal selection, amber prompt and matching highlights.',
+    add('fzf', 'fzf', 'Near-black background, dark gray current row, blue prompt and blue matching highlights.',
         ['bash', '-ic', "printf '%s\\n' sample.py settings.yaml scripts/example.py notes.txt | fzf --query=py --header='Example files'"],
         ['sample.py', 'example.py', 'Example files'], interactive=True)
     add('fzf-selected', 'fzf multiple selections', 'Both matching files selected, showing selected and current rows.',
@@ -218,7 +249,7 @@ def main():
     add('fzf-empty', 'fzf without matches', 'An unmatched query with a zero-result count and no candidate rows.',
         ['bash', '-ic', "printf '%s\\n' sample.py settings.yaml scripts/example.py notes.txt | fzf --query=unmatched --header='Example files'"],
         ['unmatched', '0/4', 'Example files'], interactive=True, absent=['sample.py', 'settings.yaml', 'example.py'])
-    add('vim', 'Vim', 'Syntax colors, line numbers, gutter, current line and slate-blue status line.',
+    add('vim', 'Vim', 'Syntax colors, gray line numbers, current line and the dark blue status line.',
         ['vim', '-n', '-i', 'NONE', 'sample.py'], ['sample.py', 'describe'], interactive=True)
 
     add('vim-yaml', 'Vim YAML', 'YAML syntax with two-space indentation and the current-line gutter.',
@@ -232,10 +263,10 @@ def main():
                       '\nselection = "Selected text"\n\n' + sample.read_text())
     add('vim-search', 'Vim search and whitespace', 'Highlighted path matches, trailing-space dots and the current-line gutter.',
         ['vim', '-n', '-i', 'NONE', 'review.py', '-c', "let @/ = 'path'", '-c', 'set hlsearch'],
-        ['review.py', 'Trailing whitespace...', 'Path'], interactive=True, backgrounds=['#e6b450', '#141414'])
+        ['review.py', 'Trailing whitespace...', 'Path'], interactive=True, backgrounds=['#58a6ff', '#0d1117'])
     add('vim-selection', 'Vim visual selection', 'Character selection alongside the cursor line and visible trailing whitespace.',
         ['vim', '-n', '-i', 'NONE', 'review.py', '-c', 'normal! 4G0v$'],
-        ['review.py', 'Selected text', 'VISUAL', 'def describe(path: Path) -> str:'], interactive=True, backgrounds=['#333333'])
+        ['review.py', 'Selected text', 'VISUAL', 'def describe(path: Path) -> str:'], interactive=True, backgrounds=['#264f78'])
     add('vim-browser-narrow', 'Vim browser at 80 columns', 'The right-hand browser and editing buffer at 80 columns by 24 rows.',
         ['vim', '-n', '-i', 'NONE', 'sample.py', '-c', '25Lexplore! /workspace'],
         ['sample.py', 'settings.yaml'], interactive=True, cols=80, rows=24)
@@ -243,13 +274,18 @@ def main():
     tmux = ['tmux' , '-L', 'cx-visual']
     try:
         checked(tmux + ['-f', str(home / '.tmux.conf'), 'new-session', '-d', '-s', 'main', '-n', 'workspace'])
-        checked(tmux + ['set-option', '-g', 'status-right', 'Mon 19 Oct 12:00'])
-        add('tmux-single', 'tmux single pane', 'One window and one pane with the charcoal and amber status bar.',
-            tmux + ['attach-session', '-t', 'main'], ['workspace', '@agentainer', 'Mon 19 Oct'], interactive=True)
+        # Render the configured status-right with a fixed time and date, so screenshots stay stable.
+        status_right = checked(tmux + ['show-options', '-gv', 'status-right']).rstrip('\n')
+        if '%H:%M' not in status_right or '%x' not in status_right:
+            raise RuntimeError('configured status-right has no %H:%M time or %x date')
+        checked(tmux + ['set-option', '-g', 'status-right',
+                        status_right.replace('%H:%M', '12:00').replace('%x', '10/19/26')])
+        add('tmux-single', 'tmux single pane', 'One window and one pane with the dark status bar, blue session name, time, date and agentainer blocks.',
+            tmux + ['attach-session', '-t', 'main'], ['workspace', '@agentainer', '12:00', '10/19/26'], interactive=True)
         checked(tmux + ['new-window', '-d', '-n', 'logs'])
         checked(tmux + ['split-window', '-h'])
-        add('tmux', 'tmux', 'Split panes and multiple windows with the charcoal and amber status bar. Clock fixed for review.',
-            tmux + ['attach-session', '-t', 'main'], ['workspace', 'logs', 'Mon 19 Oct'], interactive=True)
+        add('tmux', 'tmux', 'Split panes and multiple windows. The current window is light blue on blue. Time and date fixed for review.',
+            tmux + ['attach-session', '-t', 'main'], ['workspace', 'logs', '12:00', '10/19/26'], interactive=True)
         pane = 'main:1.1'
         checked(tmux + ['select-pane', '-t', pane])
         checked(tmux + ['send-keys', '-t', pane,
@@ -265,7 +301,7 @@ def main():
         add('tmux-copy', 'tmux copy-mode selection', 'Selected terminal text in the configured copy-mode colors.',
             tmux + ['attach-session', '-t', 'main'], ['Copy mode example', 'Another readable line'],
             interactive=True, ready=['Copy mode example', 'Another readable line'],
-            after_ready=select_copy_text, backgrounds=['#ffb454'])
+            after_ready=select_copy_text, backgrounds=['#264f78'])
         checked(tmux + ['send-keys', '-X', '-t', pane, 'cancel'])
         checked(tmux + ['select-window', '-t', 'main:2'])
         checked(tmux + ['select-window', '-t', 'main:1'])
@@ -279,11 +315,11 @@ def main():
                 time.sleep(0.05)
             raise RuntimeError('background window did not record activity')
 
-        add('tmux-activity', 'tmux window activity', 'The background logs window has a verified activity flag and highlighted status entry.',
-            tmux + ['attach-session', '-t', 'main'], ['workspace', 'logs#', 'Mon 19 Oct'],
-            interactive=True, ready=['workspace', 'logs'], after_ready=mark_activity)
-        add('tmux-narrow', 'tmux split panes at 80 columns', 'Split panes, window names and the clock at 80 columns by 24 rows.',
-            tmux + ['attach-session', '-t', 'main'], ['workspace', 'logs', 'Mon 19 Oct'],
+        add('tmux-activity', 'tmux window activity', 'The background logs window has a verified activity flag and a pale blue status entry.',
+            tmux + ['attach-session', '-t', 'main'], ['workspace', 'logs', '12:00', '10/19/26'],
+            interactive=True, ready=['workspace', 'logs'], after_ready=mark_activity, colors=['#a5d6ff'])
+        add('tmux-narrow', 'tmux split panes at 80 columns', 'Split panes, window names, time and date at 80 columns by 24 rows.',
+            tmux + ['attach-session', '-t', 'main'], ['workspace', 'logs', '12:00', '10/19/26'],
             interactive=True, cols=80, rows=24)
     finally:
         subprocess.run(tmux + ['kill-server'], capture_output=True, timeout=10)

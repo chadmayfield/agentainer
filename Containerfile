@@ -71,6 +71,27 @@ ARG TRIVY_SHA256_AMD64
 ARG TRIVY_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh trivy
 
+FROM fetch AS gosec
+ARG TARGETARCH
+ARG GOSEC_VERSION
+ARG GOSEC_SHA256_AMD64
+ARG GOSEC_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh gosec
+
+FROM fetch AS gitleaks
+ARG TARGETARCH
+ARG GITLEAKS_VERSION
+ARG GITLEAKS_SHA256_AMD64
+ARG GITLEAKS_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh gitleaks
+
+FROM fetch AS containerssh-agent
+ARG TARGETARCH
+ARG CONTAINERSSH_AGENT_VERSION
+ARG CONTAINERSSH_AGENT_SHA256_AMD64
+ARG CONTAINERSSH_AGENT_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh containerssh-agent
+
 FROM fetch AS ruff
 ARG TARGETARCH
 ARG RUFF_VERSION
@@ -113,6 +134,13 @@ ARG HELM_SHA256_AMD64
 ARG HELM_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh helm
 
+FROM fetch AS awscli
+ARG TARGETARCH
+ARG AWSCLI_VERSION
+ARG AWSCLI_SHA256_AMD64
+ARG AWSCLI_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh awscli
+
 FROM fetch AS claude
 ARG TARGETARCH
 ARG CLAUDE_CODE_VERSION
@@ -126,6 +154,19 @@ ARG CODEX_VERSION
 ARG CODEX_SHA256_AMD64
 ARG CODEX_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh codex
+
+FROM fetch AS node
+ARG TARGETARCH
+ARG NODE_VERSION
+ARG NODE_SHA256_AMD64
+ARG NODE_SHA256_ARM64
+# node links libatomic.so.1, which the final image gets from apt-packages.txt. This install
+# comes from the live archive only for the node --version check in this stage and is not
+# copied into the image.
+RUN apt-get update \
+	&& DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libatomic1 \
+	&& rm -rf /var/lib/apt/lists/*
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh node
 
 FROM fetch AS agy
 ARG TARGETARCH
@@ -163,7 +204,7 @@ RUN [ -n "${BASH_VERSION:-}" ] && [[ $- == *e* ]] && set -o | grep -Eq '^pipefai
 	&& mkdir -p /usr/local/share/agentainer \
 	&& echo "bash ${BASH_VERSION} errexit pipefail" > /usr/local/share/agentainer/build-shell.txt
 
-COPY build/apt-packages.txt build/check-apt-snapshot.py /tmp/agentainer-build/
+COPY build/apt-packages.txt build/check-apt-snapshot.py build/apt-install.sh /tmp/agentainer-build/
 
 # apt packages from the pinned Ubuntu snapshot.
 # - Both architectures use archive.ubuntu.com: the arm64 image defaults to
@@ -174,27 +215,29 @@ COPY build/apt-packages.txt build/check-apt-snapshot.py /tmp/agentainer-build/
 #   Always-Include-Phased-Updates makes upgrades take the same (newest) versions
 #   that fresh installs already get, instead of deferring phased ones
 #   (apt_preferences(5), "Phased Updates").
+# - The Chromium libraries and fonts come from Playwright v1.64.1,
+#   packages/playwright-core/src/server/registry/nativeDeps.ts, entry 'ubuntu26.04-x64'
+#   (its "chromium" and "tools" lists; xvfb is left out). The 'ubuntu26.04-arm64'
+#   entry copies the same lists. The browsers themselves are
+#   not in the image.
 # - check-apt-snapshot.py fails the build if any installed version is not in the snapshot.
 # - Failed indexes and archives get five retries. update fails if any index is
 #   unavailable, so installation cannot continue with missing package lists
 #   (apt-get(8), --error-on=any; apt.conf(5), Acquire::Retries).
 # - The apt and dpkg logs hold build times and are removed.
+# - build/apt-install.sh does the install. If a snapshot step fails and APT_FALLBACK=archive,
+#   it installs from archive.ubuntu.com instead and says so in a warning. Either way it writes
+#   /usr/local/share/agentainer/apt-source ("snapshot <ID>" or "archive-fallback <date> ...").
+#   On the fallback path a version outside the snapshot does not fail the build.
 ARG APT_SNAPSHOT
+# "archive" lets the build fall back to archive.ubuntu.com when the snapshot fails.
+# scripts/build.sh sets it for every build it runs. Empty or any other value is strict, which
+# the release build uses: it never falls back.
+ARG APT_FALLBACK=
 # The bootstrap bundle is available only during this RUN, outside final image layers.
 # https://docs.docker.com/reference/dockerfile/#run---mounttypebind
 RUN --mount=type=bind,from=certs,source=/etc/ssl/certs/ca-certificates.crt,target=/tmp/agentainer-build/ca.crt \
-    test -n "${APT_SNAPSHOT}" \
-	&& export DEBIAN_FRONTEND=noninteractive \
-	&& printf 'Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute resolute-updates resolute-backports\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\nSnapshot: %s\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\nSnapshot: %s\n' "${APT_SNAPSHOT}" "${APT_SNAPSHOT}" > /etc/apt/sources.list.d/ubuntu.sources \
-	&& APT="apt-get -o Acquire::Retries=5 -o Acquire::https::CAInfo=/tmp/agentainer-build/ca.crt -o APT::Get::Always-Include-Phased-Updates=true" \
-	&& $APT update --error-on=any \
-	&& $APT upgrade -y \
-	&& xargs -a /tmp/agentainer-build/apt-packages.txt $APT install -y --no-install-recommends \
-	&& apt-cache policy bash > /usr/local/share/agentainer/apt-policy.txt \
-	&& python3 /tmp/agentainer-build/check-apt-snapshot.py /usr/local/share/agentainer/apt-unpinned.txt \
-	&& sed -i '/^Snapshot: /d' /etc/apt/sources.list.d/ubuntu.sources \
-	&& rm -rf /var/lib/apt/lists/* \
-	&& rm -f /var/log/dpkg.log /var/log/alternatives.log /var/log/apt/history.log /var/log/apt/term.log
+	APT_SNAPSHOT="${APT_SNAPSHOT}" APT_FALLBACK="${APT_FALLBACK}" sh /tmp/agentainer-build/apt-install.sh
 
 # Debian names these binaries fdfind and batcat (their package file lists).
 # ping ships with the cap_net_raw file capability, which fails under runtimes that
@@ -234,13 +277,18 @@ COPY --from=gh /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=uv /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
 COPY --from=ruff /usr/local/bin/ruff /usr/local/bin/ruff
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
+COPY --from=gosec /usr/local/bin/gosec /usr/local/bin/gosec
+COPY --from=gitleaks /usr/local/bin/gitleaks /usr/local/bin/gitleaks
+COPY --from=containerssh-agent /usr/local/bin/containerssh-agent /usr/local/bin/containerssh-agent
 COPY --from=abtop /usr/local/bin/abtop /usr/local/bin/abtop
 COPY --from=golangci-lint /usr/local/bin/golangci-lint /usr/local/bin/golangci-lint
 COPY --from=tea /usr/local/bin/tea /usr/local/bin/tea
 COPY --from=kubectl /usr/local/bin/kubectl /usr/local/bin/kubectl
 COPY --from=helm /usr/local/bin/helm /usr/local/bin/helm
+COPY --from=awscli /usr/local/aws-cli /usr/local/aws-cli
 COPY --from=claude /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=codex /opt/codex /opt/codex
+COPY --from=node /opt/node /opt/node
 COPY --from=agy /usr/local/bin/agy /usr/local/bin/agy
 COPY --from=opencode /usr/local/bin/opencode /usr/local/bin/opencode
 COPY --from=unslop /usr/local/share/agentainer/skills/unslop /usr/local/share/agentainer/skills/unslop
@@ -265,7 +313,16 @@ RUN cd /tmp/agentainer-build/rootfs \
 	&& cd / \
 	&& rm -rf /tmp/agentainer-build/rootfs \
 	&& ln -s /opt/codex/bin/codex /usr/local/bin/codex \
+	&& ln -s /opt/node/bin/node /usr/local/bin/node \
+	&& ln -s /usr/local/bin/containerssh-agent /usr/bin/containerssh-agent \
+	&& ln -s /opt/node/bin/npm /usr/local/bin/npm \
+	&& ln -s /opt/node/bin/npx /usr/local/bin/npx \
+	&& ln -s /usr/local/aws-cli/v2/current/bin/aws /usr/local/bin/aws \
+	&& ln -s /usr/local/aws-cli/v2/current/bin/aws_completer /usr/local/bin/aws_completer \
 	&& test -x /usr/local/bin/codex \
+	&& /usr/local/bin/aws --version >/dev/null \
+	&& test -x /usr/local/bin/node \
+	&& /usr/local/bin/node --version >/dev/null \
 	&& test -x /usr/local/bin/agentainer-entrypoint \
 	&& python3 /tmp/agentainer-build/write-versions-json.py
 
@@ -282,11 +339,17 @@ LABEL org.opencontainers.image.version="${IMAGE_VERSION}" \
 	org.opencontainers.image.base.name="${BASE_IMAGE}" \
 	io.github.chadmayfield.agentainer.versions="/etc/agentainer/versions.json"
 
+# The Claude Playwright plugin runs `npx @playwright/mcp@latest` with no arguments (its
+# .mcp.json), which defaults to the chrome channel. @playwright/mcp reads
+# PLAYWRIGHT_MCP_BROWSER as the --browser option (the --browser row of its CLI options
+# table), and chromium selects the Playwright-managed build.
 ENV DISABLE_UPDATES=1 \
 	AGY_CLI_DISABLE_AUTO_UPDATE=true \
 	OPENCODE_DISABLE_AUTOUPDATE=1 \
+	NPM_CONFIG_UPDATE_NOTIFIER=false \
 	CLAUDE_CODE_NONBLOCKING_STDOUT=1 \
-	CLAUDE_CODE_TMUX_TRUECOLOR=1
+	CLAUDE_CODE_TMUX_TRUECOLOR=1 \
+	PLAYWRIGHT_MCP_BROWSER=chromium
 
 # Named volumes copy the image's /home/agent on first use, so it carries the same
 # shell defaults the entrypoint seeds into an empty PVC.

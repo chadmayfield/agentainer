@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileTypesReference, markdownGallery } from './markdown';
+import { markdownGallery } from './markdown';
 
 const output = path.resolve(__dirname, '../../artifacts/visual');
-const expectedIds = ['shell', 'eza', 'eza-tree', 'eza-broken', 'git-status', 'git-diff',
+const expectedIds = ['shell', 'ls-colors', 'eza', 'eza-tree', 'eza-broken', 'git-status', 'git-diff',
   'git-staged', 'git-conflict', 'bat', 'bat-yaml', 'fzf-idle', 'fzf', 'fzf-selected', 'fzf-empty',
   'vim', 'vim-yaml', 'vim-browser', 'vim-search', 'vim-selection', 'vim-browser-narrow',
   'tmux-single', 'tmux', 'tmux-copy', 'tmux-activity', 'tmux-narrow'];
@@ -54,8 +54,10 @@ test('render all terminal states and publish an offline review gallery', async (
   const terminalPage = `<!doctype html><html><head><meta charset="utf-8"><style>
     ${fontCss()}
 ${xtermCss}
-    html, body { margin: 0; background: #000; }
-    .terminal { padding: 12px; width: max-content; background: #000; }
+    html, body { margin: 0; background: #010409; }
+    .terminal { padding: 12px; width: max-content; background: #010409; }
+    /* xterm.css paints the viewport #000; match the reference background. */
+    .xterm .xterm-viewport { background-color: #010409; }
     </style></head><body><div class="terminal" id="terminal"></div></body></html>`;
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -83,13 +85,14 @@ ${xtermCss}
           cols: capture.cols, rows: capture.rows, fontFamily: 'JetBrains Mono', fontSize: 14,
           fontWeight: '400', fontWeightBold: '700', lineHeight: 1.2,
           cursorBlink: false, scrollback: 0, allowProposedApi: true,
+          // Reference GitHub Dark palette, copied from TERMINAL in tests/unit/palette.py.
           theme: {
-            background: '#000000', foreground: '#bfbdb6', cursor: '#e6b450',
-            selectionBackground: '#202020', black: '#000000', brightBlack: '#747474',
-            red: '#f07178', brightRed: '#f07178', green: '#aad94c', brightGreen: '#aad94c',
-            yellow: '#e6b450', brightYellow: '#ffb454', blue: '#59c2ff', brightBlue: '#59c2ff',
-            magenta: '#d2a6ff', brightMagenta: '#d2a6ff', cyan: '#95e6cb', brightCyan: '#95e6cb',
-            white: '#bfbdb6', brightWhite: '#ffffff',
+            background: '#010409', foreground: '#e6edf3', cursor: '#f78166',
+            selectionBackground: '#264f78', black: '#484f58', brightBlack: '#6e7681',
+            red: '#ff7b72', brightRed: '#ffa198', green: '#3fb950', brightGreen: '#56d364',
+            yellow: '#d29922', brightYellow: '#e3b341', blue: '#58a6ff', brightBlue: '#79c0ff',
+            magenta: '#bc8cff', brightMagenta: '#d2a8ff', cyan: '#39c5cf', brightCyan: '#56d4dd',
+            white: '#b1bac4', brightWhite: '#ffffff',
           },
         });
         terminal.open(document.getElementById('terminal'));
@@ -103,6 +106,7 @@ ${xtermCss}
         await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
         let text = '';
         const colors = new Set<number>();
+        const rgbColors = new Set<string>();
         const backgrounds = new Set<string>();
         const buffer = terminal.buffer.active;
         for (let row = 0; row < terminal.rows; row++) {
@@ -111,14 +115,16 @@ ${xtermCss}
           for (let col = 0; col < terminal.cols; col++) {
             const cell = line.getCell(col);
             if (cell.getChars() && !cell.isFgDefault()) colors.add(cell.getFgColor());
+            if (cell.getChars() && cell.isFgRGB()) rgbColors.add('#' + cell.getFgColor().toString(16).padStart(6, '0'));
             if (cell.isBgRGB()) backgrounds.add('#' + cell.getBgColor().toString(16).padStart(6, '0'));
           }
         }
-        return { text, colors: [...colors], backgrounds: [...backgrounds] };
+        return { text, colors: [...colors], rgbColors: [...rgbColors], backgrounds: [...backgrounds] };
       }, capture);
       for (const expected of capture.expectedText) expect(screen.text, capture.id).toContain(expected);
       for (const absent of capture.absentText || []) expect(screen.text, capture.id).not.toContain(absent);
       for (const background of capture.expectedBackgrounds || []) expect(screen.backgrounds, capture.id).toContain(background);
+      for (const color of capture.expectedColors || []) expect(screen.rgbColors, capture.id).toContain(color);
       expect(screen.colors.length, `${capture.id} must contain colored text`).toBeGreaterThan(0);
       const bounds = await page.locator('#terminal').boundingBox();
       expect(bounds).not.toBeNull();
@@ -132,18 +138,16 @@ ${xtermCss}
       cards.push(`<section id="${capture.id}">${heading}<figure><img alt="${escapeHtml(capture.title)} terminal screenshot" src="data:image/png;base64,${data}"></figure></section>`);
       await page.evaluate(() => (window as any).reviewTerminal.dispose());
     }
-    const reference = fs.readFileSync(path.join(output, 'screenshots', `${fileTypesReference.id}.png`));
-    cards.push(`<section id="${fileTypesReference.id}"><h2>${fileTypesReference.title}</h2><p>${fileTypesReference.description}</p><figure><img alt="${fileTypesReference.title} reference" src="data:image/png;base64,${reference.toString('base64')}"></figure></section>`);
     expect(errors).toEqual([]);
     // Validate the delivered page before replacing the last complete gallery.
     const gallery = html(cards.join('\n'));
     await page.setContent(gallery);
     await expect(page.locator('nav .nav-group')).toHaveCount(7);
     expect(await page.locator('nav a').evaluateAll(links => links.map(link => link.getAttribute('href'))))
-      .toEqual([expectedIds[0], fileTypesReference.id, ...expectedIds.slice(1)].map(id => `#${id}`));
+      .toEqual(expectedIds.map(id => `#${id}`));
     await expect(page.locator('ul.metadata > li')).toHaveCount(4);
     expect(gallery).not.toContain('Their generation does not mean a person has approved the appearance.');
-    await expect(page.locator('figure img')).toHaveCount(expectedIds.length + 1);
+    await expect(page.locator('figure img')).toHaveCount(expectedIds.length);
     const frameWidths = await page.locator('figure').evaluateAll(figures => figures.map(figure => ({
       frame: figure.getBoundingClientRect().width,
       image: figure.querySelector('img')!.getBoundingClientRect().width,
@@ -154,7 +158,7 @@ ${xtermCss}
       (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
     const markdown = markdownGallery(recording.captures, metadata);
     const links = [...markdown.matchAll(/^!\[.*\]\((screenshots\/[a-z0-9-]+\.png)\)$/gm)].map(match => match[1]);
-    expect(links).toEqual([...expectedIds, fileTypesReference.id].map(id => `screenshots/${id}.png`));
+    expect(links).toEqual(expectedIds.map(id => `screenshots/${id}.png`));
     for (const id of expectedIds) expect(fs.existsSync(path.join(staging, `${id}.png`))).toBe(true);
     fs.writeFileSync(path.join(staging, 'index.md'), markdown);
     const destination = path.join(output, 'screenshots');
@@ -170,21 +174,21 @@ ${xtermCss}
   }
 });
 
-test('gallery follows the client color scheme while screenshot frames stay black', async ({ page }) => {
+test('gallery uses the GitHub Dark page colors in either client color scheme', async ({ page }) => {
   await page.setContent(fs.readFileSync(path.join(__dirname, 'gallery.html'), 'utf8')
     .replace('__NAV__', '<a href="#sample">Sample</a>')
     .replace('__CARDS__', '<figure><img alt="Sample"></figure>'));
-  for (const [scheme, background, foreground, link] of [
-    ['light', 'rgb(250, 248, 242)', 'rgb(39, 43, 48)', 'rgb(0, 95, 135)'],
-    ['dark', 'rgb(17, 17, 17)', 'rgb(191, 189, 182)', 'rgb(89, 194, 255)'],
-    ['light', 'rgb(250, 248, 242)', 'rgb(39, 43, 48)', 'rgb(0, 95, 135)'],
-  ] as const) {
+  for (const scheme of ['light', 'dark', 'light'] as const) {
     await page.emulateMedia({ colorScheme: scheme });
-    await expect(page.locator('body')).toHaveCSS('background-color', background);
-    await expect(page.locator('body')).toHaveCSS('color', foreground);
-    await expect(page.locator('nav a')).toHaveCSS('color', link);
-    await expect(page.locator('figure')).toHaveCSS('background-color', 'rgb(0, 0, 0)');
+    await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(1, 4, 9)');
+    await expect(page.locator('body')).toHaveCSS('color', 'rgb(230, 237, 243)');
+    await expect(page.locator('nav a')).toHaveCSS('color', 'rgb(88, 166, 255)');
+    await expect(page.locator('figure')).toHaveCSS('background-color', 'rgb(1, 4, 9)');
   }
+});
+
+test('Markdown links only captured screenshots', () => {
+  expect(markdownGallery([], [])).not.toContain('](screenshots/');
 });
 
 test('Markdown keeps screenshot links relative and escapes captured text', () => {
@@ -197,10 +201,4 @@ test('Markdown keeps screenshot links relative and escapes captured text', () =>
   expect(markdown).not.toContain('Their generation does not mean a person has approved the appearance.');
   expect(() => markdownGallery([{ id: '../outside', title: 'Invalid',
     description: '', cols: 120, rows: 32 }], [])).toThrow('invalid screenshot identifier');
-});
-
-test('Markdown includes the standalone file-type reference', () => {
-  const markdown = markdownGallery([], []);
-  expect(markdown).toContain('](screenshots/ls-colors.png)');
-  expect(markdown).toContain('missing-target and block-device styles');
 });

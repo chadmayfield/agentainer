@@ -2,16 +2,22 @@
 """Resolve the latest upstream pins and rewrite versions.env.
 
 Every value comes from the upstream source named in its resolver. Any failure
-stops the run and leaves the file unchanged. Uses the Python standard library
-and the publisher verification CLIs documented in docs/versions.md.
+stops the run and leaves the file unchanged. The extras resolver is the one
+exception: a failed check for one extra keeps that extra's pin and catalog files,
+the run continues, and --failures FILE lists the failed checks. Uses the Python
+standard library, the publisher verification CLIs documented in docs/versions.md,
+npm to generate extras lockfiles, and openssl to verify npm registry signatures.
 """
 import argparse
+import base64
+import binascii
 import datetime
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import tempfile
 import sys
@@ -294,10 +300,20 @@ def r_rust():
     return out
 
 
-def github_tool(prefix, repo, names):
-    """names maps AMD64/ARM64 to a function of the bare version returning the asset name."""
-    rel = gh_latest(repo)
+def github_tool(prefix, repo, names, rel=None, checksums=None):
+    """names maps AMD64/ARM64 to a function of the bare version returning the asset name.
+
+    rel is the release to pin; the default is the repository's latest release.
+    """
+    rel = rel or gh_latest(repo)
     ver = strip_v(rel["tag_name"])
+    if checksums:
+        # Only the named checksum list may supply the hashes; an asset digest alone is not enough.
+        listed = checksums(ver)
+        if not any(a["name"] == listed for a in rel.get("assets", [])):
+            raise LookupFailed("%s: release %s has no %s" % (repo, rel["tag_name"], listed))
+        rel = dict(rel, assets=[a for a in rel["assets"] if a["name"] == listed or a["name"] in
+                                [fn(ver) for fn in names.values()]])
     out = {prefix + "_VERSION": ver}
     for up, fn in names.items():
         name = fn(ver)
@@ -332,6 +348,61 @@ def r_ruff():
     return github_tool("RUFF", "astral-sh/ruff", {
         "AMD64": lambda v: "ruff-x86_64-unknown-linux-gnu.tar.gz",
         "ARM64": lambda v: "ruff-aarch64-unknown-linux-gnu.tar.gz"})
+
+
+def r_gosec():
+    # Release archives and gosec_<version>_checksums.txt: https://github.com/securego/gosec/releases
+    return github_tool("GOSEC", "securego/gosec", {
+        "AMD64": lambda v: "gosec_%s_linux_amd64.tar.gz" % v,
+        "ARM64": lambda v: "gosec_%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "gosec_%s_checksums.txt" % v)
+
+
+def r_gitleaks():
+    # Release archives name the amd64 build linux_x64: https://github.com/gitleaks/gitleaks/releases
+    return github_tool("GITLEAKS", "gitleaks/gitleaks", {
+        "AMD64": lambda v: "gitleaks_%s_linux_x64.tar.gz" % v,
+        "ARM64": lambda v: "gitleaks_%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "gitleaks_%s_checksums.txt" % v)
+
+
+# ContainerSSH server image tag series -> the ContainerSSH guest agent minor series verified
+# with it. The mapping limits proposals to the agent minor series verified against that server
+# series. The "v0.6" tag's digest can move between patch releases. A new server series needs a
+# reviewed entry.
+CONTAINERSSH_AGENT_SERIES = {"v0.6": "0.11"}
+
+# The server image reference and agent version that passed SFTP, ssh -L and ssh -D in a cluster
+# on 2026-11-04 (docs/versions.md). test_pinned_containerssh_pair_is_the_cluster_verified_pair
+# fails when versions.env pins another pair, so a bump pull request fails CI until someone
+# re-verifies and updates this constant and docs/versions.md. The test runs in the build workflow
+# on the pull request, not in the bump job, so the pull request still opens.
+VERIFIED_CONTAINERSSH_PAIR = {
+    "server_image": "docker.io/containerssh/containerssh:v0.6"
+                    "@sha256:f6b195c221739b0f1a43c567bc9df0a0f3b3bd92ccc25ef451e6d4122820c13b",
+    "agent_version": "0.11.0",
+}
+
+
+def r_containerssh_agent():
+    tags = [tag for key, _, tag, _ in K8S_IMAGES if key == "CONTAINERSSH_IMAGE"]
+    series = CONTAINERSSH_AGENT_SERIES.get(tags[0]) if tags else None
+    if series is None:
+        print("containerssh/agent: no agent series is mapped for the ContainerSSH tag %s; keeping the current pin"
+              % (tags[0] if tags else "(none)"), file=sys.stderr)
+        return {}
+    wanted = re.compile(r"v?%s\.([0-9]+)" % re.escape(series))
+    found = []
+    for rel in fetch_json("https://api.github.com/repos/containerssh/agent/releases?per_page=50"):
+        m = wanted.fullmatch(rel.get("tag_name", ""))
+        if m and not rel.get("prerelease") and not rel.get("draft"):
+            found.append((int(m.group(1)), rel))
+    if not found:
+        raise LookupFailed("containerssh/agent: no stable %s.x release found" % series)
+    return github_tool("CONTAINERSSH_AGENT", "containerssh/agent", {
+        "AMD64": lambda v: "agent_%s_linux_amd64.tar.gz" % v,
+        "ARM64": lambda v: "agent_%s_linux_arm64.tar.gz" % v},
+        rel=max(found, key=lambda f: f[0])[1], checksums=lambda v: "agent_%s_checksums.txt" % v)
 
 
 def r_trivy():
@@ -434,6 +505,19 @@ CLAUDE_RELEASES = "https://downloads.claude.ai/claude-code-releases"
 CLAUDE_KEY_URL = "https://downloads.claude.ai/keys/claude-code.asc"
 CLAUDE_KEY_FINGERPRINT = "31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
 CLAUDE_PLATFORMS = (("AMD64", "linux-x64"), ("ARM64", "linux-arm64"))
+# Node's active release keys, listed after the README marker <!-- Active releasers keys --> in nodejs/release-keys at
+# commit 481637f813e912c4aa3622d7964ab426c97b8e8d. NODE_KEYRING holds exactly these keys.
+NODE_KEY_FINGERPRINTS = (
+    "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+    "DD792F5973C6DE52C432CBDAC77ABFA00DDBF2B7",
+    "CC68F5A3106FF448322E48ED27F5E38D5B0A215F",
+    "890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4",
+    "C82FA3AE1CBEDC6BE46B9360C43CEC45C17AB93C",
+    "108F52B48DB57BB0CC439B2997B01419BD92F80A",
+    "655F3B5C1FB3FA8D1A0CA6BDE4A7D232B936D2FD",
+    "A363A499291CBBC940DD62E41F10027AF002F8B0",
+)
+NODE_KEYRING = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keys", "nodejs-release-keys.asc")
 
 
 def parse_claude_manifest(doc, ver):
@@ -449,13 +533,14 @@ def parse_claude_manifest(doc, ver):
     return out
 
 
-def verify_signature(data, sig, key, fingerprint):
-    """Raise LookupFailed unless sig is a valid signature of data by the key with fingerprint.
+def verify_signature(data, sig, key, fingerprints):
+    """Raise LookupFailed unless sig is a valid signature of data by a key in the set fingerprints.
 
-    The key file comes from the same host as the data, so it must hold exactly one primary
-    key, and gpg's status output must name that key as the signer. gpg --verify alone
-    accepts a signature by any key in the keyring.
+    fingerprints is one fingerprint or a tuple of them. The key file must hold exactly that set
+    of primary keys, and gpg's status output must name one of them as the signer. gpg --verify
+    alone accepts a signature by any key in the keyring.
     """
+    wanted = frozenset([fingerprints] if isinstance(fingerprints, str) else fingerprints)
     with tempfile.TemporaryDirectory() as home:
         env = dict(os.environ, GNUPGHOME=home)
         paths = {}
@@ -472,11 +557,12 @@ def verify_signature(data, sig, key, fingerprint):
             # The fpr line right after each pub line is that primary key's fingerprint.
             primaries = [lines[i + 1].split(":")[9] for i, line in enumerate(lines)
                          if line.startswith("pub:") and i + 1 < len(lines) and lines[i + 1].startswith("fpr:")]
-            if primaries != [fingerprint]:
-                raise LookupFailed("signing key file holds %s, expected only %s" % (primaries, fingerprint))
-            # --trusted-key accepts this key for the check without a trust database entry.
-            status = subprocess.run(gpg + ["--status-fd", "1", "--trusted-key", fingerprint[-16:],
-                                           "--verify", paths["sig"], paths["data"]],
+            if len(primaries) != len(wanted) or set(primaries) != wanted:
+                raise LookupFailed("signing key file holds %s, expected only %s"
+                                   % (sorted(primaries), sorted(wanted)))
+            # --trusted-key accepts these keys for the check without a trust database entry.
+            trusted = [arg for fpr in sorted(wanted) for arg in ("--trusted-key", fpr[-16:])]
+            status = subprocess.run(gpg + ["--status-fd", "1"] + trusted + ["--verify", paths["sig"], paths["data"]],
                                     env=env, check=True, capture_output=True, text=True).stdout
         except (OSError, subprocess.CalledProcessError) as e:
             raise LookupFailed("signature check failed: %s" % e)
@@ -485,8 +571,12 @@ def verify_signature(data, sig, key, fingerprint):
     words = [line.split() for line in status.splitlines() if line.startswith("[GNUPG:] ")]
     good = any(w[1] == "GOODSIG" for w in words if len(w) > 1)
     signers = [w[-1] for w in words if len(w) > 2 and w[1] == "VALIDSIG"]
-    if not good or signers != [fingerprint]:
-        raise LookupFailed("signature is not a good signature by %s" % fingerprint)
+    if not good or len(signers) != 1 or signers[0] not in wanted:
+        bad = sorted({w[1] for w in words if len(w) > 1 and w[1] in ("EXPKEYSIG", "REVKEYSIG")})
+        if bad:
+            raise LookupFailed("signature check reported %s; the pinned signing key needs a hand update"
+                               % " and ".join(bad))
+        raise LookupFailed("signature is not a good signature by one of %s" % sorted(wanted))
 
 
 def r_claude():
@@ -499,6 +589,100 @@ def r_claude():
     verify_signature(manifest, fetch_bytes(base + "manifest.json.sig"), fetch_bytes(CLAUDE_KEY_URL),
                      CLAUDE_KEY_FINGERPRINT)
     return parse_claude_manifest(json.loads(manifest), ver)
+
+
+NODE_DIST = "https://nodejs.org/dist"
+NODE_MAJOR = 26
+
+
+def parse_node_index(doc, major):
+    """Newest release of one Node.js major from nodejs.org/dist/index.json, without the v."""
+    if not isinstance(doc, list):
+        raise LookupFailed("node: unexpected index.json shape")
+    pattern = re.compile(r"v(%d\.[0-9]+\.[0-9]+)" % major)
+    found = [m.group(1) for m in (pattern.fullmatch(str(e.get("version", ""))) for e in doc if isinstance(e, dict))
+             if m]
+    if not found:
+        raise LookupFailed("node: no release of major %d in index.json" % major)
+    return max(found, key=version_key)
+
+
+def parse_node_shasums(text, ver):
+    """Both linux tarball hashes for one version from SHASUMS256.txt."""
+    names = {"NODE_SHA256_AMD64": "node-v%s-linux-x64.tar.xz" % ver,
+             "NODE_SHA256_ARM64": "node-v%s-linux-arm64.tar.xz" % ver}
+    hashes = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            hashes[parts[1]] = parts[0]
+    out = {"NODE_VERSION": ver}
+    for key, name in names.items():
+        digest = hashes.get(name, "")
+        if not HEX64.match(digest):
+            raise LookupFailed("node: no valid sha256 for %s in SHASUMS256.txt" % name)
+        out[key] = digest
+    return out
+
+
+def r_node():
+    # nodejs.org signs SHASUMS256.txt with the release keys pinned in scripts/keys.
+    ver = parse_node_index(fetch_json(NODE_DIST + "/index.json"), NODE_MAJOR)
+    base = "%s/v%s/SHASUMS256.txt" % (NODE_DIST, ver)
+    shasums = fetch_bytes(base)
+    sig = fetch_bytes(base + ".sig")
+    with open(NODE_KEYRING, "rb") as f:
+        key = f.read()
+    verify_signature(shasums, sig, key, NODE_KEY_FINGERPRINTS)
+    return parse_node_shasums(shasums.decode(), ver)
+
+
+# AWS CLI v2 installer zips, one per version and architecture, each with a detached PGP
+# signature at <zip>.sig. AWS links the v2 changelog as the list of versions
+# (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-version.html).
+# AWS publishes its signing key only as text in the install guide
+# (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), so
+# AWSCLI_KEY is a copy of that block and AWSCLI_KEY_FINGERPRINT is the fingerprint the guide
+# lists for it. AWS publishes no checksums; the pins are SHA-256 values of the verified zips.
+AWSCLI_CHANGELOG = "https://raw.githubusercontent.com/aws/aws-cli/v2/CHANGELOG.rst"
+AWSCLI_DOWNLOADS = "https://awscli.amazonaws.com"
+AWSCLI_KEY_FINGERPRINT = "FB5DB77FD5C118B80511ADA8A6310ACC4672475C"
+AWSCLI_KEY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keys", "aws-cli-public-key.asc")
+AWSCLI_TRIPLES = (("AMD64", "x86_64"), ("ARM64", "aarch64"))
+
+
+def parse_awscli_changelog(text):
+    """The newest version in the AWS CLI v2 CHANGELOG.rst, whose first heading is the newest release."""
+    found = re.findall(r"^([0-9]+\.[0-9]+\.[0-9]+)\n=+$", text, re.M)
+    if not found:
+        raise LookupFailed("awscli: no version heading in CHANGELOG.rst")
+    if not found[0].startswith("2."):
+        raise LookupFailed("awscli: newest changelog version %s is not v2" % found[0])
+    if found[0] != max(found, key=version_key):
+        raise LookupFailed("awscli: first changelog heading %s is not the newest version" % found[0])
+    return found[0]
+
+
+def awscli_zip_url(triple, ver):
+    return "%s/awscli-exe-linux-%s-%s.zip" % (AWSCLI_DOWNLOADS, triple, ver)
+
+
+def r_awscli():
+    ver = parse_awscli_changelog(fetch(AWSCLI_CHANGELOG))
+    # The zips are about 75 MB each. When the version is already pinned, its checksums are
+    # already pinned too, so nothing is downloaded and the pins stay as they are. main
+    # snapshots the pins from --file into EXTRA_FILES.pins before the resolvers run.
+    if EXTRA_FILES.pins.get("AWSCLI_VERSION") == ver:
+        return {}
+    with open(AWSCLI_KEY, "rb") as f:
+        key = f.read()
+    out = {"AWSCLI_VERSION": ver}
+    for up, triple in AWSCLI_TRIPLES:
+        url = awscli_zip_url(triple, ver)
+        data = fetch_bytes(url)
+        verify_signature(data, fetch_bytes(url + ".sig"), key, AWSCLI_KEY_FINGERPRINT)
+        out["AWSCLI_SHA256_" + up] = hashlib.sha256(data).hexdigest()
+    return out
 
 
 def r_agy():
@@ -524,10 +708,362 @@ def r_opencode():
     return out
 
 
+# ---- extras ----------------------------------------------------------------
+
+NPM_REGISTRY = "https://registry.npmjs.org/"
+EXTRAS_DIR = "rootfs/usr/local/share/agentainer/extras"
+# (versions.env key, npm package, catalog directory under EXTRAS_DIR)
+EXTRAS = (("KANDEV_VERSION", "kandev", "kandev"),
+          ("OPENCHAMBER_VERSION", "@openchamber/web", "openchamber"),
+          ("REA_VERSION", "rea-agents", "rea"))
+EXTRA_MIN_AGE_DAYS = 7
+# Packages whose install scripts may appear in a lockfile. Extras install with
+# npm ci --ignore-scripts, so no install script runs. node-pty 1.2.0-beta.15 ships
+# prebuilds/linux-x64 and prebuilds/linux-arm64
+# (https://unpkg.com/node-pty@1.2.0-beta.15/?meta), and its install script
+# scripts/prebuild.js only checks that prebuilds/<platform>-<arch> exists
+# (https://unpkg.com/node-pty@1.2.0-beta.15/scripts/prebuild.js). rea keeps
+# optional dependencies, so frida installs without running its install script
+# (npm ci --ignore-scripts).
+INSTALL_SCRIPT_ALLOWLIST = frozenset(("node-pty", "frida"))
+# Both keys from https://registry.npmjs.org/-/npm/v1/keys, copied verbatim on 2026-11-01.
+NPM_KEYS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keys", "npm-registry-keys.json")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STABLE_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+NPM_NAME = re.compile(r"(?:@([A-Za-z0-9._~-]+)/)?([A-Za-z0-9._~-]+)")
+NPM_VERSION = re.compile(r"[0-9A-Za-z.+-]+")
+# An npm version as node-semver parses it: MAJOR.MINOR.PATCH, an optional -prerelease and an
+# optional +build (https://docs.npmjs.com/about-semantic-versioning, https://semver.org/#spec-item-9).
+NPM_SEMVER = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?")
+REGISTRY_TIME = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]+)?Z")
+
+
+def npm_name_ok(name):
+    """True when name follows npm's package name rules.
+
+    https://docs.npmjs.com/cli/v11/configuring-npm/package-json#name: at most 214
+    characters including the scope, URL-safe, and an unscoped name must not begin
+    with a dot or an underscore (a scoped one may). "." and ".." are refused in
+    either part because the name becomes part of a registry URL path.
+    """
+    m = NPM_NAME.fullmatch(name) if isinstance(name, str) else None
+    if not m or len(name) > 214:
+        return False
+    scope, pkg = m.groups()
+    if scope is None:
+        return not pkg.startswith((".", "_"))
+    return scope not in (".", "..") and pkg not in (".", "..")
+
+
+class NothingNewer(LookupFailed):
+    """The registry has no version that may replace the pin yet. Not a failed check."""
+
+
+class ExtraFiles:
+    """Catalog files r_extras computed in one run of main.
+
+    main calls reset before the resolvers run and writes files only after every
+    resolver and check passed. Paths in files are relative to base. failures holds
+    one "extras <name>: <reason>" line per extra whose checks failed.
+    """
+
+    def __init__(self):
+        self.reset(None, {})
+
+    def reset(self, base, pins):
+        self.base = base
+        self.pins = dict(pins)
+        self.files = {}
+        self.regenerated = []
+        self.failures = []
+
+
+EXTRA_FILES = ExtraFiles()
+
+
+def utcnow():
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def parse_registry_time(value):
+    """A registry timestamp such as 2025-01-29T00:00:00.000Z as an aware UTC datetime."""
+    m = REGISTRY_TIME.fullmatch(value) if isinstance(value, str) else None
+    if not m:
+        raise LookupFailed("unexpected registry time %r" % (value,))
+    when = datetime.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)
+    return when + datetime.timedelta(seconds=float("0" + (m.group(2) or "")))
+
+
+def npm_version_key(value):
+    """Sort key for an npm version: (major, minor, patch, 0 for a prerelease or 1 for a release).
+
+    A prerelease sorts below the release with the same major, minor and patch, as in
+    https://semver.org/#spec-item-11. Prerelease identifiers and build metadata are not compared,
+    because the extras resolver only picks releases. Raises ValueError for any other string.
+    """
+    m = NPM_SEMVER.fullmatch(value) if isinstance(value, str) else None
+    if not m:
+        raise ValueError("invalid npm version %r" % (value,))
+    return tuple(int(n) for n in m.group(1, 2, 3)) + (int(m.group(4) is None),)
+
+
+def pick_version(packument, now):
+    """Newest stable, non-deprecated version up to dist-tags.latest published at least EXTRA_MIN_AGE_DAYS before now."""
+    if not isinstance(packument, dict) or not isinstance(packument.get("versions"), dict):
+        raise LookupFailed("packument is not an object with versions")
+    latest = npm_version_key(packument["dist-tags"]["latest"])
+    times = packument.get("time")
+    if not isinstance(times, dict) or not times:
+        raise LookupFailed("packument has no time object")
+    cutoff = now - datetime.timedelta(days=EXTRA_MIN_AGE_DAYS)
+    found = []
+    candidates = timed = 0
+    for ver, meta in packument["versions"].items():
+        if not STABLE_VERSION.fullmatch(ver) or (isinstance(meta, dict) and meta.get("deprecated")):
+            continue
+        if npm_version_key(ver) > latest:
+            continue
+        candidates += 1
+        try:
+            published = parse_registry_time(times.get(ver))
+        except LookupFailed:
+            continue
+        timed += 1
+        if published <= cutoff:
+            found.append(ver)
+    if candidates and not timed:
+        raise LookupFailed("packument time has no valid entry for any stable version")
+    if not found:
+        raise NothingNewer("no stable version published at least %d days ago" % EXTRA_MIN_AGE_DAYS)
+    return max(found, key=npm_version_key)
+
+
+def lock_entry_name(path, entry):
+    """Package name of a lockfile packages entry. Aliased packages record their real name in "name"."""
+    return entry.get("name") or path.rsplit("node_modules/", 1)[-1]
+
+
+def new_install_scripts(old_lock, new_lock):
+    """Names of packages with hasInstallScript in new_lock and in no entry of old_lock, minus the allowlist."""
+    def flagged(lock):
+        return {lock_entry_name(path, entry) for path, entry in (lock.get("packages") or {}).items()
+                if path and isinstance(entry, dict) and entry.get("hasInstallScript")}
+    return sorted(flagged(new_lock) - flagged(old_lock) - INSTALL_SCRIPT_ALLOWLIST)
+
+
+def load_registry_keys(path):
+    """The keys of an npm /-/npm/v1/keys document, by keyid."""
+    with open(path) as f:
+        doc = json.load(f)
+    keys = {}
+    for key in doc["keys"]:
+        if key.get("keytype") != "ecdsa-sha2-nistp256" or key.get("scheme") != "ecdsa-sha2-nistp256":
+            raise LookupFailed("%s: unsupported key type for %s" % (path, key.get("keyid")))
+        keys[key["keyid"]] = key
+    return keys
+
+
+def verify_registry_signature(name, version, integrity, signatures, keys, published=None):
+    """Raise LookupFailed unless one of signatures verifies against a key in keys.
+
+    The registry signs "<name>@<version>:<integrity>" with ECDSA P-256 over SHA-256
+    (https://docs.npmjs.com/about-registry-signatures). sig is a base64 DER signature
+    and key is a base64 DER SubjectPublicKeyInfo. A key with "expires" counts only
+    for a version published before that time, as npm does (npm/pacote lib/registry.js).
+    published is a function returning the version's publish time; it is called only
+    for such a key.
+    """
+    message = ("%s@%s:%s" % (name, version, integrity)).encode()
+    reasons = []
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = {n: os.path.join(tmp, n) for n in ("data", "key", "sig")}
+        with open(paths["data"], "wb") as f:
+            f.write(message)
+        for signature in signatures or []:
+            keyid = signature.get("keyid") if isinstance(signature, dict) else None
+            key = keys.get(keyid)
+            if key is None:
+                reasons.append("unknown keyid %r" % (keyid,))
+                continue
+            if key.get("expires"):
+                try:
+                    when = published() if published else None
+                except LookupFailed as e:
+                    reasons.append("no publish time for key %s: %s" % (keyid, e))
+                    continue
+                if when is None or not when < parse_registry_time(key["expires"]):
+                    reasons.append("key %s expired %s, before this version was published" % (keyid, key["expires"]))
+                    continue
+            try:
+                der_key = base64.b64decode(key["key"], validate=True)
+                der_sig = base64.b64decode(signature["sig"], validate=True)
+            except (KeyError, TypeError, binascii.Error):
+                reasons.append("malformed signature or key for %s" % keyid)
+                continue
+            for n, content in (("key", der_key), ("sig", der_sig)):
+                with open(paths[n], "wb") as f:
+                    f.write(content)
+            try:
+                result = subprocess.run(["openssl", "dgst", "-sha256", "-verify", paths["key"], "-keyform", "DER",
+                                         "-signature", paths["sig"], paths["data"]],
+                                        capture_output=True, text=True)
+            except OSError as e:
+                raise LookupFailed("openssl: %s" % e)
+            if result.returncode == 0 and "Verified OK" in result.stdout:
+                return
+            reasons.append("signature by %s does not verify" % keyid)
+    raise LookupFailed("%s@%s: no registry signature verifies (%s)"
+                       % (name, version, "; ".join(reasons) or "no signatures"))
+
+
+def check_lockfile(lock, fetch_json=fetch_json, keys=None):
+    """Raise LookupFailed unless every downloaded package in lock matches a signed registry entry.
+
+    Each entry must come from the public registry with an integrity equal to the
+    registry's dist.integrity for that version, and that integrity must carry a
+    registry signature. Bundled entries ship inside their parent's tarball, so the
+    parent's integrity covers them. A link entry points outside the registry and is refused.
+    """
+    keys = load_registry_keys(NPM_KEYS) if keys is None else keys
+    packages = lock.get("packages") if isinstance(lock, dict) else None
+    if not isinstance(packages, dict):
+        raise LookupFailed("lockfile has no packages object")
+    packuments = {}
+    for path, entry in sorted(packages.items()):
+        if not isinstance(entry, dict):
+            raise LookupFailed("%s: lockfile entry is not an object" % path)
+        if not path:
+            continue
+        if entry.get("link"):
+            raise LookupFailed("%s: lockfile entry is a link" % path)
+        if entry.get("inBundle"):
+            continue
+        name, version, integrity = lock_entry_name(path, entry), entry.get("version"), entry.get("integrity")
+        if not npm_name_ok(name) or not isinstance(version, str) or not NPM_VERSION.fullmatch(version):
+            raise LookupFailed("%s: unexpected name or version" % path)
+        if not integrity or not isinstance(integrity, str):
+            raise LookupFailed("%s: lockfile entry has no integrity" % path)
+        if not str(entry.get("resolved", "")).startswith(NPM_REGISTRY):
+            raise LookupFailed("%s: resolved outside %s" % (path, NPM_REGISTRY))
+        doc = fetch_json(NPM_REGISTRY + name + "/" + version)
+        dist = doc.get("dist") if isinstance(doc, dict) else None
+        if not isinstance(dist, dict) or not isinstance(dist.get("signatures", []), list):
+            raise LookupFailed("%s@%s: registry document has no dist object" % (name, version))
+        if dist.get("integrity") != integrity:
+            raise LookupFailed("%s@%s: registry integrity differs from the lockfile" % (name, version))
+
+        # The per-version document has no publish time; the full packument's time map does.
+        def published(name=name, version=version):
+            if name not in packuments:
+                packuments[name] = fetch_json(NPM_REGISTRY + name)
+            doc = packuments[name]
+            times = doc.get("time") if isinstance(doc, dict) else None
+            return parse_registry_time(times.get(version) if isinstance(times, dict) else None)
+
+        verify_registry_signature(name, version, integrity, dist.get("signatures") or [], keys, published=published)
+
+
+def npm_lockfile(package_json, now):
+    """package-lock.json text that npm generates for package_json, without running package code.
+
+    --before applies the same release-age rule to every dependency in the tree
+    (https://docs.npmjs.com/cli/v11/using-npm/config#before). The empty userconfig
+    keeps a local ~/.npmrc from changing the registry or other settings.
+    """
+    before = (now - datetime.timedelta(days=EXTRA_MIN_AGE_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with tempfile.TemporaryDirectory() as tmp:
+        work = os.path.join(tmp, "work")
+        os.mkdir(work)
+        with open(os.path.join(work, "package.json"), "w") as f:
+            f.write(package_json)
+        userconfig = os.path.join(tmp, "npmrc")
+        open(userconfig, "w").close()
+        argv = ["npm", "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund",
+                "--cache=" + os.path.join(tmp, "cache"), "--userconfig=" + userconfig,
+                "--registry=" + NPM_REGISTRY, "--before=" + before]
+        try:
+            subprocess.run(argv, cwd=work, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            tail = " ".join((e.stderr or "").strip().splitlines()[-3:])
+            raise LookupFailed("npm install exited %d: %s" % (e.returncode, tail))
+        except OSError as e:
+            raise LookupFailed("npm: %s" % e)
+        with open(os.path.join(work, "package-lock.json")) as f:
+            return f.read()
+
+
+def extra_update(base, pin, name, extra, now):
+    """(version, {relative path: text}) for one extra, or None when its pin stays."""
+    rel = EXTRAS_DIR + "/" + extra
+    directory = os.path.join(base, rel)
+    if pin is None or not os.path.isdir(directory):
+        what = "no pin in versions.env" if pin is None else "no catalog directory %s" % rel
+        print("bump_versions: extras %s: %s; skipped" % (extra, what), file=sys.stderr)
+        return None
+    ver = pick_version(fetch_json(NPM_REGISTRY + name), now)
+    if npm_version_key(ver) <= npm_version_key(pin):
+        if npm_version_key(ver) < npm_version_key(pin):
+            print("bump_versions: extras %s: registry offers %s, older than %s; pin unchanged" % (extra, ver, pin),
+                  file=sys.stderr)
+        return None
+    with open(os.path.join(directory, "package.json")) as f:
+        wrapper = json.load(f)
+    if not isinstance(wrapper, dict) or not isinstance(wrapper.get("dependencies"), dict) \
+            or list(wrapper["dependencies"]) != [name]:
+        raise LookupFailed("%s/package.json must depend on exactly %s" % (rel, name))
+    wrapper["dependencies"] = {name: ver}
+    package_json = json.dumps(wrapper, indent=2) + "\n"
+    with open(os.path.join(directory, "package-lock.json")) as f:
+        old_lock = json.load(f)
+    lock_text = npm_lockfile(package_json, now)
+    new_lock = json.loads(lock_text)
+    for label, lock in (("committed", old_lock), ("generated", new_lock)):
+        if not isinstance(lock, dict) or not isinstance(lock.get("packages"), dict):
+            raise LookupFailed("%s lockfile has no packages object" % label)
+    if (new_lock["packages"].get("node_modules/" + name) or {}).get("version") != ver:
+        raise LookupFailed("generated lockfile does not hold %s@%s" % (name, ver))
+    added = new_install_scripts(old_lock, new_lock)
+    if added:
+        raise LookupFailed("new install scripts in %s" % ", ".join(added))
+    check_lockfile(new_lock)
+    return ver, {rel + "/package.json": package_json, rel + "/package-lock.json": lock_text}
+
+
+def r_extras():
+    """Pins for the extras whose newer version passed every check.
+
+    Their files go to EXTRA_FILES.files. A failed check for one extra, including
+    malformed upstream data or a missing npm or openssl, keeps that extra's pin
+    and goes to EXTRA_FILES.failures; the other extras continue.
+    """
+    base = EXTRA_FILES.base or REPO_ROOT
+    now = utcnow()
+    out = {}
+    for key, name, extra in EXTRAS:
+        try:
+            result = extra_update(base, EXTRA_FILES.pins.get(key), name, extra, now)
+        except NothingNewer as e:
+            print("bump_versions: extras %s: %s; pin unchanged" % (extra, e), file=sys.stderr)
+            continue
+        except (LookupFailed, OSError, AttributeError, KeyError, IndexError, TypeError, ValueError) as e:
+            print("bump_versions: extras %s: %s; pin unchanged" % (extra, e), file=sys.stderr)
+            # One line per failure, so the --failures file has one entry per line.
+            EXTRA_FILES.failures.append("extras %s: %s" % (extra, " ".join(str(e).split())))
+            continue
+        if result:
+            out[key], files = result
+            EXTRA_FILES.files.update(files)
+            EXTRA_FILES.regenerated.append(extra)
+    return out
+
+
 K8S_IMAGES = (("CONTAINERSSH_IMAGE", "containerssh/containerssh", "v0.6",
                 "deploy/kubernetes/containerssh/deployment.yaml"),
                ("WEBHOOK_PYTHON_IMAGE", "library/python", "3.14-slim",
-                "deploy/kubernetes/auth-webhook/deployment.yaml"))
+                "deploy/kubernetes/auth-webhook/deployment.yaml"),
+               # 2.0-stable-slim follows 2.0.x patch releases and never crosses a major version.
+               ("FILEBROWSER_IMAGE", "gtstef/filebrowser", "2.0-stable-slim",
+                "deploy/kubernetes/agentainer/statefulset.yaml"))
 
 
 def hub_ref(repo, tag, data):
@@ -563,15 +1099,96 @@ def r_buildkit():
                                       fetch_json("https://hub.docker.com/v2/repositories/moby/buildkit/tags/%s" % tag))}
 
 
-RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_abtop, r_unslop, r_golangci,
-             r_kubectl, r_helm, r_tea, r_claude, r_codex, r_agy, r_opencode, r_k8s_images, r_buildkit]
+RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_gosec, r_gitleaks, r_containerssh_agent,
+             r_abtop, r_unslop, r_golangci, r_kubectl, r_helm, r_awscli, r_tea, r_claude, r_node, r_codex, r_agy,
+             r_opencode, r_k8s_images, r_buildkit, r_extras]
+
+
+def write_atomic(path, text):
+    """Replace path with text through a unique temp file in the same directory.
+
+    The new file keeps the old file's permission bits; a new file gets 0666 minus the umask.
+    """
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        umask = os.umask(0)
+        os.umask(umask)
+        mode = 0o666 & ~umask
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix="." + os.path.basename(path) + ".")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def main(argv=None, resolvers=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--file", default="versions.env")
     ap.add_argument("--only", nargs="*", help="resolver names such as r_go r_agy")
+    ap.add_argument("--failures", help="file to list failed extras checks in, one per line (empty when none)")
     args = ap.parse_args(argv)
+    EXTRA_FILES.reset(None, {})
+    if args.failures:
+        # A later workflow step reads this file, so it exists even when the run fails.
+        try:
+            write_atomic(args.failures, "")
+        except OSError as e:
+            print("bump_versions: cannot write --failures %s: %s" % (args.failures, e), file=sys.stderr)
+            return 2
+    try:
+        rc = bump(args, resolvers)
+    except BaseException:
+        # report_failures never raises, so the original exception propagates unchanged.
+        report_failures(args.failures)
+        raise
+    if not report_failures(args.failures) and rc == 0:
+        # Failures that never reached the file would let the workflow job pass.
+        return 2
+    return rc
+
+
+def report_failures(path):
+    """Write the failed extras checks to path and print them, on every exit from main.
+
+    Failed checks keep their pins while the other pins still go out. The lines
+    go to path, which a later workflow step fails on when it is not empty, then
+    to stdout (and a GitHub Actions warning). Never raises. Returns False when
+    failures exist but path could not be written, True otherwise.
+    """
+    failures = list(EXTRA_FILES.failures)
+    ok = True
+    if path:
+        try:
+            write_atomic(path, "".join(line + "\n" for line in failures))
+        except OSError as e:
+            # main truncated path at the start, so it is empty rather than stale.
+            ok = not failures
+            try:
+                print("bump_versions: cannot write --failures %s: %s" % (path, e), file=sys.stderr)
+            except OSError:
+                pass
+    annotate = os.environ.get("GITHUB_ACTIONS") == "true"
+    try:
+        for line in failures:
+            if annotate:
+                # Workflow command data escapes % as %25 (actions/toolkit packages/core/src/command.ts, escapeData).
+                print("::warning::bump_versions: %s" % line.replace("%", "%25"))
+            print(line)
+    except OSError:
+        # A closed stdout (BrokenPipeError) must not hide the exit code or exception from bump.
+        pass
+    return ok
+
+
+def bump(args, resolvers):
     known = {r.__name__ for r in RESOLVERS}
     unknown = sorted(set(args.only or []) - known)
     if unknown:
@@ -581,6 +1198,9 @@ def main(argv=None, resolvers=None):
     chosen = resolvers or [r for r in RESOLVERS if not args.only or r.__name__ in args.only]
     with open(args.file) as f:
         lines = parse_env(f.read())
+    # Every path main reads or writes besides args.file is relative to the directory that holds it.
+    base = os.path.dirname(os.path.abspath(args.file))
+    EXTRA_FILES.reset(base, values(lines))
     updates = {}
     try:
         for r in chosen:
@@ -598,10 +1218,12 @@ def main(argv=None, resolvers=None):
             print("bump_versions: refusing to write %s" % why, file=sys.stderr)
         return 1
     old = values(lines)
+    npm_keys = {key for key, _, _ in EXTRAS}
     for key, value in updates.items():
         if key.endswith("_VERSION") and key in old and old[key] != value:
+            order = npm_version_key if key in npm_keys else version_key
             try:
-                if version_key(strip_v(value)) < version_key(strip_v(old[key])):
+                if order(strip_v(value)) < order(strip_v(old[key])):
                     raise ValueError("resolver would downgrade %s" % key)
             except ValueError as error:
                 print("bump_versions: %s; pins unchanged" % error, file=sys.stderr)
@@ -609,19 +1231,19 @@ def main(argv=None, resolvers=None):
     for k in sorted(updates):
         if old.get(k) != updates[k]:
             print("%s: %s -> %s" % (k, old.get(k, "(new)"), updates[k]))
-    tmp = args.file + ".tmp"
-    with open(tmp, "w") as f:
-        f.write(render_env(lines, updates))
-    os.replace(tmp, args.file)
+    for extra in EXTRA_FILES.regenerated:
+        print("extras %s: lockfile regenerated" % extra)
+    # versions.env goes last, so an interrupted run never pins a version whose catalog files are missing.
+    for rel, text in sorted(EXTRA_FILES.files.items()):
+        write_atomic(os.path.join(base, rel), text)
     # The Kubernetes example must use the same image references as versions.env.
-    base = os.path.dirname(os.path.abspath(args.file))
     for key, _, _, rel in K8S_IMAGES:
         path = os.path.join(base, rel)
         if key in updates and os.path.exists(path):
             with open(path) as f:
                 text = f.read()
-            with open(path, "w") as f:
-                f.write(rewrite_image_ref(text, updates[key]))
+            write_atomic(path, rewrite_image_ref(text, updates[key]))
+    write_atomic(args.file, render_env(lines, updates))
     return 0
 
 

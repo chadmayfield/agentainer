@@ -37,17 +37,58 @@ class BuildReportTests(unittest.TestCase):
     def test_versions_lists_pinned_versions_and_key_packages(self):
         path = self.write(json.dumps({
             "pins": {"CLAUDE_CODE_VERSION": "2.1.287", "GO_VERSION": "1.27.2",
+                     "NODE_VERSION": "26.13.0",
                      "CODEX_SHA256_AMD64": "ab" * 32, "APT_SNAPSHOT": "20261008T000000Z",
                      "BASE_IMAGE": "docker.io/library/ubuntu:26.04@sha256:" + "f" * 64},
             "apt": {"nodejs": "22.22.1-1", "git": "1:2.53.0-1", "zip": "3.0"}}))
         out = br.versions(path)
         self.assertIn("| claude-code | 2.1.287 |", out)
         self.assertIn("| go | 1.27.2 |", out)
-        self.assertIn("| nodejs (apt) | 22.22.1-1 |", out)
+        self.assertIn("| node | 26.13.0 |", out)
+        self.assertNotIn("nodejs (apt)", out)
         self.assertNotIn("SHA256", out)
         self.assertIn("20261008T000000Z", out)
         self.assertIn("sha256:ffffffffffff", out)
         self.assertIn("3 apt packages", out)
+
+    def test_versions_warns_when_apt_came_from_the_archive_fallback(self):
+        line = "archive-fallback 2026-11-05 (snapshot 20261104T000000Z unavailable)"
+        out = br.versions(self.write(json.dumps({"pins": {}, "apt": {}, "apt_source": line})))
+        self.assertIn("WARNING", out)
+        self.assertIn(line, out)
+
+    def test_versions_has_no_apt_warning_for_the_snapshot(self):
+        for data in ({"pins": {}, "apt": {}, "apt_source": "snapshot 20261104T000000Z"},
+                     {"pins": {}, "apt": {}}):
+            out = br.versions(self.write(json.dumps(data)))
+            self.assertNotIn("WARNING", out)
+            self.assertIn("apt snapshot", out)
+
+    def test_versions_lists_extras_pins_apart_from_the_build(self):
+        path = self.write(json.dumps({
+            "pins": {"GO_VERSION": "1.27.2", "KANDEV_VERSION": "0.98.0", "OPENCHAMBER_VERSION": "2.5.1",
+                     "REA_VERSION": "6.8.0"},
+            "apt": {}}))
+        out = br.versions(path)
+        build, sep, extras = out.partition("### Optional extras (not installed)")
+        self.assertEqual(sep, "### Optional extras (not installed)")
+        self.assertIn("| go | 1.27.2 |", build)
+        for name in ("kandev", "openchamber", "rea"):
+            self.assertNotIn(name, build)
+        self.assertIn("| kandev | 0.98.0 |", extras)
+        self.assertIn("| openchamber | 2.5.1 |", extras)
+        self.assertIn("| rea | 6.8.0 |", extras)
+        self.assertNotIn("| go |", extras)
+        self.assertTrue(out.endswith("\n\n"))
+
+    def test_versions_without_extras_pins_has_no_extras_section(self):
+        out = br.versions(self.write(json.dumps({"pins": {"GO_VERSION": "1.27.2"}, "apt": {}})))
+        self.assertIn("| go | 1.27.2 |", out)
+        self.assertNotIn("Optional extras", out)
+
+    def test_extras_keys_come_from_the_bump_resolver(self):
+        self.assertEqual(br.extra_names(),
+                         {"KANDEV_VERSION": "kandev", "OPENCHAMBER_VERSION": "openchamber", "REA_VERSION": "rea"})
 
     def test_pins_shows_changes_only(self):
         old = self.write("# c\nGO_VERSION=1.27.1\nGO_SHA256_AMD64=" + "a" * 64 + "\nGONE=1\nSAME=x\n")

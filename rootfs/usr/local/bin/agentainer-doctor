@@ -131,12 +131,45 @@ def mcp_check(home):
         return mcp_snapshot(box, locked=True)
 
 
-def collect(home=None, state_root=None, manifest_path=None, env=None, probe=None):
+def normalize_locale(name):
+    return name.strip().lower().replace("utf-8", "utf8")
+
+
+def installed_locales(env):
+    """Names from `locale -a`, normalized. Empty when the command is unavailable."""
+    executable = shutil.which("locale", path=env.get("PATH", ""))
+    if executable is None:
+        return set()
+    try:
+        done = subprocess.run([executable, "-a"], env={"PATH": env.get("PATH", ""), "LC_ALL": "C"},
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    return {normalize_locale(line) for line in done.stdout.decode("utf-8", "replace").splitlines() if line.strip()}
+
+
+LOCALE_VARIABLES = ("LANG", "LC_ALL", "LC_CTYPE", "LC_NUMERIC", "LC_TIME", "LC_COLLATE", "LC_MONETARY",
+                    "LC_MESSAGES", "LC_PAPER", "LC_NAME", "LC_ADDRESS", "LC_TELEPHONE",
+                    "LC_MEASUREMENT", "LC_IDENTIFICATION")
+
+
+def locale_check(env, locales):
+    available = {"c", "posix"} | locales
+    names = [name for name in LOCALE_VARIABLES if name in env]
+    missing = [name for name in names if env[name] and normalize_locale(env[name]) not in available]
+    if missing:
+        return result("locale", "warn", "{} names a locale this image does not have".format(", ".join(missing)))
+    return result("locale", "ok", "set locale variables name available locales")
+
+
+def collect(home=None, state_root=None, manifest_path=None, env=None, probe=None, locales=None):
     env = dict(os.environ) if env is None else env
     home = Path(env.get("HOME", str(Path.home()))) if home is None else home
     state_root = Path("/var/lib/agentainer") if state_root is None else state_root
     manifest_path = Path("/etc/agentainer/versions.json") if manifest_path is None else manifest_path
     probe = probe_tool if probe is None else probe
+    locales = installed_locales(env) if locales is None else locales
     checks = []
     try:
         manifest = json.loads(manifest_path.read_text())
@@ -163,6 +196,7 @@ def collect(home=None, state_root=None, manifest_path=None, env=None, probe=None
     checks.append(result("tools.persistence", "ok" if valid else "fail",
                          "tools root matches the selected mode and is writable" if valid
                          else "tools mode, active link or writable root is invalid; inspect agentainer-tools status"))
+    checks.append(locale_check(env, locales))
     claude = Path(env.get("CLAUDE_CONFIG_DIR") or str(home / ".claude"))
     codex = Path(env.get("CODEX_HOME") or str(home / ".codex"))
     opencode = Path(env.get("XDG_CONFIG_HOME") or str(home / ".config")) / "opencode"
