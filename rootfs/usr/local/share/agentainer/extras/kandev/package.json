@@ -1,6 +1,6 @@
 {
   "private": true,
   "dependencies": {
-    "kandev": "0.98.0"
+    "kandev": "0.99.1"
   }
 }
