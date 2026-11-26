@@ -127,6 +127,84 @@ class ParserTests(unittest.TestCase):
         with self.assertRaises(bv.LookupFailed):
             self._resolve(bv.r_gitleaks, release, text)
 
+    # Asset and checksum-list names copied from each project's latest release on 2026-11-26.
+    PUBLISHED_LIST_RESOLVERS = (
+        ("r_crane", "CRANE", "0.22.1", ["go-containerregistry_Linux_x86_64.tar.gz",
+                                         "go-containerregistry_Linux_arm64.tar.gz"], "checksums.txt"),
+        ("r_kyverno", "KYVERNO", "1.20.0", ["kyverno-cli_v1.20.0_linux_x86_64.tar.gz",
+                                             "kyverno-cli_v1.20.0_linux_arm64.tar.gz"], "checksums.txt"),
+        ("r_actionlint", "ACTIONLINT", "1.7.12", ["actionlint_1.7.12_linux_amd64.tar.gz",
+                                                  "actionlint_1.7.12_linux_arm64.tar.gz"],
+         "actionlint_1.7.12_checksums.txt"),
+        ("r_hadolint", "HADOLINT", "2.15.1", ["hadolint-linux-x86_64", "hadolint-linux-arm64"], "checksums.sha256"),
+        ("r_scc", "SCC", "4.1.0", ["scc_Linux_x86_64.tar.gz", "scc_Linux_arm64.tar.gz"], "checksums.txt"),
+        ("r_lazygit", "LAZYGIT", "0.66.3", ["lazygit_0.66.3_linux_x86_64.tar.gz",
+                                             "lazygit_0.66.3_linux_arm64.tar.gz"], "checksums.txt"),
+        ("r_glow", "GLOW", "3.0.0", ["glow_3.0.0_Linux_x86_64.tar.gz", "glow_3.0.0_Linux_arm64.tar.gz"],
+         "checksums.txt"),
+        ("r_syft", "SYFT", "1.57.2", ["syft_1.57.2_linux_amd64.tar.gz", "syft_1.57.2_linux_arm64.tar.gz"],
+         "syft_1.57.2_checksums.txt"),
+        ("r_grype", "GRYPE", "0.122.1", ["grype_0.122.1_linux_amd64.tar.gz", "grype_0.122.1_linux_arm64.tar.gz"],
+         "grype_0.122.1_checksums.txt"),
+    )
+
+    def test_cli_tool_resolvers_require_their_published_checksum_list(self):
+        for name, prefix, version, names, sums in self.PUBLISHED_LIST_RESOLVERS:
+            with self.subTest(resolver=name):
+                resolver = getattr(bv, name)
+                release, text = self._release(version, names, sums)
+                pins, _, verify = self._resolve(resolver, release, text)
+                self.assertEqual(pins, {prefix + "_VERSION": version, prefix + "_SHA256_AMD64": "a" * 64,
+                                        prefix + "_SHA256_ARM64": "b" * 64})
+                self.assertEqual([c.args[2] for c in verify.call_args_list], names)
+                self.assertIn(resolver, bv.RESOLVERS)
+                release, text = self._release(version, names, sums, with_sums=False)
+                with self.assertRaises(bv.LookupFailed):
+                    self._resolve(resolver, release, text)
+
+    # These projects publish no checksum list, so github_tool uses GitHub's asset digest.
+    DIGEST_ONLY_RESOLVERS = (
+        ("r_zizmor", "ZIZMOR", "1.33.1", ["zizmor-x86_64-unknown-linux-gnu.tar.gz",
+                                           "zizmor-aarch64-unknown-linux-gnu.tar.gz"]),
+        ("r_ast_grep", "AST_GREP", "0.51.3", ["app-x86_64-unknown-linux-gnu.zip", "app-aarch64-unknown-linux-gnu.zip"]),
+        ("r_difftastic", "DIFFTASTIC", "0.72.0", ["difft-0.72.0-x86_64-unknown-linux-gnu.tar.gz",
+                                                   "difft-0.72.0-aarch64-unknown-linux-gnu.tar.gz"]),
+        ("r_delta", "DELTA", "0.22.0", ["delta-0.22.0-x86_64-unknown-linux-gnu.tar.gz",
+                                         "delta-0.22.0-aarch64-unknown-linux-gnu.tar.gz"]),
+        ("r_hyperfine", "HYPERFINE", "2.0.0", ["hyperfine-v2.0.0-x86_64-unknown-linux-gnu.tar.gz",
+                                                "hyperfine-v2.0.0-aarch64-unknown-linux-gnu.tar.gz"]),
+    )
+
+    def test_cli_tool_resolvers_without_a_list_use_the_asset_digest(self):
+        for name, prefix, version, names in self.DIGEST_ONLY_RESOLVERS:
+            with self.subTest(resolver=name):
+                resolver = getattr(bv, name)
+                release, text = self._release(version, names, "unused", with_sums=False)
+                pins, fetched, _ = self._resolve(resolver, release, text)
+                self.assertEqual(pins, {prefix + "_VERSION": version, prefix + "_SHA256_AMD64": "a" * 64,
+                                        prefix + "_SHA256_ARM64": "b" * 64})
+                self.assertEqual(fetched.call_count, 0)
+                self.assertIn(resolver, bv.RESOLVERS)
+
+    def test_fj_resolver_hashes_the_codeberg_archives(self):
+        release = {"tag_name": "v0.7.0", "assets": [
+            {"name": "forgejo-cli-x86_64-linux.tar.gz", "browser_download_url": "https://example.com/amd64"},
+            {"name": "forgejo-cli-aarch64-linux.tar.gz", "browser_download_url": "https://example.com/arm64"}]}
+        blobs = {"https://example.com/amd64": b"amd64 archive", "https://example.com/arm64": b"arm64 archive"}
+        with patch.object(bv, "fetch_json", return_value=release) as fetched, \
+                patch.object(bv, "fetch_bytes", side_effect=blobs.__getitem__):
+            pins = bv.r_fj()
+        fetched.assert_called_once_with(bv.FJ_RELEASES)
+        self.assertEqual(pins, {"FJ_VERSION": "0.7.0",
+                                "FJ_SHA256_AMD64": hashlib.sha256(b"amd64 archive").hexdigest(),
+                                "FJ_SHA256_ARM64": hashlib.sha256(b"arm64 archive").hexdigest()})
+        self.assertIn(bv.r_fj, bv.RESOLVERS)
+        release["assets"] = release["assets"][:1]
+        with patch.object(bv, "fetch_json", return_value=release), \
+                patch.object(bv, "fetch_bytes", side_effect=blobs.__getitem__):
+            with self.assertRaises(bv.LookupFailed):
+                bv.r_fj()
+
     def test_checksum_list_must_be_the_named_file(self):
         # A different list in the release does not stand in for gosec_<version>_checksums.txt.
         names = ["gosec_2.30.0_linux_amd64.tar.gz", "gosec_2.30.0_linux_arm64.tar.gz"]
@@ -204,7 +282,9 @@ class ParserTests(unittest.TestCase):
         self.assertIn(tags[0], bv.CONTAINERSSH_AGENT_SERIES)
 
     def test_new_tool_pins_match_value_patterns(self):
-        for prefix in ("GOSEC", "GITLEAKS", "CONTAINERSSH_AGENT"):
+        for prefix in ("GOSEC", "GITLEAKS", "CONTAINERSSH_AGENT", "FJ", "CRANE", "KYVERNO", "ACTIONLINT", "ZIZMOR",
+                       "HADOLINT", "AST_GREP", "DIFFTASTIC", "DELTA", "SCC", "HYPERFINE", "LAZYGIT", "GLOW", "SYFT",
+                       "GRYPE"):
             self.assertIsNone(bv.invalid(prefix + "_VERSION", "1.2.3"))
             for arch in ("AMD64", "ARM64"):
                 self.assertIsNone(bv.invalid("%s_SHA256_%s" % (prefix, arch), "a" * 64))
@@ -213,7 +293,8 @@ class ParserTests(unittest.TestCase):
         checksum = "a" * 64
         for filename, contents in (("checksums-bsd", "SHA256 (tool.tar.gz) = " + checksum),
                                    ("tool.tar.gz.sha256", checksum + "  tool.tar.gz"),
-                                   ("codex-package_SHA256SUMS", checksum + "  tool.tar.gz")):
+                                   ("codex-package_SHA256SUMS", checksum + "  tool.tar.gz"),
+                                   ("checksums.sha256", checksum + " *tool.tar.gz")):
             release = {"tag_name": "v1", "assets": [
                 {"name": "tool.tar.gz", "digest": "sha256:" + checksum},
                 {"name": filename, "browser_download_url": "https://example.com/sums"}]}
