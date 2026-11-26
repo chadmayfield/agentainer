@@ -12,6 +12,12 @@ if ! flock -w 60 9; then
 fi
 [ -f "$marker" ] && return 0
 if [ ! -e "$HOME/.config/opencode/service.json" ] && [ ! -L "$HOME/.config/opencode/service.json" ]; then
-	opencode service set disabled true >/dev/null 9>&-
+	# OpenCode 2.4.2 sets the stderr it inherits to non-blocking and leaves it so. That
+	# file description is shared with the container command, and ansible then refuses to
+	# run ("Ansible requires blocking IO"). Capturing stderr keeps it off the shared one.
+	if ! err=$(opencode service set disabled true 2>&1 >/dev/null 9>&-); then
+		warn "could not disable the OpenCode service: $err"
+		return 1
+	fi
 fi
 touch "$marker"
