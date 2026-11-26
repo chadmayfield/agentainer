@@ -10,6 +10,8 @@ case "${TARGETARCH:?}" in
 amd64)
 	A=AMD64
 	TRIPLE=x86_64
+	# Release names that pair x86_64 with arm64 (crane, kyverno, hadolint, scc, lazygit, glow).
+	X86_ARM=x86_64
 	TRIVY_ARCH=64bit
 	GITLEAKS_ARCH=x64
 	OC=linux-x64-baseline
@@ -19,6 +21,7 @@ amd64)
 arm64)
 	A=ARM64
 	TRIPLE=aarch64
+	X86_ARM=arm64
 	TRIVY_ARCH=ARM64
 	GITLEAKS_ARCH=arm64
 	OC=linux-arm64
@@ -227,6 +230,89 @@ tea)
 	sh $F "https://gitea.com/gitea/tea/releases/download/v${TEA_VERSION}/tea-${TEA_VERSION}-linux-${TARGETARCH}.xz" sha256 "$(pin TEA_SHA256)" tea.xz
 	xz -d tea.xz
 	install -m 0755 tea /usr/local/bin/tea
+	;;
+fj)
+	# forgejo-cli, from Codeberg. It publishes no checksums; the pin is the SHA-256 that
+	# scripts/bump_versions.py (r_fj) computed from the archive.
+	sh $F "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/v${FJ_VERSION}/forgejo-cli-${TRIPLE}-linux.tar.gz" sha256 "$(pin FJ_SHA256)" fj.tgz
+	tar -xzf fj.tgz fj
+	install -m 0755 fj /usr/local/bin/fj
+	;;
+crane)
+	# The go-containerregistry archive also holds gcrane and krane; only crane is installed.
+	sh $F "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_${X86_ARM}.tar.gz" sha256 "$(pin CRANE_SHA256)" crane.tgz
+	tar -xzf crane.tgz crane
+	install -m 0755 crane /usr/local/bin/crane
+	;;
+kyverno)
+	sh $F "https://github.com/kyverno/kyverno/releases/download/v${KYVERNO_VERSION}/kyverno-cli_v${KYVERNO_VERSION}_linux_${X86_ARM}.tar.gz" sha256 "$(pin KYVERNO_SHA256)" kyverno.tgz
+	tar -xzf kyverno.tgz kyverno
+	install -m 0755 kyverno /usr/local/bin/kyverno
+	;;
+actionlint)
+	sh $F "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_${TARGETARCH}.tar.gz" sha256 "$(pin ACTIONLINT_SHA256)" actionlint.tgz
+	tar -xzf actionlint.tgz actionlint
+	install -m 0755 actionlint /usr/local/bin/actionlint
+	;;
+zizmor)
+	sh $F "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-${TRIPLE}-unknown-linux-gnu.tar.gz" sha256 "$(pin ZIZMOR_SHA256)" zizmor.tgz
+	tar -xzf zizmor.tgz zizmor
+	install -m 0755 zizmor /usr/local/bin/zizmor
+	;;
+hadolint)
+	# A bare static binary per architecture.
+	sh $F "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-linux-${X86_ARM}" sha256 "$(pin HADOLINT_SHA256)" hadolint
+	install -m 0755 hadolint /usr/local/bin/hadolint
+	;;
+ast-grep)
+	# The zip also holds sg, which ast-grep 0.51.3 marks as deprecated ("Use `ast-grep`
+	# instead" when run); only ast-grep is installed.
+	sh $F "https://github.com/ast-grep/ast-grep/releases/download/${AST_GREP_VERSION}/app-${TRIPLE}-unknown-linux-gnu.zip" sha256 "$(pin AST_GREP_SHA256)" ast-grep.zip
+	extract_zip ast-grep.zip ast-grep-app
+	install -m 0755 ast-grep-app/ast-grep /usr/local/bin/ast-grep
+	;;
+difftastic)
+	sh $F "https://github.com/Wilfred/difftastic/releases/download/${DIFFTASTIC_VERSION}/difft-${DIFFTASTIC_VERSION}-${TRIPLE}-unknown-linux-gnu.tar.gz" sha256 "$(pin DIFFTASTIC_SHA256)" difft.tgz
+	tar -xzf difft.tgz difft
+	install -m 0755 difft /usr/local/bin/difft
+	;;
+delta)
+	D="delta-${DELTA_VERSION}-${TRIPLE}-unknown-linux-gnu"
+	sh $F "https://github.com/dandavison/delta/releases/download/${DELTA_VERSION}/${D}.tar.gz" sha256 "$(pin DELTA_SHA256)" delta.tgz
+	tar -xzf delta.tgz "${D}/delta"
+	install -m 0755 "${D}/delta" /usr/local/bin/delta
+	;;
+scc)
+	sh $F "https://github.com/boyter/scc/releases/download/v${SCC_VERSION}/scc_Linux_${X86_ARM}.tar.gz" sha256 "$(pin SCC_SHA256)" scc.tgz
+	tar -xzf scc.tgz scc
+	install -m 0755 scc /usr/local/bin/scc
+	;;
+hyperfine)
+	H="hyperfine-v${HYPERFINE_VERSION}-${TRIPLE}-unknown-linux-gnu"
+	sh $F "https://github.com/sharkdp/hyperfine/releases/download/v${HYPERFINE_VERSION}/${H}.tar.gz" sha256 "$(pin HYPERFINE_SHA256)" hyperfine.tgz
+	tar -xzf hyperfine.tgz "${H}/hyperfine"
+	install -m 0755 "${H}/hyperfine" /usr/local/bin/hyperfine
+	;;
+lazygit)
+	sh $F "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_linux_${X86_ARM}.tar.gz" sha256 "$(pin LAZYGIT_SHA256)" lazygit.tgz
+	tar -xzf lazygit.tgz lazygit
+	install -m 0755 lazygit /usr/local/bin/lazygit
+	;;
+glow)
+	G="glow_${GLOW_VERSION}_Linux_${X86_ARM}"
+	sh $F "https://github.com/charmbracelet/glow/releases/download/v${GLOW_VERSION}/${G}.tar.gz" sha256 "$(pin GLOW_SHA256)" glow.tgz
+	tar -xzf glow.tgz "${G}/glow"
+	install -m 0755 "${G}/glow" /usr/local/bin/glow
+	;;
+syft)
+	sh $F "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${TARGETARCH}.tar.gz" sha256 "$(pin SYFT_SHA256)" syft.tgz
+	tar -xzf syft.tgz syft
+	install -m 0755 syft /usr/local/bin/syft
+	;;
+grype)
+	sh $F "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_${TARGETARCH}.tar.gz" sha256 "$(pin GRYPE_SHA256)" grype.tgz
+	tar -xzf grype.tgz grype
+	install -m 0755 grype /usr/local/bin/grype
 	;;
 kubectl)
 	# https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/

@@ -228,7 +228,7 @@ def asset_sha256(release, name, fetch_text=None):
     files = [asset for asset in assets if asset["name"] == name + ".sha256"]
     if not files:
         files = [asset for asset in assets if asset["name"].endswith(("checksums.txt", "SHA256SUMS"))
-                 or asset["name"] in ("sha256.sum", "checksums-bsd")]
+                 or asset["name"] in ("sha256.sum", "checksums-bsd", "checksums.sha256")]
     published = set()
     for asset in files:
         text = (fetch_text or fetch)(asset["browser_download_url"])
@@ -496,6 +496,136 @@ def r_tea():
             raise LookupFailed("tea: %s not found" % name)
         out["TEA_SHA256_" + up] = parse_checksum_file(fetch(assets[0]["browser_download_url"]))
     return out
+
+
+# forgejo-cli (fj) releases on Codeberg, a Forgejo instance:
+# https://codeberg.org/forgejo-contrib/forgejo-cli/releases
+FJ_RELEASES = "https://codeberg.org/api/v1/repos/forgejo-contrib/forgejo-cli/releases/latest"
+FJ_TRIPLES = (("AMD64", "x86_64"), ("ARM64", "aarch64"))
+
+
+def r_fj():
+    # forgejo-cli publishes no checksums and the Forgejo release API returns no asset digest,
+    # so the pins are SHA-256 values computed here from the downloaded archives.
+    rel = fetch_json(FJ_RELEASES)
+    ver = strip_v(rel["tag_name"])
+    out = {"FJ_VERSION": ver}
+    for up, triple in FJ_TRIPLES:
+        name = "forgejo-cli-%s-linux.tar.gz" % triple
+        assets = [a for a in rel.get("assets", []) if a["name"] == name]
+        if len(assets) != 1:
+            raise LookupFailed("fj: %s missing or ambiguous in %s" % (name, rel["tag_name"]))
+        out["FJ_SHA256_" + up] = hashlib.sha256(fetch_bytes(assets[0]["browser_download_url"])).hexdigest()
+    return out
+
+
+def r_crane():
+    # Release archives and checksums.txt: https://github.com/google/go-containerregistry/releases
+    return github_tool("CRANE", "google/go-containerregistry", {
+        "AMD64": lambda v: "go-containerregistry_Linux_x86_64.tar.gz",
+        "ARM64": lambda v: "go-containerregistry_Linux_arm64.tar.gz"},
+        checksums=lambda v: "checksums.txt")
+
+
+def r_kyverno():
+    # The CLI archives keep the v in their names: https://github.com/kyverno/kyverno/releases
+    return github_tool("KYVERNO", "kyverno/kyverno", {
+        "AMD64": lambda v: "kyverno-cli_v%s_linux_x86_64.tar.gz" % v,
+        "ARM64": lambda v: "kyverno-cli_v%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "checksums.txt")
+
+
+def r_actionlint():
+    # Release archives and actionlint_<version>_checksums.txt: https://github.com/rhysd/actionlint/releases
+    return github_tool("ACTIONLINT", "rhysd/actionlint", {
+        "AMD64": lambda v: "actionlint_%s_linux_amd64.tar.gz" % v,
+        "ARM64": lambda v: "actionlint_%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "actionlint_%s_checksums.txt" % v)
+
+
+def r_zizmor():
+    # No checksum list; github_tool falls back to GitHub's asset digest.
+    # https://github.com/zizmorcore/zizmor/releases
+    return github_tool("ZIZMOR", "zizmorcore/zizmor", {
+        "AMD64": lambda v: "zizmor-x86_64-unknown-linux-gnu.tar.gz",
+        "ARM64": lambda v: "zizmor-aarch64-unknown-linux-gnu.tar.gz"})
+
+
+def r_hadolint():
+    # Bare binaries and checksums.sha256: https://github.com/hadolint/hadolint/releases
+    return github_tool("HADOLINT", "hadolint/hadolint", {
+        "AMD64": lambda v: "hadolint-linux-x86_64",
+        "ARM64": lambda v: "hadolint-linux-arm64"},
+        checksums=lambda v: "checksums.sha256")
+
+
+def r_ast_grep():
+    # Zip archives without a checksum list; GitHub's asset digest is the fallback.
+    # https://github.com/ast-grep/ast-grep/releases
+    return github_tool("AST_GREP", "ast-grep/ast-grep", {
+        "AMD64": lambda v: "app-x86_64-unknown-linux-gnu.zip",
+        "ARM64": lambda v: "app-aarch64-unknown-linux-gnu.zip"})
+
+
+def r_difftastic():
+    # No checksum list; GitHub's asset digest is the fallback. https://github.com/Wilfred/difftastic/releases
+    return github_tool("DIFFTASTIC", "Wilfred/difftastic", {
+        "AMD64": lambda v: "difft-%s-x86_64-unknown-linux-gnu.tar.gz" % v,
+        "ARM64": lambda v: "difft-%s-aarch64-unknown-linux-gnu.tar.gz" % v})
+
+
+def r_delta():
+    # No checksum list; GitHub's asset digest is the fallback. https://github.com/dandavison/delta/releases
+    return github_tool("DELTA", "dandavison/delta", {
+        "AMD64": lambda v: "delta-%s-x86_64-unknown-linux-gnu.tar.gz" % v,
+        "ARM64": lambda v: "delta-%s-aarch64-unknown-linux-gnu.tar.gz" % v})
+
+
+def r_scc():
+    # Release archives and checksums.txt: https://github.com/boyter/scc/releases
+    return github_tool("SCC", "boyter/scc", {
+        "AMD64": lambda v: "scc_Linux_x86_64.tar.gz",
+        "ARM64": lambda v: "scc_Linux_arm64.tar.gz"},
+        checksums=lambda v: "checksums.txt")
+
+
+def r_hyperfine():
+    # No checksum list; GitHub's asset digest is the fallback. https://github.com/sharkdp/hyperfine/releases
+    return github_tool("HYPERFINE", "sharkdp/hyperfine", {
+        "AMD64": lambda v: "hyperfine-v%s-x86_64-unknown-linux-gnu.tar.gz" % v,
+        "ARM64": lambda v: "hyperfine-v%s-aarch64-unknown-linux-gnu.tar.gz" % v})
+
+
+def r_lazygit():
+    # Release archives and checksums.txt: https://github.com/jesseduffield/lazygit/releases
+    return github_tool("LAZYGIT", "jesseduffield/lazygit", {
+        "AMD64": lambda v: "lazygit_%s_linux_x86_64.tar.gz" % v,
+        "ARM64": lambda v: "lazygit_%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "checksums.txt")
+
+
+def r_glow():
+    # Release archives and checksums.txt: https://github.com/charmbracelet/glow/releases
+    return github_tool("GLOW", "charmbracelet/glow", {
+        "AMD64": lambda v: "glow_%s_Linux_x86_64.tar.gz" % v,
+        "ARM64": lambda v: "glow_%s_Linux_arm64.tar.gz" % v},
+        checksums=lambda v: "checksums.txt")
+
+
+def r_syft():
+    # Release archives and syft_<version>_checksums.txt: https://github.com/anchore/syft/releases
+    return github_tool("SYFT", "anchore/syft", {
+        "AMD64": lambda v: "syft_%s_linux_amd64.tar.gz" % v,
+        "ARM64": lambda v: "syft_%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "syft_%s_checksums.txt" % v)
+
+
+def r_grype():
+    # Release archives and grype_<version>_checksums.txt: https://github.com/anchore/grype/releases
+    return github_tool("GRYPE", "anchore/grype", {
+        "AMD64": lambda v: "grype_%s_linux_amd64.tar.gz" % v,
+        "ARM64": lambda v: "grype_%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "grype_%s_checksums.txt" % v)
 
 
 # Claude Code's native release host, the one https://claude.ai/install.sh downloads from.
@@ -1100,7 +1230,9 @@ def r_buildkit():
 
 
 RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_gosec, r_gitleaks, r_containerssh_agent,
-             r_abtop, r_unslop, r_golangci, r_kubectl, r_helm, r_awscli, r_tea, r_claude, r_node, r_codex, r_agy,
+             r_abtop, r_unslop, r_golangci, r_kubectl, r_helm, r_awscli, r_tea, r_fj, r_crane, r_kyverno,
+             r_actionlint, r_zizmor, r_hadolint, r_ast_grep, r_difftastic, r_delta, r_scc, r_hyperfine,
+             r_lazygit, r_glow, r_syft, r_grype, r_claude, r_node, r_codex, r_agy,
              r_opencode, r_k8s_images, r_buildkit, r_extras]
 
 
