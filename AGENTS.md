@@ -17,7 +17,7 @@ Agentainer is one public container image that bundles four AI coding agents (Cla
 | `tests/` | Container tests (`NN-*.sh`), host tests (`host/`), unit tests (`unit/`), fixtures |
 | `docs/` | User documentation |
 | `.github/workflows/` | CI, release and the scheduled update |
-| `Containerfile.kelos`, `rootfs-kelos/`, `tests/kelos/` | The Kelos variant image, its files and its tests ([docs/kelos.md](docs/kelos.md)). Its pins live in `Containerfile.kelos`, not `versions.env`. CI does not build or test it. |
+| `Containerfile.kelos`, `rootfs-kelos/`, `tests/kelos/` | The Kelos variant image, its files and its tests ([docs/kelos.md](docs/kelos.md)). Its pins live in `Containerfile.kelos`, not `versions.env`, and `bump_versions.py` (`r_kelos`) updates them. CI does not build or test it. |
 
 `docs/private/` holds the maintainer's design notes, may be stale, and is ignored by git. Never commit anything under it.
 

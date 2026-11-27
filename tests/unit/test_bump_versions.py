@@ -2037,5 +2037,343 @@ class ReleaseAgeTests(unittest.TestCase):
         self.assertIn("moby/buildkit v0.30.0 skipped", bv.YOUNG_RELEASES[0])
 
 
+
+KELOS_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+FORK_COMMIT = "c" * 40
+TAG_OBJECT = "d" * 40
+GOLANG_DIGEST = "sha256:" + "e" * 64
+INDEX_DIGEST = "sha256:" + "f" * 64
+KELOS_CONTAINERFILE_TEXT = (
+    "# pins\n"
+    "ARG AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261024.1@sha256:" + "1" * 64 + "\n"
+    "ARG GOLANG_IMAGE=docker.io/library/golang:1.25.14@sha256:" + "2" * 64 + "\n"
+    "ARG KELOS_FORK_COMMIT=" + "3" * 40 + "\n"
+    "ARG KELOS_CAPTURE_VERSION=v0.62.0-proxy.3\n"
+    "FROM --platform=$BUILDPLATFORM ${GOLANG_IMAGE} AS kelos-capture\n"
+    "ARG KELOS_FORK_COMMIT\n")
+
+
+def ref(tag, sha, kind="commit"):
+    return {"ref": "refs/tags/" + tag, "object": {"sha": sha, "type": kind}}
+
+
+class KelosParserTests(unittest.TestCase):
+    def test_highest_rest_tag_by_version_then_n(self):
+        refs = [ref("v0.65.0", "a" * 40), ref("v0.64.0-rest.9", "b" * 40), ref("v0.65.0-rest.1", "c" * 40),
+                ref("v0.65.0-rest.2", "d" * 40, "tag"), ref("v0.65.0-rest.10", "e" * 40),
+                ref("v0.65.0-rest.01", "f" * 40), ref("v0.65.0-proxy.3", "0" * 40), ref("v0.9.0-rest.1", "1" * 40)]
+        self.assertEqual(bv.kelos_rest_tags(refs), [
+            ("v0.65.0-rest.10", "e" * 40, "commit"), ("v0.65.0-rest.2", "d" * 40, "tag"),
+            ("v0.65.0-rest.1", "c" * 40, "commit"), ("v0.64.0-rest.9", "b" * 40, "commit"),
+            ("v0.9.0-rest.1", "1" * 40, "commit")])
+
+    def test_version_beats_a_higher_n(self):
+        refs = [ref("v0.65.0-rest.7", "a" * 40), ref("v0.66.0-rest.1", "b" * 40, "tag")]
+        self.assertEqual(bv.kelos_rest_tags(refs)[0], ("v0.66.0-rest.1", "b" * 40, "tag"))
+
+    def test_no_rest_tag_is_a_failure(self):
+        with self.assertRaises(bv.LookupFailed):
+            bv.kelos_rest_tags([ref("v0.65.0", "a" * 40), {"ref": "refs/heads/v0.65.0-rest.1"}])
+
+    def test_annotated_tags_are_peeled_to_the_commit(self):
+        responses = {"https://api.github.com/repos/o/r/git/tags/" + "1" * 40: {"object": {"sha": "2" * 40, "type": "tag"}},
+                     "https://api.github.com/repos/o/r/git/tags/" + "2" * 40: {"object": {"sha": FORK_COMMIT, "type": "commit"}}}
+        with patch.object(bv, "fetch_json", side_effect=lambda url: responses[url]):
+            self.assertEqual(bv.peel_tag("o/r", "1" * 40, "tag"), FORK_COMMIT)
+
+    def test_lightweight_tag_needs_no_request(self):
+        with patch.object(bv, "fetch_json", side_effect=AssertionError("must not fetch")):
+            self.assertEqual(bv.peel_tag("o/r", FORK_COMMIT, "commit"), FORK_COMMIT)
+
+    def test_tag_of_a_tree_or_bad_sha_is_refused(self):
+        with patch.object(bv, "fetch_json", return_value={"object": {"sha": "9" * 40, "type": "tree"}}):
+            with self.assertRaises(bv.LookupFailed):
+                bv.peel_tag("o/r", "1" * 40, "tag")
+        with self.assertRaises(bv.LookupFailed):
+            bv.peel_tag("o/r", "not-a-sha", "commit")
+
+    def test_endless_tag_chain_is_refused(self):
+        with patch.object(bv, "fetch_json", return_value={"object": {"sha": "1" * 40, "type": "tag"}}):
+            with self.assertRaises(bv.LookupFailed):
+                bv.peel_tag("o/r", "1" * 40, "tag")
+
+    def test_go_mod_requirement(self):
+        self.assertEqual(bv.parse_go_mod_go("module x\n\ngo 1.27.4\n"), (1, 27, 4))
+        self.assertEqual(bv.parse_go_mod_go("module x\ngo 1.25\n"), (1, 25))
+        self.assertEqual(bv.parse_go_mod_go("module x\ngo 1.25.0\ntoolchain go1.26.2\n"), (1, 26, 2))
+        with self.assertRaises(bv.LookupFailed):
+            bv.parse_go_mod_go("module x\n")
+
+    def test_git_blob_sha_matches_git(self):
+        # git hash-object of the bytes "hello\n".
+        self.assertEqual(bv.git_blob_sha(b"hello\n"), "ce013625030ba8dba906f756967f9e9ca394464a")
+
+    def test_containerfile_args_are_read_and_rewritten_in_place(self):
+        args = bv.read_containerfile_args(KELOS_CONTAINERFILE_TEXT, bv.KELOS_ARGS)
+        self.assertEqual(args["KELOS_CAPTURE_VERSION"], "v0.62.0-proxy.3")
+        out = bv.rewrite_containerfile_args(KELOS_CONTAINERFILE_TEXT, {"KELOS_CAPTURE_VERSION": "v0.65.0-rest.1"})
+        self.assertEqual(out, KELOS_CONTAINERFILE_TEXT.replace("v0.62.0-proxy.3", "v0.65.0-rest.1"))
+        # The ARG line without a value inside the stage stays as it is.
+        out = bv.rewrite_containerfile_args(KELOS_CONTAINERFILE_TEXT, {"KELOS_FORK_COMMIT": FORK_COMMIT})
+        self.assertIn("ARG KELOS_FORK_COMMIT=" + FORK_COMMIT + "\n", out)
+        self.assertTrue(out.endswith("ARG KELOS_FORK_COMMIT\n"))
+
+    def test_missing_or_repeated_arg_is_refused(self):
+        with self.assertRaises(bv.LookupFailed):
+            bv.read_containerfile_args("ARG X=1\n", ["KELOS_FORK_COMMIT"])
+        with self.assertRaises(bv.LookupFailed):
+            bv.rewrite_containerfile_args("ARG A=1\nARG A=2\n", {"A": "3"})
+
+    def test_image_downgrades_are_refused(self):
+        old = bv.read_containerfile_args(KELOS_CONTAINERFILE_TEXT, bv.KELOS_ARGS)
+        bv.kelos_images_not_older(old, dict(old))
+        for key, value in (("AGENTAINER_IMAGE", "ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261019.1@" + INDEX_DIGEST),
+                           ("GOLANG_IMAGE", "docker.io/library/golang:1.25.9@" + GOLANG_DIGEST)):
+            with self.subTest(key=key), self.assertRaises(bv.LookupFailed):
+                bv.kelos_images_not_older(old, dict(old, **{key: value}))
+
+    def test_capture_tag_order(self):
+        self.assertFalse(bv.kelos_capture_older("v0.62.0-proxy.3", "v0.62.0-rest.1"))
+        self.assertTrue(bv.kelos_capture_older("v0.62.0-proxy.3", "v0.61.0-rest.4"))
+        self.assertTrue(bv.kelos_capture_older("v0.65.0-rest.2", "v0.65.0-rest.1"))
+        self.assertFalse(bv.kelos_capture_older("v0.65.0-rest.2", "v0.65.0-rest.3"))
+
+    def test_the_kelos_pins_in_the_repo_pass_validation(self):
+        with open(os.path.join(KELOS_ROOT, "Containerfile.kelos")) as f:
+            args = bv.read_containerfile_args(f.read(), bv.KELOS_ARGS)
+        for key, value in args.items():
+            with self.subTest(key=key):
+                self.assertIsNone(bv.invalid(key, value))
+        self.assertIsNotNone(bv.kelos_rest_key(args["KELOS_CAPTURE_VERSION"]))
+
+    def test_source_md_names_the_release_the_copies_come_from(self):
+        with open(os.path.join(KELOS_ROOT, "rootfs-kelos", "SOURCE.md")) as f:
+            self.assertIn("tag %s," % bv.KELOS_COPIED_FROM, f.read())
+
+
+class FakeResponse(io.BytesIO):
+    def __init__(self, body, headers):
+        super().__init__(body)
+        self.headers = headers
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class GhcrDigestTests(unittest.TestCase):
+    def digest(self, body, headers):
+        requests = []
+
+        def opener(req):
+            requests.append(req)
+            return FakeResponse(body, headers)
+        with patch.object(bv, "fetch_json", return_value={"token": "anon"}) as fj, \
+                patch.object(bv, "open_https", side_effect=opener):
+            result = bv.ghcr_index_digest("chadmayfield/agentainer", "0.1.0-dev.20261104.1")
+        fj.assert_called_once_with("https://ghcr.io/token?scope=repository:chadmayfield/agentainer:pull")
+        self.assertEqual(requests[0].full_url,
+                         "https://ghcr.io/v2/chadmayfield/agentainer/manifests/0.1.0-dev.20261104.1")
+        self.assertEqual(requests[0].get_header("Authorization"), "Bearer anon")
+        return result
+
+    def test_digest_is_the_sha256_of_the_index(self):
+        body = b'{"schemaVersion":2}'
+        want = "sha256:" + hashlib.sha256(body).hexdigest()
+        self.assertEqual(self.digest(body, {"Content-Type": "application/vnd.oci.image.index.v1+json",
+                                            "Docker-Content-Digest": want}), want)
+
+    def test_header_that_disagrees_is_refused(self):
+        with self.assertRaises(bv.LookupFailed):
+            self.digest(b"{}", {"Content-Type": "application/vnd.oci.image.index.v1+json",
+                                "Docker-Content-Digest": INDEX_DIGEST})
+
+    def test_single_platform_manifest_is_refused(self):
+        with self.assertRaises(bv.LookupFailed):
+            self.digest(b"{}", {"Content-Type": "application/vnd.oci.image.manifest.v1+json"})
+
+
+class KelosResolverTests(unittest.TestCase):
+    """r_kelos against a scratch tree and mocked GitHub, Go, Docker Hub and ghcr.io responses."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="cx-kelos-")
+        self.addCleanup(shutil.rmtree, self.dir)
+        with open(os.path.join(self.dir, "versions.env"), "w") as f:
+            f.write("GO_VERSION=1.27.4\n")
+        with open(os.path.join(self.dir, "Containerfile.kelos"), "w") as f:
+            f.write(KELOS_CONTAINERFILE_TEXT)
+        os.makedirs(os.path.join(self.dir, "rootfs-kelos"))
+        self.copies = {}
+        for local, upstream in bv.KELOS_COPIES:
+            data = ("copy of %s\n" % upstream).encode()
+            with open(os.path.join(self.dir, local), "wb") as f:
+                f.write(data)
+            self.copies[upstream] = bv.git_blob_sha(data)
+        self.go_mod = "module github.com/kelos-dev/kelos\n\ngo 1.27.4\n"
+        self.now = datetime.datetime(2026, 12, 10, tzinfo=datetime.timezone.utc)
+        # Publish times: upstream releases and fork commits, days before now.
+        self.upstream_age = {"v0.65.0": 30, "v0.64.0": 60}
+        self.commit_age = {FORK_COMMIT: 10, "2" * 40: 20}
+        self.codex_at_tag = "a" * 40
+        self.codex_upstream = "a" * 40
+        self.go = "1.27.4"
+
+    def fetch(self, url):
+        gh = "https://api.github.com/repos/"
+        if url == gh + "chadmayfield/kelos/git/matching-refs/tags/v":
+            return [ref("v0.62.0", "1" * 40), ref("v0.65.0-rest.1", TAG_OBJECT, "tag"), ref("v0.64.0-rest.3", "2" * 40)]
+        if url == gh + "chadmayfield/kelos/git/tags/" + TAG_OBJECT:
+            return {"object": {"sha": FORK_COMMIT, "type": "commit"}}
+        for version, days in self.upstream_age.items():
+            if url == gh + "kelos-dev/kelos/releases/tags/" + version:
+                return {"published_at": (self.now - datetime.timedelta(days=days)).isoformat()}
+        for commit, days in self.commit_age.items():
+            if url == gh + "chadmayfield/kelos/commits/" + commit:
+                return {"commit": {"committer": {"date": (self.now - datetime.timedelta(days=days)).isoformat()}}}
+        for commit in self.commit_age:
+            for upstream, sha in self.copies.items():
+                if url == gh + "chadmayfield/kelos/contents/%s?ref=%s" % (upstream, commit):
+                    return {"sha": sha}
+            if url == gh + "chadmayfield/kelos/contents/codex/kelos_entrypoint.sh?ref=" + commit:
+                return {"sha": self.codex_at_tag}
+        if url == gh + "kelos-dev/kelos/contents/codex/kelos_entrypoint.sh?ref=v0.62.0":
+            return {"sha": self.codex_upstream}
+        if url.startswith(gh + "chadmayfield/kelos/contents/go.mod?ref="):
+            return {"content": base64.b64encode(self.go_mod.encode()).decode()}
+        if url == "https://go.dev/dl/?mode=json":
+            return [{"version": "go" + self.go, "stable": True,
+                     "files": [{"os": "linux", "arch": a, "kind": "archive", "sha256": "0" * 64}
+                               for a in ("amd64", "arm64")]}]
+        if url == "https://hub.docker.com/v2/repositories/library/golang/tags/" + self.go:
+            return {"digest": GOLANG_DIGEST}
+        if url == gh + "chadmayfield/agentainer/releases?per_page=100":
+            return [{"tag_name": "v0.1.0-dev.20261104.1", "prerelease": True},
+                    {"tag_name": "v0.1.0-dev.20261024.1", "prerelease": True}]
+        raise AssertionError("unexpected fetch " + url)
+
+    def run_main(self):
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(bv, "fetch_json", side_effect=self.fetch), \
+                patch.object(bv, "utcnow", return_value=self.now), \
+                patch.object(bv, "ghcr_index_digest", return_value=INDEX_DIGEST) as digest, \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = bv.main(["--file", os.path.join(self.dir, "versions.env"), "--only", "r_kelos"])
+        if rc == 0:
+            digest.assert_called_once_with("chadmayfield/agentainer", "0.1.0-dev.20261104.1")
+        return rc, out.getvalue(), err.getvalue()
+
+    def read(self, rel):
+        with open(os.path.join(self.dir, rel)) as f:
+            return f.read()
+
+    def test_pins_are_written_to_the_containerfile_only(self):
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 0, err)
+        args = bv.read_containerfile_args(self.read("Containerfile.kelos"), bv.KELOS_ARGS)
+        self.assertEqual(args, {
+            "AGENTAINER_IMAGE": "ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1@" + INDEX_DIGEST,
+            "GOLANG_IMAGE": "docker.io/library/golang:1.27.4@" + GOLANG_DIGEST,
+            "KELOS_FORK_COMMIT": FORK_COMMIT,
+            "KELOS_CAPTURE_VERSION": "v0.65.0-rest.1"})
+        self.assertEqual(self.read("versions.env"), "GO_VERSION=1.27.4\n")
+        self.assertIn("Containerfile.kelos KELOS_CAPTURE_VERSION: v0.62.0-proxy.3 -> v0.65.0-rest.1", out)
+        self.assertIn("Containerfile.kelos AGENTAINER_IMAGE:", out)
+        # A second run finds nothing to change.
+        before = self.read("Containerfile.kelos")
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.read("Containerfile.kelos"), before)
+        self.assertNotIn("Containerfile.kelos", out)
+
+    def fork_args(self):
+        args = bv.read_containerfile_args(self.read("Containerfile.kelos"), bv.KELOS_ARGS)
+        return args["KELOS_FORK_COMMIT"], args["KELOS_CAPTURE_VERSION"]
+
+    def test_a_young_fork_commit_falls_back_to_the_next_tag(self):
+        self.commit_age[FORK_COMMIT] = 1
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.fork_args(), ("2" * 40, "v0.64.0-rest.3"))
+        self.assertIn("release age: newer release chadmayfield/kelos v0.65.0-rest.1 skipped, published 24 hours ago", out)
+
+    def test_a_young_upstream_release_falls_back_to_the_next_tag(self):
+        self.upstream_age["v0.65.0"] = 2
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.fork_args(), ("2" * 40, "v0.64.0-rest.3"))
+        self.assertIn("release age: newer release chadmayfield/kelos v0.65.0-rest.1 skipped", out)
+
+    def test_a_fallback_below_the_pin_keeps_the_pin(self):
+        with open(os.path.join(self.dir, "Containerfile.kelos"), "w") as f:
+            f.write(KELOS_CONTAINERFILE_TEXT.replace("v0.62.0-proxy.3", "v0.64.0-rest.5"))
+        self.commit_age[FORK_COMMIT] = 1
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.fork_args(), ("3" * 40, "v0.64.0-rest.5"))
+        self.assertIn("sorts below the v0.64.0-rest.5 pin; keeping it", err)
+        # The image pins still move.
+        self.assertIn("Containerfile.kelos AGENTAINER_IMAGE:", out)
+
+    def test_no_tag_old_enough_keeps_the_fork_pins(self):
+        self.commit_age = {FORK_COMMIT: 1, "2" * 40: 2}
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.fork_args(), ("3" * 40, "v0.62.0-proxy.3"))
+        self.assertIn("keeping the current pin", err)
+
+    def test_a_failed_r_kelos_does_not_hold_back_other_pins(self):
+        self.codex_at_tag = "b" * 40
+
+        def other():
+            return {"GO_VERSION": "1.27.5"}
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(bv, "fetch_json", side_effect=self.fetch), \
+                patch.object(bv, "utcnow", return_value=self.now), \
+                patch.object(bv, "ghcr_index_digest", return_value=INDEX_DIGEST), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = bv.main(["--file", os.path.join(self.dir, "versions.env")], resolvers=[bv.r_kelos, other])
+        self.assertEqual(rc, 1, err.getvalue())
+        self.assertIn("r_kelos:", err.getvalue())
+        self.assertEqual(self.read("versions.env"), "GO_VERSION=1.27.5\n")
+        self.assertEqual(self.read("Containerfile.kelos"), KELOS_CONTAINERFILE_TEXT)
+
+    def assert_refused(self, needle):
+        before = self.read("Containerfile.kelos")
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(needle, err)
+        self.assertEqual(self.read("Containerfile.kelos"), before)
+
+    def test_a_changed_copied_file_stops_the_update(self):
+        self.copies["claude-code/kelos_entrypoint.sh"] = "9" * 40
+        self.assert_refused("claude-code/kelos_entrypoint.sh differs from rootfs-kelos/kelos_entrypoint_claude.sh")
+
+    def test_a_changed_codex_entrypoint_stops_the_update(self):
+        self.codex_at_tag = "b" * 40
+        self.assert_refused("codex/kelos_entrypoint.sh changed since v0.62.0")
+
+    def test_go_older_than_go_mod_stops_the_update(self):
+        self.go_mod = "module x\n\ngo 1.28.0\n"
+        self.assert_refused("needs Go 1.28.0")
+
+    def test_a_downgrade_stops_the_update(self):
+        with open(os.path.join(self.dir, "Containerfile.kelos"), "w") as f:
+            f.write(KELOS_CONTAINERFILE_TEXT.replace("v0.62.0-proxy.3", "v0.65.0-rest.4"))
+        self.assert_refused("downgrade KELOS_CAPTURE_VERSION")
+
+    def test_a_malformed_digest_is_refused(self):
+        real = self.fetch
+
+        def fetch(url):
+            if "hub.docker.com" in url:
+                return {"digest": "sha256:short"}
+            return real(url)
+        self.fetch = fetch
+        self.assert_refused("malformed digest")
+
+
 if __name__ == "__main__":
     unittest.main()

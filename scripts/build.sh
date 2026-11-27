@@ -122,7 +122,8 @@ fi
 # Each pin that a Containerfile stage declares with ARG becomes a build argument. Pins
 # the image does not use (CI and Kubernetes images) are left out. versions.env values
 # contain no quotes or spaces, so each line is one argument.
-# The Kelos variant takes no pins, only the Agentainer image it builds on.
+# The Kelos variant takes no versions.env pins: its pins are in Containerfile.kelos,
+# and --from replaces only the Agentainer image it builds on.
 args=$(sed -n 's/^ARG \([A-Z0-9_]*\).*/\1/p' "$containerfile")
 set --
 if [ "$variant" = kelos ]; then
@@ -165,11 +166,12 @@ elif [ "$RUNTIME" = docker ]; then
 fi
 if [ "$variant" != kelos ]; then
 	[ -z "$fallback" ] || set -- "$@" --build-arg "APT_FALLBACK=$fallback"
-	set -- "$@" --build-arg AGENT_UID="$uid" --build-arg AGENT_GID="$gid" \
-		--build-arg IMAGE_VERSION="${IMAGE_VERSION:-dev}" \
-		--build-arg VCS_REF="$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
-		--build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	set -- "$@" --build-arg AGENT_UID="$uid" --build-arg AGENT_GID="$gid"
 fi
+# Both images set their OCI version, revision and creation labels from these.
+set -- "$@" --build-arg IMAGE_VERSION="${IMAGE_VERSION:-dev}" \
+	--build-arg VCS_REF="$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
+	--build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 [ -z "$nocache" ] || set -- "$@" --no-cache
 set -x
 "$RUNTIME" build -f "$containerfile" ${platform:+--platform "$platform"} "$@" -t "$tag" .

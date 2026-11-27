@@ -95,6 +95,7 @@ Each resolver uses the publish time its source gives:
 | Node.js | The release day in `index.json`, counted from the end of that day. |
 | Rust | The `date` line of the stable channel manifest, counted from the end of that day. No list of earlier releases is read, so a Rust release that is too young keeps the current Rust pins. |
 | unslop | The committer date of the newest commit under `pstack`, which the committer sets. When it is too young, the newest commit from before the cutoff (the commits API's `until` parameter). |
+| The Kelos fork's `v<version>-rest.<n>` tags ([Kelos variant](kelos.md#pins)) | The later of the upstream kelos-dev/kelos release's `published_at` and the fork commit's committer date. When the highest tag is too young, the next highest tag that is old enough. |
 | Optional extras | Their own rule: 7 days ([Optional extras](#optional-extras)). |
 
 These resolvers are not held back, because their source gives no publish time:
@@ -105,6 +106,7 @@ These resolvers are not held back, because their source gives no publish time:
 - AWS CLI: the changelog headings have no dates.
 - Antigravity: its manifest has only `version`, `url` and `sha512`.
 - Claude Code: the release host gives no time a version reached the stable channel. `manifest.json` has a `buildDate`, but a release is published after it is built, so that time cannot show a release is old enough.
+- The Kelos variant's `GOLANG_IMAGE`, for the same reason as Go; its Docker Hub tag also moves with every rebuild. Its `AGENTAINER_IMAGE` uses the release `r_agentainer_release` picks for `AGENTAINER_RELEASE_VERSION`, and that resolver applies no age rule.
 - The Ubuntu base image, the apt snapshot (always the previous day) and the Kubernetes example images (`CONTAINERSSH_IMAGE`, `WEBHOOK_PYTHON_IMAGE`, `FILEBROWSER_IMAGE`). Each follows a tag that moves with every rebuild, and Docker Hub keeps no earlier digest to fall back to.
 
 Run the same workflow manually through its `workflow_dispatch` trigger for an urgent security fix or an upstream change that breaks an agent. GitHub documents [scheduled](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule) and [manual](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch) triggers.

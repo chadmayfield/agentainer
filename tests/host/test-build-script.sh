@@ -101,4 +101,11 @@ assert_eq "--from without the kelos variant exits 2" "2" "$rc"
 assert_contains "--from without the kelos variant says so" "--from needs --variant kelos" "$out"
 out=$(STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --variant kelos --from example.com/image:tag 2>"$T/err")
 has_line "kelos with --from still builds" "AGENTAINER_IMAGE=example.com/image:tag" "$out"
+# The Kelos variant gets its own version, revision and creation labels.
+out=$(STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --variant kelos 2>"$T/err")
+has_line "kelos builds Containerfile.kelos" "Containerfile.kelos" "$out"
+has_line "kelos gets IMAGE_VERSION for its version label" "IMAGE_VERSION=dev" "$out"
+has_line "kelos gets the default tag" "localhost/agentainer-kelos:dev" "$out"
+if printf '%s\n' "$out" | grep -q '^VCS_REF=.'; then pass "kelos gets VCS_REF"; else fail "kelos gets VCS_REF" "[$out]"; fi
+assert_absent "kelos gets no main-image arguments" "$out" "Containerfile.kelos" "AGENT_UID=" "APT_FALLBACK=" "GO_VERSION="
 finish

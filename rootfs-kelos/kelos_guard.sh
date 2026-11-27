@@ -14,7 +14,7 @@ claude_env_allowlist=(
   DISABLE_UPDATES CLAUDE_CODE_NONBLOCKING_STDOUT CLAUDE_CODE_TMUX_TRUECOLOR # image ENV: update lock and output behavior
   DISABLE_TELEMETRY              # any non-empty value opts out of telemetry, so claude does not call the telemetry host (env-vars)
   HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy # egress proxy; claude reads both spellings (network-config)
-  GIT_SSL_CAINFO SSL_CERT_FILE NODE_EXTRA_CA_CERTS # CA bundle for git, gh and claude, set by the dispatcher
+  GIT_SSL_CAINFO SSL_CERT_FILE NODE_EXTRA_CA_CERTS # CA bundle for git, gh and claude; only the dispatcher sets them (ca_env_guard refuses a pod's own)
   GITHUB_TOKEN GH_TOKEN GH_ENTERPRISE_TOKEN GH_HOST GH_CONFIG_DIR # set by Kelos when the Workspace has a secretRef (job_builder.go)
   KELOS_GITHUB_TOKEN_FILE        # read by the gh wrapper at /usr/local/bin/gh
   KELOS_BRANCH KELOS_BASE_BRANCH KELOS_UPSTREAM_REPO # Task context the agent's shell and prompt can use
@@ -22,6 +22,23 @@ claude_env_allowlist=(
   GOPATH GOBIN GOTOOLCHAIN RUSTUP_HOME CARGO_HOME CARGO_INSTALL_ROOT # image ENV for the agent's build tools
   NPM_CONFIG_PREFIX UV_TOOL_DIR UV_TOOL_BIN_DIR PIPX_HOME PIPX_BIN_DIR PYTHONUSERBASE # image ENV for installed tools
 )
+
+# CA variables that change which TLS certificates git, gh, OpenSSL tools, Node and
+# claude trust. The dispatcher sets the first, third and fifth from PROXY_CA_FILE
+# (proxy_ca_setup in kelos_entrypoint.sh). A pod that sets any of them itself is
+# refused, so a CA can only come in through PROXY_CA_FILE and its checks. Names:
+# GIT_SSL_CAINFO and GIT_SSL_CAPATH in git-config(1) (http.sslCAInfo,
+# http.sslCAPath), SSL_CERT_FILE and SSL_CERT_DIR in Go's crypto/x509 and OpenSSL,
+# NODE_EXTRA_CA_CERTS in the Node.js CLI docs.
+ca_env_names=(GIT_SSL_CAINFO GIT_SSL_CAPATH SSL_CERT_FILE SSL_CERT_DIR NODE_EXTRA_CA_CERTS)
+ca_env_guard() {
+  local name
+  for name in "${ca_env_names[@]}"; do
+    if [ -n "${!name+x}" ]; then
+      refuse "environment variable $name is set; give a proxy CA as PROXY_CA_FILE instead"
+    fi
+  done
+}
 
 # Commands the guard runs, by absolute path so that PATH cannot replace them.
 JQ=/usr/bin/jq GIT=/usr/bin/git GREP=/usr/bin/grep TR=/usr/bin/tr
@@ -66,10 +83,12 @@ kelos_preflight() {
   "$expected" | "$expected":*) ;;
   *) refuse "PATH does not start with the image PATH ($expected)" ;;
   esac
-  # No empty entry (it means the working directory, the repo checkout), and no
-  # relative entry or ".." component anywhere in PATH.
+  # No empty entry (it means the working directory, the repo checkout), no
+  # relative entry or ".." component anywhere in PATH, and no newline, which would
+  # end the read below before the rest of PATH is checked.
   case ":$PATH:" in
   *::*) refuse "PATH has an empty entry" ;;
+  *$'\n'*) refuse "PATH holds a newline" ;;
   esac
   local entry
   local -a entries
@@ -90,7 +109,9 @@ kelos_preflight() {
   if [ -n "${KELOS_MCP_SERVERS:-}" ]; then
     refuse "KELOS_MCP_SERVERS is set; this image reads its MCP server from $mcp_dir"
   fi
-  if "$TR" '\0' '\n' <"/proc/$$/environ" | "$GREP" -aq '^BASH_FUNC_'; then
+  # grep -z reads NUL-separated entries, so a line inside a multi-line value (a
+  # KELOS_AGENTS_MD that quotes BASH_FUNC_x at the start of a line) does not match.
+  if "$GREP" -azq '^BASH_FUNC_' "/proc/$$/environ"; then
     refuse "an exported bash function (BASH_FUNC_*) is in the environment"
   fi
   mcp_check
