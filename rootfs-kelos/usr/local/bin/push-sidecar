@@ -518,24 +518,16 @@ commit_changes() {
 # The objects go into the repository's object store; no ref, index or HEAD of the
 # agent changes. Returns 2 when SIGTERM stopped a step.
 build_wip() {
-  local idx=$wip_dir/index gitdir tree
+  local idx=$wip_dir/index tree
   wg=(/usr/bin/env "GIT_INDEX_FILE=$idx" "$GIT" -C "$repo" "${git_flags[@]}")
   wg_lit=(/usr/bin/env "GIT_INDEX_FILE=$idx" "$GIT" --literal-pathspecs -C "$repo" "${git_flags[@]}")
   if [ -n "$head_commit" ]; then
-    # A copy of the agent's index carries the stat data of its entries, so git add
-    # rehashes only the files that changed. read-tree -m with one tree gives every
-    # entry HEAD's content and drops the entries HEAD lacks, and keeps the stat data
-    # of an entry whose content matches HEAD (git-read-tree(1), single tree merge).
-    # When the copy or the merge fails, the index starts from HEAD alone.
-    if gitdir=$(g rev-parse --absolute-git-dir 2>/dev/null); then
-      cp -- "$gitdir/index" "$idx" 2>/dev/null || rm -f -- "$idx"
-    fi
-    run "$(step_limit 30)" "${wg[@]}" read-tree -m "$head_commit"
-    [ "$killed" -eq 0 ] || return 2
-    if [ "$run_rc" -ne 0 ]; then
-      rm -f -- "$idx"
-      run "$(step_limit 30)" "${wg[@]}" read-tree "$head_commit"
-    fi
+    # The index starts from HEAD with no stat data, so git add hashes every file
+    # and sees every change. Stat data copied from the agent's index would be
+    # wrong for a file changed within the same second as its last staging, with
+    # the same size: git catches that case only by comparing the entry with the
+    # time its own index file was written, and a new index file is newer.
+    run "$(step_limit 30)" "${wg[@]}" read-tree "$head_commit"
   else
     run "$(step_limit 30)" "${wg[@]}" read-tree --empty
   fi

@@ -452,7 +452,8 @@ assert_contains "lock file at mode 000: the owner gets read and write" "lock-mod
 # login status and kelos-capture run without it. CODEX_AUTH_JSON is gone from the
 # environment of the setup command, codex and a command codex runs. Each stub writes
 # what it sees to a file. The existing auth.json holds the same account as
-# CODEX_AUTH_JSON, so codex login status runs too.
+# CODEX_AUTH_JSON, so codex login status runs too. The stub texts are unset before
+# the start, because the codex stub's own text holds the token value it looks for.
 # shellcheck disable=SC2016 # expands in the stub
 fd_codex_stub='#!/bin/sh
 if [ "$1" = login ]; then ls -l /proc/$$/fd >/tmp/fd-login 2>&1; exit 0; fi
@@ -477,6 +478,7 @@ out=$(kr --user 0 -e KELOS_AGENT_TYPE=codex -e HOME=/home/kelos -e "CODEX_AUTH_J
 	printf "%s" "$CSTUB" > /usr/local/bin/codex && chmod 755 /usr/local/bin/codex
 	printf "%s" "$KSTUB" > /kelos/kelos-capture && chmod 755 /kelos/kelos-capture
 	printf "%s" "$OLD_AUTH" > /home/kelos/.codex/auth.json && chown 61100:61100 /home/kelos/.codex/auth.json
+	unset CSTUB KSTUB OLD_AUTH
 	setpriv --reuid 61100 --regid 61100 --clear-groups /kelos_entrypoint.sh hi; echo "rc=$?"
 	for f in setup login codex capture; do
 		[ -e /tmp/fd-$f ] && echo "$f-ran"
@@ -1036,7 +1038,7 @@ assert_contains "clean tree: PUSH_WIP_BRANCH gets HEAD" "snap-is-head" "$out"
 assert_contains "clean tree: the default WIP branch is not used when PUSH_WIP_BRANCH is set" "no-default-wip" "$out"
 assert_contains "clean tree: exit 0" "rc=0" "$out"
 # PUSH_WIP_BRANCH must be a valid branch name other than PUSH_BRANCH.
-for case in "same as PUSH_BRANCH|task|must differ from PUSH_BRANCH" "with a tilde|a~b|PUSH_WIP_BRANCH is not a valid branch name"; do
+for case in "same as PUSH_BRANCH|task|PUSH_WIP_BRANCH must differ from PUSH_BRANCH" "with a tilde|a~b|PUSH_WIP_BRANCH is not a valid branch name"; do
 	name=${case%%|*}
 	rest=${case#*|}
 	out=$(kr -- env PUSH_URL=https://github.com/o/r.git PUSH_BRANCH=task "PUSH_WIP_BRANCH=${rest%%|*}" KELOS_GITHUB_TOKEN_FILE=/etc/hostname GIT_AUTHOR_NAME=Bot GIT_AUTHOR_EMAIL=bot@example.com /usr/local/bin/push-sidecar 2>&1)
