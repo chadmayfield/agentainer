@@ -3,7 +3,9 @@ description: >
   Applies the pin changes from the bump workflow's resolve job to the checked-out
   develop commit, pushes them to a new bump/<date>-<run> branch and opens a pull
   request against develop. It refuses a patch that changes any file the resolver
-  does not write. The checkout must store a token that can push.
+  does not write, or that changes more than version references in the files that
+  repeat a pin. If a step after the push fails, it deletes the pushed branch. The
+  checkout must store a token that can push.
 inputs:
   token:
     description: Token for gh, with Contents and Pull requests write on the repository.
@@ -39,7 +41,8 @@ runs:
         # The patch may only modify the files scripts/bump_versions.py writes: versions.env,
         # the Kubernetes manifests it repins (K8S_IMAGES: the deployment.yaml files and
         # deploy/kubernetes/agentainer/statefulset.yaml), the files that name the release
-        # pin (RELEASE_REFS), the extras package files and Containerfile.kelos (r_kelos).
+        # pin (RELEASE_REFS), the extras package files, docs/extras.md (EXTRAS_DOC) and
+        # Containerfile.kelos (r_kelos).
         # It may not create, delete, rename or copy a file or change a mode.
         summary=$(git apply --summary "$PATCH_FILE")
         if [ -n "$summary" ]; then
@@ -47,8 +50,13 @@ runs:
           refuse "it creates, deletes, renames or copies a file or changes a mode (listed above)"
         fi
         name='[A-Za-z0-9_][A-Za-z0-9._-]*'
-        allowed="^(versions\.env|Containerfile\.kelos|deploy/kubernetes/$name/deployment\.yaml|deploy/kubernetes/agentainer/(statefulset|kustomization)\.yaml|bin/agentainer|README\.md|docs/(running|versions)\.md|rootfs/usr/local/share/agentainer/extras/$name/package(-lock)?\.json)\$"
+        allowed="^(versions\.env|Containerfile\.kelos|deploy/kubernetes/$name/deployment\.yaml|deploy/kubernetes/agentainer/(statefulset|kustomization)\.yaml|bin/agentainer|README\.md|docs/(running|versions|extras)\.md|rootfs/usr/local/share/agentainer/extras/$name/package(-lock)?\.json)\$"
         lockfile="^rootfs/usr/local/share/agentainer/extras/$name/package-lock\.json\$"
+        # Files that only repeat a pin: the release references, the Kubernetes image pins and
+        # the extras versions in docs/extras.md.
+        # scripts/check_bump_refs.py allows only version reference changes in them.
+        refs_only="^(deploy/kubernetes/$name/deployment\.yaml|deploy/kubernetes/agentainer/(statefulset|kustomization)\.yaml|bin/agentainer|README\.md|docs/(running|versions|extras)\.md)\$"
+        refs=()
         git apply --numstat -z "$PATCH_FILE" >"$RUNNER_TEMP/numstat"
         count=0
         extras=0
@@ -75,15 +83,22 @@ runs:
           if [ "$path" = Containerfile.kelos ]; then
             kelos=1
           fi
+          if [[ $path =~ $refs_only ]]; then
+            refs+=("$path")
+          fi
           count=$((count + 1))
         done <"$RUNNER_TEMP/numstat"
         if [ "$count" -eq 0 ]; then
           refuse "it changes no file"
         fi
-        # The report script comes from the commit before the patch.
+        # The report and check scripts come from the commit before the patch.
         git show HEAD:scripts/build_report.py >"$RUNNER_TEMP/build_report.py"
+        git show HEAD:scripts/check_bump_refs.py >"$RUNNER_TEMP/check_bump_refs.py"
         git show HEAD:versions.env >"$RUNNER_TEMP/old-versions.env"
         git apply --index "$PATCH_FILE"
+        if [ "${#refs[@]}" -gt 0 ] && ! python3 "$RUNNER_TEMP/check_bump_refs.py" versions.env "${refs[@]}"; then
+          refuse "it changes more than version references (listed above)"
+        fi
         python3 "$RUNNER_TEMP/build_report.py" major "$RUNNER_TEMP/old-versions.env" versions.env >"$RUNNER_TEMP/major.md"
         b="bump/$(date -u +%Y-%m-%d)-$RUN"
         if [ -n "$APP_SLUG" ]; then
@@ -98,6 +113,16 @@ runs:
         git switch -c "$b"
         git commit -m "chore: version bump"
         git push origin "$b"
+        # A failure from here on would leave the branch without a pull request. The next
+        # run pushes a branch with a new name, so delete this one.
+        cleanup() {
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            git push origin --delete "$b" || echo "::warning::bump-pr: could not delete $b; delete it by hand"
+          fi
+          exit "$rc"
+        }
+        trap cleanup EXIT
         # A fence longer than any backtick run in the resolver output, so no line of it ends the block.
         fence='```'
         while grep -qF -- "$fence" "$CHANGES_FILE"; do fence="${fence}\`"; done
@@ -114,12 +139,15 @@ runs:
         if [ "$extras" -eq 1 ]; then
           # shellcheck disable=SC2016 # the backticks are Markdown code spans
           echo '- [ ] Build this branch with `scripts/build.sh` and run `IMAGE=localhost/agentainer:dev sh tests/host/test-extras-live.sh` on amd64 and on arm64. It installs every extra in the catalog from the npm registry with `agentainer-extras`, which runs the check of each entry, then runs each installed command.' >>"$RUNNER_TEMP/body.md"
+          # shellcheck disable=SC2016 # the backticks are Markdown code spans
+          echo '- [ ] Check the Known findings table in `docs/extras.md` against the new lockfiles, with the `lint-unit` scan summary of this pull request, and update the table and its date. The update leaves that table as it was.' >>"$RUNNER_TEMP/body.md"
         fi
         if [ "$kelos" -eq 1 ]; then
           # shellcheck disable=SC2016 # the backticks are Markdown code spans
           echo '- [ ] Build the Kelos variant with `scripts/build.sh --variant kelos` and run `IMAGE=localhost/agentainer-kelos:dev sh tests/kelos/test_image.sh` on amd64 and on arm64.' >>"$RUNNER_TEMP/body.md"
         fi
         gh pr create --base develop --head "$b" --title "Version bump $(date -u +%Y-%m-%d)" --body-file "$RUNNER_TEMP/body.md"
+        trap - EXIT
         if [ -z "$APP_SLUG" ]; then
           echo "::notice::Opened with GITHUB_TOKEN: approve the CI run on the pull request with \"Approve workflows to run\"."
         fi

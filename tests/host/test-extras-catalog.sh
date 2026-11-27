@@ -2,7 +2,8 @@
 # Checks the extras catalog in rootfs/usr/local/share/agentainer/extras offline: each pin in
 # versions.env equals its wrapper package.json, the wrapper is formatted as
 # scripts/bump_versions.py writes it, each lockfile is npm lockfileVersion 3 with an integrity
-# on every downloaded package, and install scripts appear only in allowlisted packages.
+# on every downloaded package, install scripts appear only in allowlisted packages, and
+# docs/extras.md names each extra only at its pinned version.
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/../lib.sh"
 cd "$(dirname "$0")/../.." || exit 2
@@ -11,6 +12,7 @@ checker() {
 	python3 -I - "$PWD" <<'EOF'
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -111,6 +113,27 @@ for key, package, extra in bump_versions.EXTRAS:
     scripts = sorted({bump_versions.lock_entry_name(p, e) for p, e in entries if e.get("hasInstallScript")})
     say(not set(scripts) - ALLOWED, "%s lockfile has install scripts only in %s" % (extra, sorted(ALLOWED)),
         "found %s" % scripts)
+
+# docs/extras.md names each package with a version in prose ("kandev 0.102.0") and in npm
+# and unpkg links ("kandev/0.102.0", "@openchamber/web@2.7.2"). Every such version must be
+# the pin. The table under "## Known findings" is a dated record of one check, so its
+# lines are left out, and only those.
+with open(os.path.join(repo, "docs/extras.md")) as f:
+    lines = f.read().splitlines()
+section = None
+kept = []
+for line in lines:
+    if line.startswith("## "):
+        section = line
+    if not (section == "## Known findings" and line.startswith("|")):
+        kept.append(line)
+say(len(kept) < len(lines), "docs/extras.md has a Known findings table to leave out")
+doc = "\n".join(kept)
+for key, package, extra in bump_versions.EXTRAS:
+    found = re.findall(re.escape(package) + r"`?[ @/]v?([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]*[0-9A-Za-z])?)", doc)
+    stale = sorted(set(v for v in found if v != pins.get(key)))
+    say(bool(found) and not stale, "docs/extras.md names %s only at %s %s" % (package, key, pins.get(key)),
+        "found %s" % (stale or "no version"))
 EOF
 }
 if ! out=$(checker); then

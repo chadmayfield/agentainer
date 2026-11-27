@@ -5,6 +5,7 @@ import binascii
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,26 @@ SCENARIOS = ('shell', 'ls-colors', 'eza', 'eza-tree', 'eza-broken', 'git-status'
              'vim-search', 'vim-selection', 'vim-browser-narrow', 'tmux-single',
              'tmux', 'tmux-copy', 'tmux-activity', 'tmux-narrow')
 NARROW_SCENARIOS = {'vim-browser-narrow', 'tmux-narrow'}
+# The gallery's Markdown is meant to be committed. A reference under these prefixes, a local
+# build or the registry the project publishes to, is recorded as given. Any other reference
+# may name a private registry, so only its tag or digest is recorded.
+RECORDED_AS_GIVEN = ('localhost/', 'ghcr.io/')
+NO_TAG = '(no tag or digest)'
+
+
+def recorded_image(reference):
+    """The image reference as the gallery records it."""
+    if reference.startswith(RECORDED_AS_GIVEN):
+        return reference
+    name, at, digest = reference.partition('@')
+    if at:
+        return '@' + digest if re.fullmatch(r'[a-z0-9]+:[0-9a-f]{32,}', digest) else NO_TAG
+    last = name.rsplit('/', 1)[-1]
+    if ':' in last:
+        tag = last.rsplit(':', 1)[1]
+        # The tag grammar from the OCI distribution spec.
+        return ':' + tag if re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9._-]{0,127}', tag) else NO_TAG
+    return NO_TAG
 
 
 def validate(document):
@@ -65,7 +86,7 @@ def main(argv=None):
         if result.returncode:
             raise RuntimeError(result.stderr or result.stdout or 'container capture failed')
         document = validate(json.loads(result.stdout))
-        document['image'] = args.image
+        document['image'] = recorded_image(args.image)
         document['defaults'] = 'checkout overlay' if args.source_defaults else 'image'
         destination.mkdir(parents=True, exist_ok=True)
         # An interrupted capture must not replace the last complete recording.

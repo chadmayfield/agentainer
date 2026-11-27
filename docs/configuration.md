@@ -165,6 +165,6 @@ Limits: Anthropic "doesn't support routing Claude Code to non-Claude models thro
 
 ## Startup messages
 
-The entrypoint prints its messages on stderr, each starting with `agentainer:`. `AGENTAINER_QUIET=1` hides the line that lists which credential variables are set. Warnings and every other message still print.
+The entrypoint prints its messages on stderr, each starting with `agentainer:`. `AGENTAINER_QUIET=1` hides the line that lists which credential variables are set. Warnings, including the [sudo warning](running.md#sudo), and every other message still print.
 
 If you do not set `AGENTAINER_QUIET`, the entrypoint sets it to `1` for a one-shot command, such as `podman run --rm IMAGE claude --version`, and to `0` for the default command, `sleep infinity`. Set `AGENTAINER_QUIET=0` to see the line for a one-shot command, or `AGENTAINER_QUIET=1` to hide it for a long-running container.

@@ -5,7 +5,7 @@ Source: https://github.com/kelos-dev/kelos, tag v0.62.0, commit 8b0805c6474017c0
 | File here | Source | Change |
 |---|---|---|
 | kelos_entrypoint_claude.sh | claude-code/kelos_entrypoint.sh | none |
-| kelos_entrypoint_codex.sh | codex/kelos_entrypoint.sh | six marked changes (AGENTAINER CHANGE, CHANGE 2 to CHANGE 6), listed below |
+| kelos_entrypoint_codex.sh | codex/kelos_entrypoint.sh | seven marked changes (AGENTAINER CHANGE, CHANGE 2 to CHANGE 7), listed below |
 | agent-gh-wrapper.sh | hack/agent-gh-wrapper.sh | none |
 | /kelos/kelos-capture (built in Containerfile.kelos) | Built from source from a `v<version>-rest.<n>` tag of the fork at github.com/chadmayfield/kelos, not the upstream binary. | Lists pull requests over the GitHub REST API instead of GraphQL; see below |
 | LICENSE.kelos | LICENSE | none |
@@ -18,10 +18,11 @@ The changes in kelos_entrypoint_codex.sh:
 |---|---|
 | AGENTAINER CHANGE | auth.json is written only when it is missing |
 | CHANGE 2 | auth.json is created with mode 0600 |
-| CHANGE 3 | every entry in CODEX_HOME except auth.json and the lock file is removed at each start (lost+found included on an ext4 volume), under an exclusive flock that the run holds until it ends; the start is refused when CODEX_HOME is not /home/kelos/.codex or is a symlink, or auth.json is a symlink or not a regular file |
+| CHANGE 3 | every entry in CODEX_HOME except auth.json and the lock file is removed at each start (lost+found included on an ext4 volume), under an exclusive flock that the run holds until it ends; only the script and codex keep the lock's file descriptor (node, codex login status and kelos-capture run with it closed), and a lock file without owner read or write gets them back; the start is refused when CODEX_HOME is not /home/kelos/.codex or is a symlink, or auth.json is a symlink or not a regular file, checked before and again after the lock is taken |
 | CHANGE 4 | an existing auth.json is replaced from CODEX_AUTH_JSON when it is not valid JSON, lacks the token fields, holds another account (tokens.account_id or the account in the id_token), another user, other credentials, or names no account that can be compared |
 | CHANGE 5 | the MCP gateway tables are appended to config.toml, and the token is passed to codex in its environment |
 | CHANGE 6 | the script exits with kelos-capture's status when codex succeeded |
+| CHANGE 7 | CODEX_AUTH_JSON is removed from the environment once auth.json is written, so the setup command, codex and the commands the agent runs do not get it |
 
 ## kelos-capture
 

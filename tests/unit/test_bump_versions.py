@@ -1455,6 +1455,84 @@ class ExtrasTests(unittest.TestCase):
         self.assertNotEqual(kwargs["cwd"], self.dir)
         self.assertEqual(env.splitlines()[0], "A=1")
 
+    DOC = ("# Extras\n\n"
+           "npm package `kandev`. License ([npm metadata for kandev 1.0.0](https://registry.npmjs.org/kandev/1.0.0)).\n"
+           "README: https://unpkg.com/@openchamber/web@2.0.0/README.md and "
+           "[`@openchamber/web` 2.0.0](https://unpkg.com/@openchamber/web@2.0.0/bin/lib/cli-args.js).\n"
+           "REA ([npm metadata for rea-agents 3.0.0](https://registry.npmjs.org/rea-agents/3.0.0)).\n"
+           "Unrelated: version 1.0.0, frida 3.0.0, kandev 1.0.0.1, xkandev 1.0.0.\n\n"
+           "## Known findings\n\nChecked on one day.\n\n"
+           "| Extra | Package |\n|---|---|\n| REA (`rea-agents` 3.0.0) | `minimatch` 1.0.0 |\n"
+           "| Kandev (kandev 1.0.0) | none |\n\n"
+           "Text after the table: rea-agents 3.0.0.\n\n## How the pins update\n\nkandev 1.0.0\n")
+
+    def test_pin_bump_rewrites_extras_doc_outside_the_findings_table(self):
+        self.write(bv.EXTRAS_DOC, self.DOC)
+        rc, _, err = self.run_main(["--only", "r_extras"])
+        self.assertEqual(rc, 0, err)
+        doc = self.read(bv.EXTRAS_DOC)
+        for mention in ("npm metadata for kandev 1.1.0", "registry.npmjs.org/kandev/1.1.0",
+                        "unpkg.com/@openchamber/web@2.1.0/README.md", "[`@openchamber/web` 2.1.0]",
+                        "unpkg.com/@openchamber/web@2.1.0/bin/lib/cli-args.js",
+                        "npm metadata for rea-agents 3.1.0", "registry.npmjs.org/rea-agents/3.1.0",
+                        "Text after the table: rea-agents 3.1.0.", "## How the pins update\n\nkandev 1.1.0\n"):
+            with self.subTest(mention=mention):
+                self.assertIn(mention, doc)
+        # Equal versions that do not follow the package name, or are part of a longer version or
+        # name, stay as they are.
+        self.assertIn("Unrelated: version 1.0.0, frida 3.0.0, kandev 1.0.0.1, xkandev 1.0.0.\n", doc)
+        start = self.DOC.index("| Extra |")
+        end = self.DOC.index("\n\nText after the table")
+        self.assertEqual(doc[start:end], self.DOC[start:end])
+        # The bump-pr action's content check accepts the rewrite.
+        import check_bump_refs
+        env = check_bump_refs.read_env(self.env)
+        self.assertEqual(check_bump_refs.problems(bv.EXTRAS_DOC, self.DOC, doc, env), [])
+        self.assertNotEqual(check_bump_refs.problems(bv.EXTRAS_DOC, self.DOC, doc,
+                                                     dict(env, KANDEV_VERSION="1.2.0")), [])
+
+    def test_unchanged_pins_leave_extras_doc_alone(self):
+        self.write(bv.EXTRAS_DOC, self.DOC)
+        self.latest = {"kandev": "1.0.0", "@openchamber/web": "2.0.0", "rea-agents": "3.0.0"}
+        rc, _, err = self.run_main(["--only", "r_extras"])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.read(bv.EXTRAS_DOC), self.DOC)
+
+    def test_catalog_test_passes_after_a_simulated_bump(self):
+        """Bump every extra in a copy of the real catalog and docs, then run the catalog test there."""
+        root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        for rel in ("tests/host/test-extras-catalog.sh", "tests/lib.sh", bv.EXTRAS_DOC):
+            os.makedirs(os.path.join(self.dir, os.path.dirname(rel)), exist_ok=True)
+            shutil.copy2(os.path.join(root, rel), os.path.join(self.dir, rel))
+        for rel in ("scripts", "rootfs/usr/local/lib/agentainer", CATALOG):
+            shutil.rmtree(os.path.join(self.dir, rel), ignore_errors=True)
+            shutil.copytree(os.path.join(root, rel), os.path.join(self.dir, rel),
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        with open(os.path.join(root, "versions.env")) as f:
+            pins = bv.values(bv.parse_env(f.read()))
+        self.write("versions.env", "".join("%s=%s\n" % (key, pins[key]) for key, _, _ in bv.EXTRAS))
+        self.latest = {}
+        for key, name, extra in bv.EXTRAS:
+            old = pins[key]
+            new = "%s.%d.0" % (old.split(".")[0], int(old.split(".")[1]) + 1)
+            self.latest[name] = new
+            # The real lockfile with the package moved to the new version.
+            with open(os.path.join(self.dir, CATALOG, extra, "package-lock.json")) as f:
+                lock = json.load(f)
+            lock["packages"][""]["dependencies"] = {name: new}
+            lock["packages"]["node_modules/" + name]["version"] = new
+            self.lock_override[name] = lock
+        before = self.read(bv.EXTRAS_DOC)
+        rc, _, err = self.run_main(["--only", "r_extras"])
+        self.assertEqual(rc, 0, err)
+        self.assertNotEqual(self.read(bv.EXTRAS_DOC), before)
+        result = subprocess.run(["sh", os.path.join(self.dir, "tests/host/test-extras-catalog.sh")],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for _, name, _ in bv.EXTRAS:
+            self.assertRegex(result.stdout, r"(?m)^ok \d+ - docs/extras\.md names %s only at " % re.escape(name))
+        self.assertNotIn("not ok", result.stdout)
+
     def test_failed_check_keeps_only_that_extras_pin_and_files(self):
         def check(lock, **kwargs):
             if "node_modules/rea-agents" in lock["packages"]:

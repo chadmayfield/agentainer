@@ -98,6 +98,15 @@ openchamber --lan --port 3000                         # inside the container
 
 Kandev's local mode is not an authenticated multi-user boundary, and OpenChamber needs a UI password (`OPENCHAMBER_UI_PASSWORD`, [OpenChamber](extras.md#openchamber)) to protect browser access, so keep the default `127.0.0.1` host binding ([Kandev](extras.md#kandev), [OpenChamber](extras.md#openchamber)).
 
+The host binding limits only who reaches the published port on the host. Kandev listens on `0.0.0.0` inside the container, so another container on the same engine network reaches it at the container's address without a password. With Docker, every container started without `--network` joins the default `bridge` network, whose containers "can communicate, but only by IP address" ([Docker bridge networks](https://docs.docker.com/engine/network/drivers/bridge/)). The launcher has no network option. To keep other containers away from Kandev, start the container with a direct runtime command ([Without the launcher](#without-the-launcher)) on a user-defined network that holds only this container. Docker "blocks access from containers in other networks":
+
+```sh
+docker network create agentainer-kandev
+docker run -d --name agentainer --network agentainer-kandev -p 127.0.0.1:38429:38429 ...  # the other options as in Without the launcher
+```
+
+Rootful Podman uses the `bridge` network by default, and rootless Podman uses `pasta` ([podman run](https://docs.podman.io/en/latest/markdown/podman-run.1.html), `--network`). `podman network create` and `podman run --network` work the same way. Not verified: whether other rootless containers can reach Kandev under `pasta`.
+
 Ports must be 1 through 65535. For a remote engine, the bind address belongs to the engine host. With a local VM, reachability also depends on the runtime's port forwarding.
 
 The launcher validates mappings before it creates a container and before it pulls an update. With no `--publish` option, it publishes no ports. `update` keeps the recorded mappings. Containers created by older launchers without a ports label publish no ports. To change the mappings, recreate the container with new `up` options; the home stays.
@@ -156,7 +165,7 @@ The launcher does not add these options ([Podman options](https://docs.podman.io
 
 ## sudo
 
-The image has passwordless sudo, and `--security-opt no-new-privileges=true` turns it off ([Docker reference](https://docs.docker.com/reference/cli/docker/container/run/)). `agentainer up --sudo` leaves that option out. When sudo works, a long-running container logs `agentainer: warning: sudo works in this container, so agents can become root` at startup. One-shot commands skip the warning unless `AGENTAINER_QUIET=0` is set.
+The image has passwordless sudo, and `--security-opt no-new-privileges=true` turns it off ([Docker reference](https://docs.docker.com/reference/cli/docker/container/run/)). `agentainer up --sudo` leaves that option out. When sudo works, startup prints `agentainer: warning: sudo works in this container, so agents can become root` on stderr. The warning prints for one-shot commands too, and `AGENTAINER_QUIET=1` does not hide it ([Startup messages](configuration.md#startup-messages)).
 
 With sudo on, an agent can change anything in the container, including the agent binaries and the settings that stop them from updating themselves. Packages installed with `sudo apt install` are gone when the container is recreated. Under rootful Docker, container root is UID 0 on the host, limited by the container's namespaces.
 

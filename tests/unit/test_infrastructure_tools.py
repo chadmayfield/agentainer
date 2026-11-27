@@ -63,10 +63,14 @@ class InfrastructureResolverTests(unittest.TestCase):
                 self.helm(checksum=text)
 
     def test_helm_rejects_prereleases_and_unsafe_tags(self):
-        for release in ({"tag_name": "v4.4.0-rc.1"}, {"tag_name": "v4.3.1/../evil"},
-                        {"tag_name": "v4.3.1", "prerelease": True},
-                        {"tag_name": "v4.3.1", "draft": True}):
-            with self.subTest(release=release), self.assertRaises(bump.LookupFailed):
+        # Old enough for the release age rule, so the tag check is what refuses each one.
+        old = "2026-01-01T00:00:00Z"
+        for release in ({"tag_name": "v4.4.0-rc.1", "published_at": old},
+                        {"tag_name": "v4.3.1/../evil", "published_at": old},
+                        {"tag_name": "v4.3.1", "prerelease": True, "published_at": old},
+                        {"tag_name": "v4.3.1", "draft": True, "published_at": old}):
+            with self.subTest(release=release), \
+                    self.assertRaisesRegex(bump.LookupFailed, "must be a stable version tag"):
                 self.helm(release=release)
 
     def test_resolvers_are_included_in_scheduled_updates(self):

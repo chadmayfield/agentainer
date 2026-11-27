@@ -1511,6 +1511,41 @@ def rewrite_release_ref(text, prefix, old, new):
     return re.sub(pattern, lambda _: prefix + new, text)
 
 
+# docs/extras.md names each extra's pinned version after its npm package name: in prose
+# ("kandev 0.102.0"), after a code span ("`rea-agents` 6.9.0") and in npm and unpkg links
+# ("kandev/0.102.0", "@openchamber/web@2.7.2/bin/lib/cli-args.js").
+# scripts/check_bump_refs.py repeats these separators in EXTRA_SEPARATORS.
+EXTRAS_DOC = "docs/extras.md"
+EXTRAS_DOC_SEPARATORS = (" ", "` ", "@", "/")
+
+
+def findings_table_span(text):
+    """The (start, end) offsets of the table under "## Known findings", or (0, 0).
+
+    The table is a dated record of one scan, so the updater leaves its versions alone.
+    """
+    m = re.search(r"(?m)^## Known findings\n(?:(?!^## ).*\n)*?((?:\|.*\n)+)", text)
+    return m.span(1) if m else (0, 0)
+
+
+def rewrite_extras_doc(text, changes):
+    """Rewrite each package's version mentions outside the Known findings table.
+
+    changes maps an npm package name to its (old, new) versions.
+    """
+    start, end = findings_table_span(text)
+
+    def rewrite(part):
+        for package, (old, new) in changes.items():
+            for sep in EXTRAS_DOC_SEPARATORS:
+                # The package name must not be the end of a longer name ("xkandev 1.0.0").
+                pattern = (r"(?<![A-Za-z0-9._-])" + re.escape(package + sep + old)
+                           + r"(?![0-9A-Za-z-]|\.[0-9A-Za-z])")
+                part = re.sub(pattern, lambda _, r=package + sep + new: r, part)
+        return part
+    return rewrite(text[:start]) + text[start:end] + rewrite(text[end:])
+
+
 # ---- Kelos variant (Containerfile.kelos) -------------------------------------
 #
 # The Kelos variant's four pins are ARG lines in Containerfile.kelos, because only
@@ -1988,6 +2023,14 @@ def bump(args, resolvers):
             for prefix in (p for r, p in RELEASE_REFS if r == rel):
                 text = rewrite_release_ref(text, prefix, release_old, release_new)
             write_atomic(path, text)
+    # docs/extras.md names each extra's pin.
+    doc_changes = {package: (old[key], updates[key]) for key, package, _ in EXTRAS
+                   if old.get(key) and updates.get(key) and old[key] != updates[key]}
+    doc = os.path.join(base, EXTRAS_DOC)
+    if doc_changes and os.path.exists(doc):
+        with open(doc) as f:
+            text = f.read()
+        write_atomic(doc, rewrite_extras_doc(text, doc_changes))
     write_atomic(args.file, render_env(lines, updates))
     # With --failures, the workflow fails the run on that file after the pull request opens.
     return 1 if RESOLVER_FAILURES and not args.failures else 0

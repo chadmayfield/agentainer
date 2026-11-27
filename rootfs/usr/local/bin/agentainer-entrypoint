@@ -7,11 +7,13 @@ STEPS=/usr/local/lib/agentainer/entrypoint.d
 log() { printf 'agentainer: %s\n' "$*" >&2; }
 warn() { printf 'agentainer: warning: %s\n' "$*" >&2; }
 
-# home_path REL: where the file at REL under the home belongs. Codex reads $CODEX_HOME
-# instead of ~/.codex, and OpenCode reads $XDG_CONFIG_HOME/opencode instead of
-# ~/.config/opencode. An empty variable means the default, as for those agents.
+# home_path REL: where the file at REL under the home belongs. Claude Code reads
+# $CLAUDE_CONFIG_DIR instead of ~/.claude, Codex reads $CODEX_HOME instead of ~/.codex,
+# and OpenCode reads $XDG_CONFIG_HOME/opencode instead of ~/.config/opencode. An empty
+# variable means the default, as in agentainer-mcp and agentainer-doctor.
 home_path() {
 	case "$1" in
+	.claude | .claude/*) printf '%s%s\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${1#.claude}" ;;
 	.codex | .codex/*) printf '%s%s\n' "${CODEX_HOME:-$HOME/.codex}" "${1#.codex}" ;;
 	.config/opencode | .config/opencode/*) printf '%s%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}" "${1#.config}" ;;
 	*) printf '%s/%s\n' "$HOME" "$1" ;;

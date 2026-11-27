@@ -41,7 +41,9 @@ test "$(stat -c "%U %a" SKILL.md)" = "root 644"
 test "$(stat -c "%U %a" LICENSE)" = "root 644"
 echo UNSLOP_VERIFIED')"
 # A fresh home: no volume, so every first-start step runs.
-assert_absent "a fresh start prints no warnings" "$(run_in -- echo STARTED 2>&1)" STARTED warning changed
+# sudo stays off: its warning prints on every start that allows it.
+assert_absent "a fresh start prints no warnings" \
+	"$(run_in --security-opt no-new-privileges=true -- echo STARTED 2>&1)" STARTED warning changed
 seeded=$(run_in $H -- agentainer-entrypoint cat /home/agent/.agentainer/AGENTS.md)
 assert_contains "default AGENTS.md describes the container" "/workspace" "$seeded"
 # The remote-use section: the Kubernetes transfer folder, the PDF and image tools and the
