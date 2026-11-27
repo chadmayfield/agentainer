@@ -320,7 +320,7 @@ COPY build/apt-packages.txt build/check-apt-snapshot.py build/apt-install.sh /tm
 #   Always-Include-Phased-Updates makes upgrades take the same (newest) versions
 #   that fresh installs already get, instead of deferring phased ones
 #   (apt_preferences(5), "Phased Updates").
-# - The Chromium libraries and fonts come from Playwright v1.64.1,
+# - The Chromium libraries and fonts come from Playwright v1.65.0,
 #   packages/playwright-core/src/server/registry/nativeDeps.ts, entry 'ubuntu26.04-x64'
 #   (its "chromium" and "tools" lists; xvfb is left out). The 'ubuntu26.04-arm64'
 #   entry copies the same lists. The browsers themselves are

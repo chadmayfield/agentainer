@@ -14,6 +14,7 @@ guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
 
 
+@unittest.skipUnless(shutil.which("gpg"), "gpg is not installed")
 class SignedTagTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

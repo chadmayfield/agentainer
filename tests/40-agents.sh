@@ -3,6 +3,7 @@
 . "$(dirname "$0")/lib.sh"
 # shellcheck source=versions.env
 . "$(dirname "$0")/../versions.env"
+require_pins AGY_VERSION CLAUDE_CODE_VERSION CODEX_VERSION OPENCODE_VERSION
 
 # Exact version lines, so a pin of 1.3.2 cannot match 1.3.21.
 assert_eq "claude version" "$CLAUDE_CODE_VERSION (Claude Code)" "$(run_in -- claude --version 2>/dev/null)"

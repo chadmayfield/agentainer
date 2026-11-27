@@ -3,6 +3,7 @@
 . "$(dirname "$0")/lib.sh"
 # shellcheck source=versions.env
 . "$(dirname "$0")/../versions.env"
+require_pins GITLEAKS_VERSION GOSEC_VERSION
 
 # Prints "name=status" for each package, so a failure names the package.
 pkg_status() {
@@ -25,7 +26,8 @@ expect_installed() {
 }" "$(pkg_status "$@")"
 }
 
-# Playwright v1.64.1, nativeDeps.ts, entry 'ubuntu26.04-x64', "chromium" list.
+# Playwright v1.65.0 (the version tests/visual/package.json pins), nativeDeps.ts, entry
+# 'ubuntu26.04-x64', "chromium" list.
 expect_installed "chromium libraries installed" \
 	libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 \
 	libcups2t64 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 \

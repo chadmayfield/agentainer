@@ -1,11 +1,18 @@
-# Optional. Add it to kustomization.yaml to limit the agentainer pod's egress to DNS on any
-# destination and TCP 443 to public addresses. NetworkPolicy matches IPs, ports and labels,
-# not domain names, and needs a CNI plugin that enforces it.
+# Optional. Add it to kustomization.yaml to limit the agentainer pod's egress to DNS through
+# the cluster DNS pods and TCP 443 to public addresses. NetworkPolicy matches IPs, ports and
+# labels, not domain names, and needs a CNI plugin that enforces it.
+#
+# DNS goes only to pods labeled k8s-app: kube-dns in kube-system. CoreDNS keeps that label
+# (Kubernetes docs, "Debugging DNS Resolution"), and the control plane sets
+# kubernetes.io/metadata.name on every namespace (since v1.22). If your DNS pods use other
+# labels, or the cluster runs NodeLocal DNSCache on a link-local address, edit that rule.
 #
 # The 443 rules exclude the private IPv4 ranges (RFC 1918), shared address space
 # (100.64.0.0/10, used for carrier-grade NAT and by some clusters), IPv4 and IPv6
 # link-local addresses (169.254.0.0/16, which includes cloud metadata endpoints, and
-# fe80::/10) and IPv6 unique local addresses (fc00::/7). An API server or in-cluster
+# fe80::/10), IPv6 unique local addresses (fc00::/7) and the NAT64 prefixes
+# 64:ff9b::/96 (RFC 6052) and 64:ff9b:1::/48 (RFC 8215), through which a NAT64 gateway would
+# reach the excluded IPv4 ranges. An API server or in-cluster
 # HTTPS service at one of these addresses is unreachable from the agent pod unless a rule
 # allows it; one at a public address stays reachable on 443. ContainerSSH runs in its own
 # pod and makes its own API server connection, so SSH sessions keep working. Plain HTTP
@@ -23,8 +30,11 @@ spec:
   podSelector: {matchLabels: {app: agentainer}}
   policyTypes: [Egress]
   egress:
-    - ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
     - to: [{ipBlock: {cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]}}]
       ports: [{protocol: TCP, port: 443}]
-    - to: [{ipBlock: {cidr: "::/0", except: ["fc00::/7", "fe80::/10"]}}]
+    - to: [{ipBlock: {cidr: "::/0", except: ["fc00::/7", "fe80::/10", "64:ff9b::/96", "64:ff9b:1::/48"]}}]
       ports: [{protocol: TCP, port: 443}]

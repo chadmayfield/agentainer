@@ -26,8 +26,8 @@ The pinned versions are in [`versions.env`](../versions.env). The commands below
 - The shared instruction file is `~/.agentainer/AGENTS.md`. [AGENTS.md](configuration.md#agentsmd) explains the links, when the image updates the file, and what happens when one of these paths already holds your own file.
 - [Default configuration](defaults.md#agent-configurations) lists what the image seeds in each settings file.
 - `opencode debug paths` prints OpenCode's resolved config, data and cache directories.
-- Agentainer's instruction links use the fixed instruction paths in this table and do not follow these variables.
-- The MCP sync writes other files, such as `~/.claude.json` and `~/.gemini/config/mcp_config.json`. [MCP servers](configuration.md#mcp-servers) lists them; `CLAUDE_CONFIG_DIR` is the only override the sync follows.
+- When `CODEX_HOME` or `XDG_CONFIG_HOME` is set, the entrypoint seeds the Codex and OpenCode defaults, creates their instruction links and checks `service.json` in the moved directories. `XDG_CONFIG_HOME` moves only the OpenCode files there; the other seeded `~/.config` files stay put. Claude's seeded files stay in `~/.claude`.
+- The MCP sync writes other files, such as `~/.claude.json` and `~/.gemini/config/mcp_config.json`. [MCP servers](configuration.md#mcp-servers) lists them; the sync follows `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `XDG_CONFIG_HOME`.
 
 ## Skills
 

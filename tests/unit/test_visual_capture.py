@@ -110,6 +110,29 @@ class VisualCaptureTests(unittest.TestCase):
                 name = command[command.index('--name') + 1]
                 self.assertEqual(run.call_args_list[-1].args[0], ['fake-engine', 'rm', '-f', name])
 
+    def test_timeout_reports_a_container_it_could_not_remove(self):
+        for removal in (subprocess.CompletedProcess([], 1, '', 'engine hung'),
+                        subprocess.TimeoutExpired('fake-engine', 20)):
+            with self.subTest(removal=type(removal).__name__), tempfile.TemporaryDirectory() as directory:
+                with patch.object(capture, 'ROOT', Path(directory)), patch.object(capture.subprocess, 'run') as run:
+                    run.side_effect = [subprocess.TimeoutExpired('fake-engine', 180), removal]
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err):
+                        self.assertEqual(capture.main(['--runtime', 'fake-engine']), 1)
+                    command = run.call_args_list[0].args[0]
+                    name = command[command.index('--name') + 1]
+                    self.assertIn('could not remove container ' + name, err.getvalue())
+
+    def test_failed_removal_after_the_engine_returned_is_not_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(capture, 'ROOT', Path(directory)), patch.object(capture.subprocess, 'run') as run:
+                run.side_effect = [subprocess.CompletedProcess([], 125, '', 'no such image'),
+                                   subprocess.CompletedProcess([], 1, '', 'no such container')]
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(capture.main(['--runtime', 'fake-engine']), 1)
+                self.assertNotIn('could not remove', err.getvalue())
+
 
 class VisualScenarioSourceTests(unittest.TestCase):
     """Checks on the in-container scenario script, which runs only inside the image."""

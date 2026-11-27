@@ -7,6 +7,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_bump_workflow import steps as workflow_steps  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 SNAPSHOT = next(line.split("=", 1)[1] for line in (ROOT / "versions.env").read_text().splitlines()
                 if line.startswith("APT_SNAPSHOT="))
@@ -107,9 +110,13 @@ if a[0]=='run': sys.exit(int(os.environ.get('CX_RUN_RC','0')))
         self.assertEqual(calls, [])
 
     def test_workflow_checks_pushed_platform_before_recording_its_digest(self):
-        workflow = (ROOT / ".github/workflows/build.yml").read_text().split("\n  publish:\n", 1)[1].split("\n  release:\n", 1)[0]
-        check = workflow.index("run: sh scripts/check-release-platform.sh")
-        record = workflow.index("- name: Record the digest")
-        self.assertLess(check, record)
-        self.assertIn("${{ steps.build.outputs.digest }}", workflow[:record])
-        self.assertNotIn("continue-on-error", workflow[check:record])
+        job = (ROOT / ".github/workflows/build.yml").read_text().split("\n  publish:\n", 1)[1].split("\n  release:\n", 1)[0]
+        steps = workflow_steps(job.split("\n    steps:\n", 1)[1])
+        check = [s for s in steps if "run: sh scripts/check-release-platform.sh" in s]
+        record = [s for s in steps if "name: Record the digest" in s]
+        self.assertEqual((len(check), len(record)), (1, 1), steps)
+        self.assertLess(steps.index(check[0]), steps.index(record[0]))
+        self.assertIn("${{ steps.build.outputs.digest }}", check[0])
+        self.assertIn("DIGEST: ${{ steps.build.outputs.digest }}", record[0])
+        for key in ("continue-on-error", "if"):
+            self.assertNotRegex(check[0], r"(?m)^\s*%s:" % key)

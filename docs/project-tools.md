@@ -159,21 +159,27 @@ The extras select the input formats (`[all]` installs every one). The install wa
 [pandoc](https://pandoc.org) 3.13 converts between markup formats. Install the upstream static binary into `~/.local/bin`, which is on the home volume and on `PATH` in login shells:
 
 ```sh
-v=3.13
-case "$(uname -m)" in
-x86_64) a=amd64 s=38aa33b325a2bc96a4c39409631212db55702f564250bcdbead180b3bf646389 ;;
-aarch64) a=arm64 s=21e1d4ba09bd0b334590d204580fd4f6629b21be4ab6a32b26cc98982e9e0c68 ;;
-esac
-f="pandoc-$v-linux-$a.tar.gz"
-cd "$(mktemp -d)" &&
-  curl -fsSLO "https://github.com/jgm/pandoc/releases/download/$v/$f" &&
-  printf '%s  %s\n' "$s" "$f" | sha256sum -c - &&
-  tar -xzf "$f" &&
-  install -D -m 0755 "pandoc-$v/bin/pandoc" ~/.local/bin/pandoc &&
-  ~/.local/bin/pandoc --version | head -n 1
+(
+  set -e
+  v=3.13
+  case "$(uname -m)" in
+  x86_64) a=amd64 s=38aa33b325a2bc96a4c39409631212db55702f564250bcdbead180b3bf646389 ;;
+  aarch64) a=arm64 s=21e1d4ba09bd0b334590d204580fd4f6629b21be4ab6a32b26cc98982e9e0c68 ;;
+  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+  f="pandoc-$v-linux-$a.tar.gz"
+  d=$(mktemp -d)
+  trap 'rm -rf "$d"' EXIT
+  cd "$d"
+  curl -fsSLO "https://github.com/jgm/pandoc/releases/download/$v/$f"
+  printf '%s  %s\n' "$s" "$f" | sha256sum -c -
+  tar -xzf "$f"
+  install -D -m 0755 "pandoc-$v/bin/pandoc" ~/.local/bin/pandoc
+  ~/.local/bin/pandoc --version
+)
 ```
 
-Each step runs only when the one before it succeeded, so a checksum mismatch stops before `tar` and `install`, and an unknown architecture leaves `s` empty, which `sha256sum -c` rejects.
+The parentheses run the block in a subshell, so your shell keeps its directory and variables, and the temporary directory is removed when the block ends. `set -e` stops at the first failed step: an unknown architecture, a failed download, a checksum mismatch, or a `pandoc` that does not run. The block's exit status says whether it worked.
 
 The checksums are the SHA-256 digests GitHub publishes for the release assets (`gh api repos/jgm/pandoc/releases/tags/3.13 --jq '.assets[] | .name + " " + .digest'`). The binary unpacks to about 172 MB.
 

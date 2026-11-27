@@ -1,7 +1,11 @@
-# Patterns the push sidecar keeps out of its "agent WIP" commits. It reads them
-# through core.excludesFile, so they apply to files git does not track yet, on top
-# of the repository's own .gitignore. A file the agent already committed is not
-# affected.
+# Patterns the push sidecar keeps out of its "agent WIP" commits. They apply to new
+# files, the ones HEAD does not have: a new file whose name, or the name of a
+# directory above it, matches a pattern stays out of the commit, also when the
+# agent staged it, and a push-note line names it. Changes to files HEAD already
+# has are always committed, whatever their name, so an edit to a tracked
+# .env.example is kept. The patterns apply on top of the repository's own
+# .gitignore, and a negation there (!.env) does not bring a matching file back.
+# Commits the agent made itself are pushed as they are.
 #
 # Sources checked:
 #   id_rsa*, id_ecdsa*, id_ed25519*  default private key names in ssh-keygen(1),
@@ -13,7 +17,7 @@
 #   .git-credentials  plain-text file of git-credential-store,
 #               https://git-scm.com/docs/git-credential-store
 #   auth.json   the file this image's Codex entrypoint writes the Codex login to
-# Not backed by a document I fetched, kept as common practice: .env, .env.*,
+# Not verified against a published document, kept as common practice: .env, .env.*,
 # *.pem, *.key, *.p12, *.pfx, *credentials*, .netrc.
 .env
 .env.*

@@ -46,8 +46,11 @@ def main():
                 "-v", str(ROOT / "tests/fixtures/check-language-servers.py") + ":/fixtures/check-language-servers.py:ro",
                 "-e", "AGENTAINER_TOOLS=persist", "-e", "PYTHONDONTWRITEBYTECODE=1",
                 *options, args.image, "sleep", "infinity")
+        # Wait for the whole startup, as test-launcher-integration.sh does: the ready marker
+        # comes after every entrypoint step, and the tools link comes from step 40.
         command("exec", "--user", "agent", name, "sh", "-ec",
-                'i=0; until [ "$(readlink /var/lib/agentainer/active)" = "$HOME/.agentainer/tools" ]; do '
+                'i=0; until [ "$(readlink /var/lib/agentainer/active)" = "$HOME/.agentainer/tools" ] && '
+                '{ [ ! -f /usr/local/share/agentainer/startup-readiness-v1 ] || [ -f /var/lib/agentainer/ready ]; }; do '
                 'i=$((i+1)); [ "$i" -lt 60 ]; sleep 1; done')
         return name
 

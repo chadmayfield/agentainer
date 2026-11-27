@@ -8,7 +8,9 @@
 F="$(cd "$(dirname "$0")/../.." && pwd)/build/fetch.sh"
 I="$(cd "$(dirname "$0")/../.." && pwd)/build/install-tool.sh"
 T=$(mktemp -d)
-trap 'rm -rf "$T"' EXIT INT TERM
+trap 'rm -rf "$T"' EXIT
+# dash skips the EXIT trap on a signal; exiting from the signal trap runs it.
+trap 'exit 130' INT TERM
 mkdir "$T/bin"
 # The stub logs each call, writes BODY to the file after -o, and fails with curl's
 # HTTP error code 22 when STUB_FAIL is set, leaving a partial file behind.

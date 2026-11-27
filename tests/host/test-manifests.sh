@@ -10,7 +10,10 @@ if ! out=$(kubectl kustomize deploy/kubernetes); then
 	exit 1
 fi
 pass "kustomize renders"
-q() { printf '%s\n' "$out" | "$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" "$1"; }
+# yq runs from the local image: q reads the rendered manifests, fq reads one source file.
+yq_in() { "$RUNTIME" run --rm -i --pull=never ${PLATFORM:+--platform "$PLATFORM"} --entrypoint yq "$IMAGE" "$1"; }
+q() { printf '%s\n' "$out" | yq_in "$1"; }
+fq() { yq_in "$1" <"$2"; }
 sts='select(.kind=="StatefulSet")'
 assert_eq "startup probe permits three minutes" "5 36" \
 	"$(q "$sts.spec.template.spec.containers[0].startupProbe | (.periodSeconds | tostring) + \" \" + (.failureThreshold | tostring)")"
@@ -36,7 +39,7 @@ containerssh-config-?*) pass "containerssh config name carries a content hash, s
 esac
 assert_eq "webhook URLs do not assume cluster.local" "" "$(printf '%s\n' "$out" | grep 'cluster\.local' || true)"
 assert_eq "agentainer image is set through kustomize images" "ghcr.io/chadmayfield/agentainer" \
-	"$("$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" '.images[0].name' <deploy/kubernetes/agentainer/kustomization.yaml)"
+	"$(fq '.images[0].name' deploy/kubernetes/agentainer/kustomization.yaml)"
 assert_eq "RBAC is limited to the agentainer-0 pod" "agentainer-0 agentainer-0" \
 	"$(q 'select(.kind=="Role") | .rules[].resourceNames[]' | grep -v '^---' | paste -sd ' ' -)"
 wh='select(.kind=="NetworkPolicy" and .metadata.name=="agentainer-auth-ingress")'
@@ -50,7 +53,7 @@ fm='select(.kind=="ConfigMap" and .metadata.name=="agentainer-features")'
 assert_eq "features ConfigMap keeps a stable name in containerssh" "agentainer-features containerssh" \
 	"$(q "$fm | .metadata.name + \" \" + .metadata.namespace")"
 assert_eq "features ConfigMap is a resource, not a generator" "resource=true generator=false" \
-	"$("$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" '"resource=" + ((.resources // []) | any_c(. == "features.yaml") | tostring) + " generator=" + ((.configMapGenerator // []) | any_c(.name == "agentainer-features") | tostring)' <deploy/kubernetes/auth-webhook/kustomization.yaml)"
+	"$(fq '"resource=" + ((.resources // []) | any_c(. == "features.yaml") | tostring) + " generator=" + ((.configMapGenerator // []) | any_c(.name == "agentainer-features") | tostring)' deploy/kubernetes/auth-webhook/kustomization.yaml)"
 whp='select(.kind=="Deployment" and .metadata.name=="agentainer-auth").spec.template.spec'
 assert_eq "features volume is optional" "features true" \
 	"$(q "$whp.volumes[] | select(.configMap.name==\"agentainer-features\") | .name + \" \" + (.configMap.optional | tostring)")"
@@ -122,6 +125,7 @@ assert_absent "selectors do not carry part-of" \
 	"$(q '"selectors=" + ([.spec.selector, .spec.podSelector] | map(select(. != null)) | length | tostring) + " part-of=" + ([.spec.selector."app.kubernetes.io/part-of", .spec.selector.matchLabels."app.kubernetes.io/part-of", .spec.podSelector.matchLabels."app.kubernetes.io/part-of"] | map(select(. != null)) | length | tostring)')" \
 	"selectors=1 " part-of=1 part-of=2 part-of=3
 . ./versions.env
+require_pins CONTAINERSSH_IMAGE WEBHOOK_PYTHON_IMAGE FILEBROWSER_IMAGE
 assert_contains "containerssh digest matches versions.env" "$CONTAINERSSH_IMAGE" "$out"
 assert_contains "webhook python digest matches versions.env" "$WEBHOOK_PYTHON_IMAGE" "$out"
 private=$(printf '%s\n' "$out" | grep -E '(^|[^0-9.])(10\.[0-9]+\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+)' || true)
@@ -145,6 +149,17 @@ assert_eq "agent container mounts transfer/files at /home/agent/transfer" "/home
 assert_eq "agent container stays first, filebrowser is second" "agentainer filebrowser" \
 	"$(q "$pod.containers | map(.name) | join(\" \")")"
 fb="$pod.containers[1]"
+# The init container removes links the agent planted in the transfer folder before
+# FileBrowser starts. tests/unit/test_transfer_links.py runs its command.
+tl="$pod.initContainers[0]"
+assert_eq "transfer-links is the only init container" "transfer-links" "$(q "$pod.initContainers | map(.name) | join(\" \")")"
+assert_eq "transfer-links uses the agent image" "true" "$(q "$pod | .initContainers[0].image == .containers[0].image")"
+assert_eq "transfer-links mounts transfer/files at /srv/transfer" "transfer:/srv/transfer:files" \
+	"$(q "$tl.volumeMounts | map(.name + \":\" + .mountPath + \":\" + .subPath) | join(\" \")")"
+assert_contains "transfer-links deletes links without following them" "find /srv/transfer -mindepth 1 -type l -print -delete" \
+	"$(q "$tl.command | join(\" \")")"
+assert_eq "transfer-links has the agent container's securityContext" "true" \
+	"$(q "$pod | (.initContainers[0].securityContext | to_json) == (.containers[0].securityContext | to_json)")"
 assert_contains "FILEBROWSER_IMAGE in versions.env is pinned by digest" "docker.io/gtstef/filebrowser:2.0-stable-slim@sha256:" "$FILEBROWSER_IMAGE"
 assert_eq "filebrowser image matches FILEBROWSER_IMAGE in versions.env" "$FILEBROWSER_IMAGE" "$(q "$fb.image")"
 assert_eq "filebrowser has the agent container's securityContext" "true" \
@@ -193,19 +208,20 @@ kz=deploy/kubernetes/agentainer/kustomization.yaml
 assert_contains "kustomization lists the egress policy as optional" "# - networkpolicy.yaml" "$(cat "$kz")"
 assert_contains "kustomization lists the ingress policy as optional" "# - ingress-policy.yaml" "$(cat "$kz")"
 # The optional policies are not rendered, so read their source files.
-fq() { "$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" "$1" <"$2"; }
 np=deploy/kubernetes/agentainer/networkpolicy.yaml
-assert_eq "egress policy still allows DNS to any destination" "UDP/53 TCP/53 to=false" \
-	"$(fq '.spec.egress[0] | (.ports | map(.protocol + "/" + (.port | tostring)) | join(" ")) + " to=" + (has("to") | tostring)' "$np")"
+assert_eq "egress policy allows DNS only to the cluster DNS pods" \
+	"UDP/53 TCP/53 to=kube-system/kube-dns" \
+	"$(fq '.spec.egress[0] | (.ports | map(.protocol + "/" + (.port | tostring)) | join(" ")) + " to=" + (.to | map(.namespaceSelector.matchLabels."kubernetes.io/metadata.name" + "/" + .podSelector.matchLabels."k8s-app") | join(","))' "$np")"
+assert_eq "every egress rule names destinations" "true" "$(fq '.spec.egress | all_c(has("to"))' "$np")"
 assert_eq "egress 443 rules exclude private ranges" \
-	"0.0.0.0/0 except 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16|::/0 except fc00::/7,fe80::/10" \
+	"0.0.0.0/0 except 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16|::/0 except fc00::/7,fe80::/10,64:ff9b::/96,64:ff9b:1::/48" \
 	"$(fq '[.spec.egress[] | select(.ports[0].port == 443) | .to[].ipBlock | .cidr + " except " + (.except | join(","))] | join("|")' "$np")"
-for range in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 fc00::/7 fe80::/10; do
+for range in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 fc00::/7 fe80::/10 64:ff9b::/96 64:ff9b:1::/48; do
 	assert_eq "egress 443 rules exclude $range" "1" \
 		"$(fq "[.spec.egress[] | select(.ports[0].port == 443) | .to[].ipBlock.except[] | select(. == \"$range\")] | length" "$np")"
 done
-assert_eq "egress rules with destinations allow TCP 443 only" "TCP/443 TCP/443" \
-	"$(fq '[.spec.egress[] | select(has("to")) | .ports[] | .protocol + "/" + (.port | tostring)] | join(" ")' "$np")"
+assert_eq "egress rules with IP blocks allow TCP 443 only" "TCP/443 TCP/443" \
+	"$(fq '[.spec.egress[] | select(.to[0] | has("ipBlock")) | .ports[] | .protocol + "/" + (.port | tostring)] | join(" ")' "$np")"
 assert_contains "egress policy shows a narrow allow rule example" "203.0.113.0/24" "$(cat "$np")"
 ip=deploy/kubernetes/agentainer/ingress-policy.yaml
 assert_eq "ingress policy denies all ingress to the agentainer pod" "agentainer Ingress 0" \

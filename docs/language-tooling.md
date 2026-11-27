@@ -113,4 +113,4 @@ It does the following:
 
 Use `--runtime docker` for Docker Engine. Installation needs network access to the Go module proxy, npm and the Rust distribution server. The check does not build an image, modify a personal home or make model requests.
 
-The manual workflow [`.github/workflows/optional-tooling.yml`](../.github/workflows/optional-tooling.yml) (`workflow_dispatch`) builds the image and runs this check and the [Playwright check](browser-testing.md#verify-execution) with Docker on amd64 and arm64 runners. Not verified: the workflow has no runs yet (`gh run list --workflow optional-tooling.yml` returns none).
+The manual workflow [`.github/workflows/optional-tooling.yml`](../.github/workflows/optional-tooling.yml) (`workflow_dispatch`) builds the image and runs this check and the [Playwright check](browser-testing.md#verify-the-agentainer-instructions) with Docker on amd64 and arm64 runners. Not verified: the workflow has no runs yet (`gh run list --workflow optional-tooling.yml` returns none).

@@ -22,7 +22,8 @@ base=
 case "${EVENT:-}" in
 pull_request)
 	# The test merge commit's parents are the base branch tip and the pull request head.
-	if [ "$(git rev-parse -q --verify 'HEAD^2' || true)" = "${PR_HEAD:-}" ]; then
+	# Without PR_HEAD, a commit with one parent would match the empty HEAD^2 lookup.
+	if [ -n "${PR_HEAD:-}" ] && [ "$(git rev-parse -q --verify 'HEAD^2' || true)" = "$PR_HEAD" ]; then
 		base=$(git rev-parse 'HEAD^1')
 	fi
 	;;

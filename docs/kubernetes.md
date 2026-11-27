@@ -38,7 +38,7 @@ openssl genrsa -out "$keydir/host.key" 4096
 kubectl -n containerssh create secret generic containerssh-hostkey --from-file="$keydir/host.key"
 rm -r "$keydir"
 kubectl -n containerssh create secret generic agentainer-authorized-keys \
-  --from-file=authorized_keys="$HOME/.ssh/id_ed25519.pub"
+  --from-file=authorized_keys="$HOME/.ssh/id_ed25519.pub"   # or your own public key file, such as id_rsa.pub
 kubectl apply -k deploy/kubernetes
 ssh dev@<containerssh service address>
 ```
@@ -144,7 +144,8 @@ The database lives on the transfer volume, so the account and its new password s
 Security:
 
 - **FileBrowser is not a security boundary against the agent container.** Both containers share the pod's network namespace, so anything running in the agent container can reach `127.0.0.1:8080` (confirmed in the cluster check). Give the admin account a unique password that the agent never sees. FileBrowser limits login attempts per client address and per username, and after 8 failed logins in a row from one address for one username it refuses that pair for 15 minutes (`authFailedLoginMaxAttempts` and `authFailedLoginLockoutMins` in `backend/internal/web/http.go` at v2.0.2-stable; `disableRateLimit` in the [HTTP settings](https://filebrowserquantum.com/en/docs/configuration/http/) turns this off). The lockout is not per account. Through `kubectl port-forward` your browser most likely arrives from `127.0.0.1`, the same address as anything in the agent container, so failed logins from the agent could lock you out of `admin` for 15 minutes. Not verified: the address FileBrowser sees through a port-forward.
-- **An upload can follow a link the agent planted.** The agent can replace a folder inside `~/transfer` with a symbolic link to a folder elsewhere, at any time. In the cluster check, with the example's `ignoreSymlinks` rule on, a new file uploaded through the API into the link's path was written to the link's target, a folder in FileBrowser's container. Reading through the link returned 403 ("resolved path escapes scope"), and overwriting an existing file through it failed with 404. The agent cannot read FileBrowser's folders, so it gets nothing back, but your file lands in the wrong place. FileBrowser resolves the folder when the upload arrives, so a folder inside `~/transfer` can be swapped for a link at any moment. Upload to the top of `~/transfer`. The top is FileBrowser's source root and a mount point (the volume's `files` subPath at `/srv/transfer`), which the agent cannot replace with a link. The agent can still create a file link at the top with the name of a file you are about to upload. Whether FileBrowser writes a new upload through such a file link is not verified. This is a known limitation of FileBrowser, and this example does not work around it. Its cluster-verified scope: new files can land in FileBrowser's own writable paths, the agent cannot read them, and overwrites are blocked. If you can, report it to the [FileBrowser Quantum project](https://github.com/gtsteffaniak/filebrowser/issues).
+- **An upload can follow a link the agent planted.** The agent can replace a folder inside `~/transfer` with a symbolic link to a folder elsewhere, at any time. In the cluster check, with the example's `ignoreSymlinks` rule on, a new file uploaded through the API into the link's path was written to the link's target, a folder in FileBrowser's container. Reading through the link returned 403 ("resolved path escapes scope"), and overwriting an existing file through it failed with 404. The agent cannot read FileBrowser's folders, so it gets nothing back, but your file lands in the wrong place. FileBrowser resolves the folder when the upload arrives, so a folder inside `~/transfer` can be swapped for a link at any moment. Upload to the top of `~/transfer`. The top is FileBrowser's source root and a mount point (the volume's `files` subPath at `/srv/transfer`), which the agent cannot replace with a link. The agent can still create a file link at the top with the name of a file you are about to upload. Whether FileBrowser writes a new upload through such a file link is not verified. This is a known limitation of FileBrowser; this example works around it only at pod start (next item). Its cluster-verified scope: new files can land in FileBrowser's own writable paths, the agent cannot read them, and overwrites are blocked. If you can, report it to the [FileBrowser Quantum project](https://github.com/gtsteffaniak/filebrowser/issues).
+- **Each pod start removes planted links.** Before either container starts, the `transfer-links` init container deletes every symbolic link under `~/transfer` and logs each path it removed (`kubectl -n agentainer logs agentainer-0 -c transfer-links`). It does not follow links, so their targets stay as they are. A link the agent plants while the pod runs still works until the next start, so the advice above still applies.
 
 Single sign-on through a reverse proxy uses FileBrowser's proxy login, which the ConfigMap shows in a comment. It needs a listen address other than `127.0.0.1`, a Service of its own that only the proxy can reach, and a proxy that sets the username header and strips it from client requests ([proxy login](https://filebrowserquantum.com/en/docs/configuration/authentication/proxy/)).
 
@@ -176,8 +177,11 @@ The StatefulSet mounts an optional ConfigMap named `agentainer-seed` at `/etc/ag
 
 ```sh
 kubectl -n agentainer create configmap agentainer-seed \
-  --from-file=AGENTS.md=./AGENTS.md --from-file=mcp.json=./mcp.json
+  --from-file=AGENTS.md="$HOME/agentainer-seed/AGENTS.md" \
+  --from-file=mcp.json="$HOME/agentainer-seed/mcp.json"
 ```
+
+Keep these two files outside the repository checkout. The `AGENTS.md` at the root of this repository holds the rules for changing Agentainer itself, so do not seed it: every agent would then follow them in your own projects. To start from the image's default instructions, copy [`rootfs/etc/agentainer/AGENTS.md`](../rootfs/etc/agentainer/AGENTS.md) and edit the copy.
 
 Both keys are optional. [Configuration](configuration.md) describes both files; the entrypoint registers the servers in `mcp.json` with each agent. Create the ConfigMap before the first start of a new home volume, or delete the file in the pod and restart the pod to seed it again.
 
@@ -187,11 +191,12 @@ The example has two optional policies in `deploy/kubernetes/agentainer/`. Both a
 
 [`networkpolicy.yaml`](../deploy/kubernetes/agentainer/networkpolicy.yaml) limits the agent pod's outbound traffic:
 
-- Allowed: DNS on UDP and TCP port 53 to every destination, and TCP port 443 to `0.0.0.0/0` and `::/0`.
-- Excluded from the 443 rules: `10.0.0.0/8`, `172.16.0.0/12` and `192.168.0.0/16` (private IPv4), `100.64.0.0/10` (shared address space), `169.254.0.0/16` (link-local, which includes the cloud instance metadata address `169.254.169.254`), `fc00::/7` (IPv6 unique local) and `fe80::/10` (IPv6 link-local).
+- Allowed: DNS on UDP and TCP port 53 to the cluster DNS pods, and TCP port 443 to `0.0.0.0/0` and `::/0`.
+- The DNS rule selects pods labeled `k8s-app: kube-dns` in the `kube-system` namespace. CoreDNS keeps that label ([DNS debugging](https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/)), and the control plane labels each namespace with `kubernetes.io/metadata.name` ([automatic labelling](https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/#automatic-labelling)). If your DNS pods have other labels, or the cluster runs NodeLocal DNSCache on a link-local address, change the rule, or DNS stops working in the pod. Not verified in a cluster: that every CNI matches DNS traffic sent to the DNS Service address against the pod selector.
+- Excluded from the 443 rules: `10.0.0.0/8`, `172.16.0.0/12` and `192.168.0.0/16` (private IPv4), `100.64.0.0/10` (shared address space), `169.254.0.0/16` (link-local, which includes the cloud instance metadata address `169.254.169.254`), `fc00::/7` (IPv6 unique local), `fe80::/10` (IPv6 link-local), and the NAT64 prefixes `64:ff9b::/96` ([RFC 6052](https://www.rfc-editor.org/rfc/rfc6052)) and `64:ff9b:1::/48` ([RFC 8215](https://www.rfc-editor.org/rfc/rfc8215)). On a cluster with NAT64, those prefixes would reach the excluded IPv4 ranges.
 - Plain HTTP on port 80 is blocked everywhere.
 - An API server or in-cluster HTTPS service at one of the excluded addresses is unreachable from the agent pod unless another rule allows it. One at a public address stays reachable on 443. ContainerSSH makes its own API server connection from its own pod, so SSH sessions keep working.
-- DNS is not restricted, and the policy matches addresses and ports, not names ([Kubernetes policy semantics](https://kubernetes.io/docs/concepts/services-networking/network-policies/)).
+- The cluster DNS server still resolves any name, and the policy matches addresses and ports, not names ([Kubernetes policy semantics](https://kubernetes.io/docs/concepts/services-networking/network-policies/)).
 
 To reach one internal service, add a narrow rule, for example in a second policy, since policies add up:
 

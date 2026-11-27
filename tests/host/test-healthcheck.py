@@ -8,6 +8,12 @@ import time
 import uuid
 
 
+def require(condition, message):
+    # A bare assert disappears under python -O or PYTHONOPTIMIZE.
+    if not condition:
+        raise AssertionError(message)
+
+
 def main():
     runtime = os.environ.get("RUNTIME", "podman")
     image = os.environ.get("IMAGE", "localhost/agentainer:dev")
@@ -48,11 +54,11 @@ def main():
         inspected = json.loads(run("image", "inspect", image).stdout)[0]
         # Docker nests this under Config; Podman's image inspect uses a top-level field.
         metadata = inspected["Config"].get("Healthcheck") or inspected.get("Healthcheck")
-        assert metadata, "image has no health check"
-        assert metadata["Test"] == ["CMD", "/usr/local/bin/agentainer-healthcheck"], "wrong health command"
+        require(metadata, "image has no health check")
+        require(metadata["Test"] == ["CMD", "/usr/local/bin/agentainer-healthcheck"], "wrong health command")
         for key, value in (("Interval", 30_000_000_000), ("Timeout", 5_000_000_000),
                            ("StartPeriod", 180_000_000_000), ("Retries", 3)):
-            assert metadata[key] == value, "wrong health setting: " + key
+            require(metadata[key] == value, "wrong health setting: " + key)
         passed("image defines the offline probe and startup grace")
         # Delay the real entrypoint until a failed probe has exercised startup grace.
         # A short grace period avoids a three-minute wait in the test.
@@ -84,7 +90,7 @@ def main():
         passed("home permission failures are detected and recover")
         result = run("exec", "-e", "HOME=/cx-private-value", name,
                      "/usr/local/bin/agentainer-healthcheck", expected=1)
-        assert "cx-private-value" not in result.stdout + result.stderr, "private path leaked"
+        require("cx-private-value" not in result.stdout + result.stderr, "private path leaked")
         passed("failure output omits environment values")
     except (AssertionError, KeyError, ValueError, OSError, subprocess.SubprocessError) as error:
         print("not ok", count + 1, "-", str(error), flush=True)

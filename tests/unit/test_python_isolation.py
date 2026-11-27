@@ -13,18 +13,26 @@ class PythonIsolationTests(unittest.TestCase):
     def test_command_shebangs_disable_user_site_initialization(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
-            site = base / ("lib/python%d.%d/site-packages" % sys.version_info[:2])
+            env = dict(os.environ, PYTHONUSERBASE=str(base), HOME=str(base))
+            site = Path(subprocess.run([sys.executable, "-c", "import site; print(site.getusersitepackages())"],
+                                       env=env, capture_output=True, text=True, check=True).stdout.strip())
             site.mkdir(parents=True)
             marker = base / "ran"
             (site / "usercustomize.py").write_text("open(%r, 'w').write('ran')\n" % str(marker))
-            for command in ("agentainer-mcp", "agentainer-doctor"):
-                source = ROOT / "rootfs/usr/local/bin" / command
-                shebang = source.read_text().splitlines()[0]
-                self.assertEqual(shebang, "#!/usr/bin/python3 -I")
-                result = subprocess.run([sys.executable, "-I", str(source), "--help"],
-                                        env=dict(os.environ, PYTHONUSERBASE=str(base)),
-                                        capture_output=True, text=True)
-                self.assertFalse(marker.exists(), result.stderr)
+            for command, args in (("agentainer-mcp", ["list"]), ("agentainer-doctor", ["--help"])):
+                with self.subTest(command=command):
+                    source = ROOT / "rootfs/usr/local/bin" / command
+                    interpreter, *flags = source.read_text().splitlines()[0].removeprefix("#!").split()
+                    self.assertEqual((interpreter, flags), ("/usr/bin/python3", ["-I"]))
+                    control = subprocess.run([sys.executable, str(source), *args],
+                                             env=env, capture_output=True, text=True)
+                    if not marker.exists():
+                        self.skipTest("this Python does not load usercustomize: %s" % control.stderr)
+                    marker.unlink()
+                    result = subprocess.run([sys.executable, *flags, str(source), *args],
+                                            env=env, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(marker.exists(), result.stderr)
 
     def test_entrypoint_version_helper_uses_isolated_python(self):
         text = (ROOT / "rootfs/usr/local/lib/agentainer/entrypoint.d/30-agents-md.sh").read_text()

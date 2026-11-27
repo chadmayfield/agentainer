@@ -45,12 +45,13 @@ test('render all terminal states and publish an offline review gallery', async (
   const navigation = navigationGroups.map(([tool, links]) =>
     `<div class="nav-group"><span class="nav-label">${tool}</span><div class="nav-links">${links.map(([id, label]) =>
       `<a href="#${id}">${label}</a>`).join('')}</div></div>`).join('');
+  // Replacement functions keep "$&", "$'" and "$$" in captured text literal.
   const html = (cards: string) => template
     .replace('/*__FONT__*/', '')
     .replace('/*__XTERM_CSS__*/', '')
-    .replace('__METADATA__', metadata.map(item => `<li>${escapeHtml(item)}</li>`).join(''))
-    .replace('__NAV__', navigation)
-    .replace('__CARDS__', cards).replace('__RENDERER__', '');
+    .replace('__METADATA__', () => metadata.map(item => `<li>${escapeHtml(item)}</li>`).join(''))
+    .replace('__NAV__', () => navigation)
+    .replace('__CARDS__', () => cards).replace('__RENDERER__', '');
   const terminalPage = `<!doctype html><html><head><meta charset="utf-8"><style>
     ${fontCss()}
 ${xtermCss}

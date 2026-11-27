@@ -140,3 +140,22 @@ def colors_in(text):
         if max(r, g, b) <= 255:
             found.add("#%02x%02x%02x" % (r, g, b))
     return found
+
+
+# Color forms the palette check cannot read. A seeded file must use #rrggbb or a
+# 38;2;r;g;b / 48;2;r;g;b triple so every color goes through colors_in.
+_OTHER = re.compile(
+    r"#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{3,4})(?![0-9a-zA-Z_])"
+    r"|(?<![0-9])[34]8;5;\d+"
+    r"|(?<![0-9])[34]8:[25]:[0-9:]*"
+    r"|\bcolou?r\d+\b"
+    r"|\b(?:fg|bg|ctermfg|ctermbg|guifg|guibg|guisp)=(?:bright)?"
+    r"(?:black|red|green|yellow|blue|magenta|cyan|white|gr[ae]y)\b",
+    re.IGNORECASE,
+)
+
+
+def other_color_forms(text):
+    """Return each color written in a form other than the two colors_in reads."""
+    return {m.group(0) for m in _OTHER.finditer(text)}
+

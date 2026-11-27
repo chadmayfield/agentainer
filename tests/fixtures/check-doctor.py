@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
@@ -17,8 +18,21 @@ def require(condition, message="fixture condition failed"):
 
 
 def snapshot():
-    return {str(path.relative_to(home)): (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mode)
-            for path in home.rglob("*") if path.is_file()}
+    """Every entry under home, without following links: its type and mode, plus a regular
+    file's hash or a link's target. A new empty directory or a repointed link shows up."""
+    entries = {}
+    for root, dirs, files in os.walk(home):
+        for name in dirs + files:
+            path = Path(root, name)
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                value = os.readlink(path)
+            elif stat.S_ISREG(info.st_mode):
+                value = hashlib.sha256(path.read_bytes()).hexdigest()
+            else:
+                value = None
+            entries[str(path.relative_to(home))] = (info.st_mode, value)
+    return entries
 
 
 def doctor(expected, env=None):

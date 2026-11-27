@@ -17,7 +17,7 @@ Agentainer is one public container image that bundles four AI coding agents (Cla
 | `tests/` | Container tests (`NN-*.sh`), host tests (`host/`), unit tests (`unit/`), fixtures |
 | `docs/` | User documentation |
 | `.github/workflows/` | CI, release and the scheduled update |
-| `Containerfile.kelos`, `rootfs-kelos/`, `tests/kelos/` | The Kelos variant image, its files and its tests ([docs/kelos.md](docs/kelos.md)). Its pins live in `Containerfile.kelos`, not `versions.env`. CI does not build or test it. |
+| `Containerfile.kelos`, `rootfs-kelos/`, `tests/kelos/` | The Kelos variant image, its files and its tests ([docs/kelos.md](docs/kelos.md)). Its pins live in `Containerfile.kelos`, not `versions.env`, and `bump_versions.py` (`r_kelos`) updates them. CI does not build or test it. |
 
 `docs/private/` holds the maintainer's design notes, may be stale, and is ignored by git. Never commit anything under it.
 
@@ -32,8 +32,13 @@ sh tests/14-unit-linux.sh                   # image Python and Linux-only unit m
 sh tests/host/test-launcher.sh
 sh tests/host/test-build-script.sh
 sh tests/host/test-fetch.sh
+sh tests/host/test-apt-install.sh
+sh tests/host/test-extras-catalog.sh
 sh tests/host/test-manifests.sh
+sh tests/host/test-apt-install.sh           # offline, stub apt commands
+sh tests/host/test-extras-catalog.sh        # offline, extras pins match versions.env
 sh tests/host/test-launcher-integration.sh  # real engine, existing local image
+IMAGE=localhost/agentainer:dev sh tests/host/test-extras-live.sh  # network, after a catalog change
 sh tests/host/test-build-uid.sh             # slow: full build with --uid 1001 --gid 20
 python3 tests/host/test-layer-repro.py      # slow: two clean tool builds, configured Buildx
 python3 tests/host/test-healthcheck.py      # also invoked by tests/58-healthcheck.sh
@@ -41,7 +46,7 @@ python3 tests/host/test-language-tooling.py --image localhost/agentainer:dev  # 
 python3 tests/host/test-playwright-setup.py --image localhost/agentainer:dev  # slow, network
 scripts/build.sh --variant kelos [--from IMAGE]                 # build localhost/agentainer-kelos:dev; network
 IMAGE=localhost/agentainer-kelos:dev sh tests/kelos/test_image.sh
-# Release verification arguments: docs/versions.md#verifying-a-release-before-use
+python3 tests/host/test-published-image.py ...  # release only, network; arguments: docs/versions.md#verifying-a-release-before-use
 # Optional terminal screenshots: tests/visual/README.md
 ```
 
