@@ -27,7 +27,9 @@ runs:
         APP_SLUG: ${{ inputs.app-slug }}
         PATCH_FILE: ${{ inputs.patch-file }}
         CHANGES_FILE: ${{ inputs.changes-file }}
-        RUN: ${{ github.run_number }}
+        # The attempt number gives "Re-run failed jobs" a new branch, since its new commit
+        # cannot be pushed over the branch an earlier attempt pushed.
+        RUN: ${{ github.run_number }}-${{ github.run_attempt }}
       run: |
         set -u
         refuse() {
