@@ -31,22 +31,29 @@ Other differences from the main image:
 
 ## Environment rules
 
-- Claude starts under `env -i` with only the variables in `claude_env_allowlist` in [`rootfs-kelos/kelos_guard.sh`](../rootfs-kelos/kelos_guard.sh): process identity, locale and terminal, `CLAUDE_CODE_OAUTH_TOKEN`, the proxy variables, the CA variables, the GitHub token variables Kelos sets, the Kelos branch variables, the git identity and the image's tool locations. Any other variable the Task sets, such as `GOPROXY`, `GOPRIVATE`, `GOFLAGS`, `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL` or `KUBECONFIG`, does not reach Claude or the commands it runs. Codex gets the whole pod environment.
+- Claude starts under `env -i` with only the variables in `claude_env_allowlist` in [`rootfs-kelos/kelos_guard.sh`](../rootfs-kelos/kelos_guard.sh): process identity, locale and terminal, `CLAUDE_CODE_OAUTH_TOKEN`, the proxy variables, the CA variables, the GitHub token variables Kelos sets, the Kelos branch variables, the git identity and the image's tool locations. Any other variable the Task sets, such as `GOPROXY`, `GOPRIVATE`, `GOFLAGS`, `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL` or `KUBECONFIG`, does not reach Claude or the commands it runs. Codex gets the whole pod environment except `CODEX_AUTH_JSON`, which the Codex entrypoint removes once it has written `auth.json`, before the setup command and codex start.
 - A proxy CA comes in only as `PROXY_CA_FILE`: an absolute path to a PEM file outside `/workspace`, also after symlinks are resolved. The dispatcher builds a bundle of the system CAs plus that CA and sets `GIT_SSL_CAINFO`, `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS`. A pod that sets `GIT_SSL_CAINFO`, `GIT_SSL_CAPATH`, `SSL_CERT_FILE`, `SSL_CERT_DIR` or `NODE_EXTRA_CA_CERTS` itself is refused with exit 78.
 - `HOME` must be `/home/kelos`, and `PATH` must start with the image's `PATH`, with no empty, relative, `.` or `..` entry and no newline.
-- Tasks can share a Codex home volume (`/home/kelos/.codex`). Each Codex run takes an exclusive `flock` on `.agentainer-codex.lock` in it, so a second run on the same volume waits until the first one ends.
+- Tasks can share a Codex home volume (`/home/kelos/.codex`). Each Codex run takes an exclusive `flock` on `.agentainer-codex.lock` in it, so a second run on the same volume waits until the first one ends. The setup command and kelos-capture run with the lock's file descriptor closed; codex keeps it, so the lock lasts until codex exits.
 
 ## Push sidecar
 
-`push-sidecar` runs in its own container of the Task pod (an init container with `restartPolicy: Always`). It commits the agent's uncommitted work as "agent WIP" and pushes `HEAD` to a branch every `PUSH_INTERVAL` seconds, and once more within 20 s of SIGTERM. The header of [`push-sidecar`](../rootfs-kelos/usr/local/bin/push-sidecar) lists its environment variables. `PUSH_URL`, `PUSH_BRANCH`, `KELOS_GITHUB_TOKEN_FILE`, `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` are required.
+`push-sidecar` runs in its own container of the Task pod (an init container with `restartPolicy: Always`). Every `PUSH_INTERVAL` seconds, and once more within 20 s of SIGTERM, it pushes two branches:
+
+- `HEAD` goes to `PUSH_BRANCH` as a fast-forward, never forced. These are the agent's own commits, so the agent's own `git push` of the same branch still fast-forwards.
+- An "agent WIP" commit goes to `PUSH_WIP_BRANCH` (default: `PUSH_BRANCH` with `-wip` appended) as a forced update. Its parent is `HEAD` and its tree is `HEAD` plus the uncommitted changes in the work tree. When the work tree has no changes, `PUSH_WIP_BRANCH` gets `HEAD`. Each attempt replaces the WIP commit before it, and the branch history always holds every commit of `HEAD` at that time, so a forced update there drops only older WIP snapshots.
+
+The sidecar never changes the agent's index, `HEAD` or branches. It builds the WIP commit in a temporary index file (`GIT_INDEX_FILE`) read from `HEAD`, and makes it with `git write-tree` and `git commit-tree`. To recover the work after a deadline kill, check out `PUSH_WIP_BRANCH`. `PUSH_WIP_BRANCH` must differ from `PUSH_BRANCH`, and branch protection on the remote must allow force pushes to it. The header of [`push-sidecar`](../rootfs-kelos/usr/local/bin/push-sidecar) lists its environment variables. `PUSH_URL`, `PUSH_BRANCH`, `KELOS_GITHUB_TOKEN_FILE`, `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` are required.
 
 - `PUSH_URL` must be `https://github.com/<owner>/<repo>.git`. Other hosts, including GitHub Enterprise Server, are not supported.
-- Every change to a file that `HEAD` has goes into the WIP commit, whatever its name.
-- A new file whose name, or the name of a directory above it, matches a pattern in [`excludes`](../rootfs-kelos/usr/local/share/push-sidecar/excludes) (`.env`, `*.pem`, `id_rsa*` and others) stays out, also when the agent staged it or the repository's `.gitignore` negates the pattern. A `push-note:` line names each such file, and the file stays in the work tree.
+- Every change to a file that `HEAD` has goes into the WIP commit, whatever its name. The content comes from the work tree; what the agent staged does not count, and a new file that the repository's `.gitignore` ignores stays out even after `git add -f`.
+- A new file whose name, or the name of a directory above it, matches a pattern in [`excludes`](../rootfs-kelos/usr/local/share/push-sidecar/excludes) (`.env`, `*.pem`, `id_rsa*`, `kubeconfig`, `*.tfvars` and others), in any letter case, stays out, also when the agent staged it or the repository's `.gitignore` negates the pattern. A `push-note:` line names each such file, and the file stays in the work tree.
 - A new or changed file over 10 MB stays out, and a `push-note:` line names it.
 - A change of the commit a submodule points to is not committed, because `git add` would run `git status` inside the submodule, where the submodule's own config applies.
 - The image has no git-lfs, so a file that `.gitattributes` sends through the LFS filter is committed as a plain file, not as an LFS pointer.
 - Commits the agent made itself are pushed as they are. A rule on the remote side, such as push protection, is the only guard for them.
+- A merge, rebase, cherry-pick or revert in progress makes no WIP commit; `HEAD` is still pushed and `PUSH_WIP_BRANCH` keeps what it had.
+- A `HEAD` push that is not a fast-forward, because the agent rewrote history it had pushed, fails and is reported. The WIP push still runs.
 - Each attempt prints `push-ok` or `push-failed: <reason>`. A step that fails, such as `git status`, gives `push-failed`, also when `HEAD` itself was pushed.
 
 ## Building and testing

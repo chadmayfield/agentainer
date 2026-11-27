@@ -22,7 +22,12 @@ set -uo pipefail
 # ReadWriteOnce claim used by pods on one node). A run therefore takes an exclusive
 # flock on .agentainer-codex.lock in the home before it changes anything there,
 # and holds it until this script and codex exit. A second start waits for the
-# first run to end, so it never removes files that a running codex uses.
+# first run to end, so it never removes files that a running codex uses. Only this
+# script and codex keep the lock's file descriptor: node, codex login status and
+# kelos-capture run with it closed, so they cannot release the lock. The checks on
+# auth.json run again once the lock is held, because the run that held it may have
+# replaced the file. A regular lock file gets owner read and write before it is
+# opened, so a lock file left at mode 000 does not stop every later start.
 #
 # A run may leave the home itself without owner write or search permission; the
 # owner gets them back first. Before removing a directory, find -P gives the owner
@@ -40,6 +45,13 @@ codex_refuse() {
   exit 78
 }
 codex_lock_fd=""
+# Refuses an auth.json that is a symlink or not a regular file.
+codex_auth_file_check() {
+  [ ! -L "$1" ] || codex_refuse "$1 is a symlink"
+  if [ -e "$1" ] && [ ! -f "$1" ]; then
+    codex_refuse "$1 is not a regular file"
+  fi
+}
 codex_home_reset() {
   local home=/home/kelos/.codex entry lock
   [ -n "${CODEX_HOME:-}" ] || codex_refuse "CODEX_HOME is not set"
@@ -52,21 +64,22 @@ codex_home_reset() {
   if [ ! -w "$home" ] || [ ! -x "$home" ]; then
     chmod u+rwx -- "$home" 2>/dev/null || codex_refuse "cannot give the owner rwx on $home"
   fi
-  [ ! -L "$home/auth.json" ] || codex_refuse "$home/auth.json is a symlink"
-  if [ -e "$home/auth.json" ] && [ ! -f "$home/auth.json" ]; then
-    codex_refuse "$home/auth.json is not a regular file"
-  fi
+  codex_auth_file_check "$home/auth.json"
   lock=$home/.agentainer-codex.lock
   # Only a link or a non-file is removed here. A regular lock file is never
   # removed, because another start may hold a lock on it.
   if [ -L "$lock" ] || { [ -e "$lock" ] && [ ! -f "$lock" ]; }; then
     rm -rf -- "$lock" || codex_refuse "cannot remove $lock"
   fi
+  if [ -f "$lock" ] && { [ ! -r "$lock" ] || [ ! -w "$lock" ]; }; then
+    chmod u+rw -- "$lock" 2>/dev/null || codex_refuse "cannot give the owner read and write on $lock"
+  fi
   exec {codex_lock_fd}>>"$lock" || codex_refuse "cannot open $lock"
   if ! flock -n "$codex_lock_fd"; then
     printf 'kelos_entrypoint_codex: another Codex run holds %s; waiting for it to end\n' "$lock" >&2
     flock "$codex_lock_fd" || codex_refuse "cannot lock $lock"
   fi
+  codex_auth_file_check "$home/auth.json"
   # A run may have changed the mode of the login file; it is kept at 0600.
   if [ -f "$home/auth.json" ]; then
     chmod 600 -- "$home/auth.json" || codex_refuse "cannot set the mode of $home/auth.json"
@@ -209,7 +222,7 @@ codex_auth_loads() {
     return 0
   fi
   env -u OPENAI_FEDERATION_RULE_ID -u OPENAI_IDENTITY_TOKEN_FILE -u OPENAI_WORKLOAD_IDENTITY_CONTEXT \
-    CODEX_HOME="$dir" timeout -k 5 20 codex login status </dev/null >/dev/null 2>&1
+    CODEX_HOME="$dir" timeout -k 5 20 codex login status </dev/null >/dev/null 2>&1 {codex_lock_fd}>&-
   rc=$?
   rm -rf -- "$dir"
   case "$rc" in
@@ -254,6 +267,12 @@ if [ -n "${CODEX_AUTH_JSON:-}" ]; then
   fi
   printf 'cli_auth_credentials_store = "file"\n' >>"$codex_home/config.toml"
 fi
+# AGENTAINER CHANGE 7: CODEX_AUTH_JSON holds the login tokens, and Codex reads the
+# login from auth.json, so the variable is removed once auth.json is written.
+# Upstream leaves it set, so the setup command, codex and every command the agent
+# runs get it; Codex's default shell environment filter (names with KEY, SECRET or
+# TOKEN) does not match its name.
+unset CODEX_AUTH_JSON
 
 # Write user-level instructions (global scope read by Codex CLI)
 if [ -n "${KELOS_AGENTS_MD:-}" ]; then
@@ -321,7 +340,7 @@ for (const [name, s] of Object.entries(servers)) {
   toml += "\n";
 }
 process.stdout.write(toml);
-' >>"$codex_home/config.toml"
+' >>"$codex_home/config.toml" {codex_lock_fd}>&-
 fi
 
 # Run pre-agent setup command if configured. KELOS_SETUP_COMMAND is the
@@ -339,7 +358,7 @@ if (!Array.isArray(cmd) || cmd.length === 0 || cmd.some(a => typeof a !== "strin
 const r = spawnSync(cmd[0], cmd.slice(1), { stdio: "inherit" });
 if (r.error) { console.error(r.error.message); process.exit(127); }
 process.exit(r.status ?? 1);
-'
+' {codex_lock_fd}>&-
   SETUP_EXIT_CODE=$?
   if [ "$SETUP_EXIT_CODE" -ne 0 ]; then
     printf '\n---KELOS_SETUP_COMMAND_FAILED--- exit=%s\n' "$SETUP_EXIT_CODE" >&2
@@ -389,11 +408,13 @@ fi
 # AGENTAINER CHANGE 5 (continued): the token is set with an assignment prefix, so
 # it is in the environment of this codex process only: not exported, not in argv,
 # and not seen by kelos-capture.
+# AGENTAINER CHANGE 3 (continued): codex keeps the lock's file descriptor, so the
+# lock lasts as long as codex runs; kelos-capture runs with it closed.
 # shellcheck disable=SC2154 # mcp_dir is set in guard.sh
 if [ -n "$mcp_url" ]; then
-  AGENTAINER_MCP_TOKEN="$(<"$mcp_dir/token")" codex "${ARGS[@]}" | /kelos/kelos-capture
+  AGENTAINER_MCP_TOKEN="$(<"$mcp_dir/token")" codex "${ARGS[@]}" | /kelos/kelos-capture {codex_lock_fd}>&-
 else
-  codex "${ARGS[@]}" | /kelos/kelos-capture
+  codex "${ARGS[@]}" | /kelos/kelos-capture {codex_lock_fd}>&-
 fi
 # AGENTAINER CHANGE 6: exit with codex's status, or with kelos-capture's status
 # when codex succeeded, as the Claude entrypoint does. Upstream exits with codex's

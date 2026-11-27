@@ -410,6 +410,92 @@ assert_contains "shared home: run B says it waits" "another Codex run holds /hom
 assert_contains "shared home: run B succeeds after A" "b-rc=0" "$out"
 assert_contains "shared home: run B's reset ran after A ended" "after=.agentainer-codex.lock,config.toml,end" "$out"
 
+# The auth.json checks run again once the lock is held. Run A's stub codex marks
+# that it runs, waits 2 s, then puts a symlink in place of auth.json. Run B starts
+# after the mark, passes the first check, waits for the lock and must refuse after
+# A ends, without changing the mode of the link target.
+# shellcheck disable=SC2016 # expands in the stub
+relink_stub='#!/bin/sh
+touch /tmp/a-started
+sleep 2
+rm -f "$CODEX_HOME/auth.json" && ln -s /tmp/auth-target.json "$CODEX_HOME/auth.json"
+sleep 2
+'
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr --user 0 -e KELOS_AGENT_TYPE=codex -e HOME=/home/kelos -e "STUB=$relink_stub" -- sh -c '
+	printf "%s" "$STUB" > /usr/local/bin/codex && chmod 755 /usr/local/bin/codex
+	as_kelos() { setpriv --reuid 61100 --regid 61100 --clear-groups "$@"; }
+	as_kelos sh -c "printf x > /home/kelos/.codex/auth.json && printf outside > /tmp/auth-target.json && chmod 644 /tmp/auth-target.json"
+	as_kelos /kelos_entrypoint.sh hi >/tmp/a.out 2>&1 &
+	a=$!
+	for i in $(seq 1 50); do [ -e /tmp/a-started ] && break; sleep 0.2; done
+	as_kelos env KELOS_SESSION_SETUP_ONLY=1 /kelos_entrypoint.sh >/tmp/b.out 2>&1; echo "b-rc=$?"
+	wait $a
+	echo "target=$(stat -c %a /tmp/auth-target.json) $(cat /tmp/auth-target.json)"
+	cat /tmp/b.out' 2>&1)
+assert_contains "auth.json replaced while waiting: run B waited for the lock" "another Codex run holds" "$out"
+assert_contains "auth.json replaced while waiting: run B is refused with exit 78" "b-rc=78" "$out"
+assert_contains "auth.json replaced while waiting: the refusal names the symlink" "auth.json is a symlink" "$out"
+assert_contains "auth.json replaced while waiting: the link target keeps its mode" "target=644 outside" "$out"
+
+# A lock file left at mode 000 does not stop the next start; it gets owner read and write.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c '
+	l=/home/kelos/.codex/.agentainer-codex.lock
+	: > $l && chmod 000 $l
+	/kelos_entrypoint.sh; echo "rc=$?"
+	echo "lock-mode=$(stat -c %a $l)"' 2>&1)
+assert_contains "lock file at mode 000: the start succeeds" "rc=0" "$out"
+assert_contains "lock file at mode 000: the owner gets read and write" "lock-mode=600" "$out"
+
+# Only codex keeps the lock's file descriptor; the setup command (under node), codex
+# login status and kelos-capture run without it. CODEX_AUTH_JSON is gone from the
+# environment of the setup command, codex and a command codex runs. Each stub writes
+# what it sees to a file. The existing auth.json holds the same account as
+# CODEX_AUTH_JSON, so codex login status runs too.
+# shellcheck disable=SC2016 # expands in the stub
+fd_codex_stub='#!/bin/sh
+if [ "$1" = login ]; then ls -l /proc/$$/fd >/tmp/fd-login 2>&1; exit 0; fi
+{
+	echo "codex-auth=${CODEX_AUTH_JSON:-unset}"
+	sh -c "echo cmd-auth=\${CODEX_AUTH_JSON:-unset}"
+	echo "codex-env-token=$(env | grep -c rt-from-secret)"
+	ls -l /proc/$$/fd
+} >/tmp/fd-codex 2>&1
+exit 0
+'
+# shellcheck disable=SC2016 # expands in the stub
+fd_capture_stub='#!/bin/sh
+ls -l /proc/$$/fd >/tmp/fd-capture 2>&1
+cat >/dev/null
+'
+same_auth='{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"'"$fake_jwt"'","access_token":"at-rotated","refresh_token":"rt-rotated","account_id":"acct-a"}}'
+# shellcheck disable=SC2016 # expands in the container and the setup command
+out=$(kr --user 0 -e KELOS_AGENT_TYPE=codex -e HOME=/home/kelos -e "CODEX_AUTH_JSON=$secret" -e "OLD_AUTH=$same_auth" \
+	-e "CSTUB=$fd_codex_stub" -e "KSTUB=$fd_capture_stub" \
+	-e 'KELOS_SETUP_COMMAND=["sh","-c","{ echo setup-auth=${CODEX_AUTH_JSON:-unset}; ls -l /proc/$$/fd; } >/tmp/fd-setup 2>&1"]' -- sh -c '
+	printf "%s" "$CSTUB" > /usr/local/bin/codex && chmod 755 /usr/local/bin/codex
+	printf "%s" "$KSTUB" > /kelos/kelos-capture && chmod 755 /kelos/kelos-capture
+	printf "%s" "$OLD_AUTH" > /home/kelos/.codex/auth.json && chown 61100:61100 /home/kelos/.codex/auth.json
+	setpriv --reuid 61100 --regid 61100 --clear-groups /kelos_entrypoint.sh hi; echo "rc=$?"
+	for f in setup login codex capture; do
+		[ -e /tmp/fd-$f ] && echo "$f-ran"
+		echo "$f-lock=$(grep -c agentainer-codex.lock /tmp/fd-$f 2>/dev/null)"
+	done
+	grep -h -e "-auth=" -e "codex-env-token=" /tmp/fd-setup /tmp/fd-codex' 2>&1)
+assert_contains "lock fd: the start exits 0" "rc=0" "$out"
+for f in setup login codex capture; do
+	assert_contains "lock fd: the $f stub ran" "$f-ran" "$out"
+done
+assert_contains "lock fd: codex keeps the lock descriptor" "codex-lock=1" "$out"
+for f in setup login capture; do
+	assert_contains "lock fd: $f runs without the lock descriptor" "$f-lock=0" "$out"
+done
+assert_contains "CODEX_AUTH_JSON: the setup command does not get it" "setup-auth=unset" "$out"
+assert_contains "CODEX_AUTH_JSON: codex does not get it" "codex-auth=unset" "$out"
+assert_contains "CODEX_AUTH_JSON: a command codex runs does not get it" "cmd-auth=unset" "$out"
+assert_contains "CODEX_AUTH_JSON: no token value is in the codex environment" "codex-env-token=0" "$out"
+
 # The Codex entrypoint exits with codex's status, or with kelos-capture's status
 # when codex succeeded. Stubs replace both binaries.
 for case in "0 5 5" "3 5 3" "0 0 0"; do
@@ -725,12 +811,12 @@ kill -TERM $pid
 wait $pid
 echo "rc=$?"
 cat /tmp/ps/out
-git -C remote.git log task -1 --format="log=%an <%ae>|%cn <%ce>|%s"
-echo "file=$(git -C remote.git show task:f.txt)"' 2>&1)
+git -C remote.git log task-wip -1 --format="log=%an <%ae>|%cn <%ce>|%s"
+echo "file=$(git -C remote.git show task-wip:f.txt)"' 2>&1)
 assert_contains "push-sidecar exits 0 after SIGTERM" "rc=0" "$out"
 assert_contains "push-sidecar prints push-ok" "push-ok" "$out"
 assert_contains "WIP commit has the Task identity as author and committer" "log=Bot <bot@example.com>|Bot <bot@example.com>|agent WIP" "$out"
-assert_contains "the pushed branch holds the new file" "file=hello" "$out"
+assert_contains "the WIP branch holds the new file" "file=hello" "$out"
 # Nothing to commit is a success.
 # shellcheck disable=SC2016 # expands in the container
 out=$(kr -- bash -c "$ps_setup"'
@@ -752,12 +838,12 @@ PUSH_INTERVAL=1 /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
 pid=$!
 sleep 2
 echo periodic > work/p.txt
-for i in $(seq 1 40); do git -C remote.git show task:p.txt >/dev/null 2>&1 && break; sleep 1; done
-echo "before-term=$(git -C remote.git show task:p.txt 2>&1)"
+for i in $(seq 1 40); do git -C remote.git show task-wip:p.txt >/dev/null 2>&1 && break; sleep 1; done
+echo "before-term=$(git -C remote.git show task-wip:p.txt 2>&1)"
 kill -TERM $pid
 wait $pid
 echo "rc=$?"' 2>&1)
-assert_contains "periodic push lands before SIGTERM" "before-term=periodic" "$out"
+assert_contains "periodic WIP push lands before SIGTERM" "before-term=periodic" "$out"
 # A refused push is push-failed, exit 1, and the token is not printed.
 # shellcheck disable=SC2016 # expands in the container
 out=$(kr -- bash -c "$ps_setup"'
@@ -812,7 +898,7 @@ assert_eq "DISABLE_TELEMETRY is in the claude allowlist" "DISABLE_TELEMETRY" "$(
 
 # Repository config that could start a command or move the token is refused, and
 # nothing runs. Each case is "key|value".
-for case in "include.path|/tmp/ps/extra" "includeIf.gitdir:/tmp/.path|/tmp/ps/extra" "filter.x.clean|touch /tmp/ps/ran" "core.fsmonitor|touch /tmp/ps/ran" "core.sshCommand|touch /tmp/ps/ran" "core.hooksPath|/tmp/ps/hooks" "core.askPass|/tmp/ps/ask" "gpg.program|/tmp/ps/gpg" "url./tmp/other.insteadOf|/tmp/ps/remote.git" "credential.https://github.com.helper|touch /tmp/ps/ran" "http.proxy|http://127.0.0.1:1" "http.sslVerify|false" "protocol.ext.allow|always" "diff.x.textconv|touch /tmp/ps/ran" "diff.external|touch /tmp/ps/ran" "remote.https://github.com/o/r.pushurl|/tmp/ps/other.git" "remote.origin.pushurl|/tmp/ps/other.git" "remote.origin.proxy|http://127.0.0.1:1" "remote.upstream.url|/tmp/ps/other.git" "push.recurseSubmodules|on-demand" "submodule.recurse|true" "submodule.sub.url|/tmp/ps/other.git"; do
+for case in "include.path|/tmp/ps/extra" "includeIf.gitdir:/tmp/.path|/tmp/ps/extra" "filter.x.clean|touch /tmp/ps/ran" "core.fsmonitor|touch /tmp/ps/ran" "core.sshCommand|touch /tmp/ps/ran" "core.hooksPath|/tmp/ps/hooks" "core.askPass|/tmp/ps/ask" "gpg.program|/tmp/ps/gpg" "url./tmp/other.insteadOf|/tmp/ps/remote.git" "credential.https://github.com.helper|touch /tmp/ps/ran" "http.proxy|http://127.0.0.1:1" "http.sslVerify|false" "protocol.ext.allow|always" "diff.x.textconv|touch /tmp/ps/ran" "diff.external|touch /tmp/ps/ran" "remote.https://github.com/o/r.pushurl|/tmp/ps/other.git" "remote.origin.pushurl|/tmp/ps/other.git" "remote.origin.proxy|http://127.0.0.1:1" "remote.upstream.url|/tmp/ps/other.git" "push.recurseSubmodules|on-demand" "submodule.recurse|true" "submodule.sub.url|/tmp/ps/other.git" "hook.x.command|touch /tmp/ps/ran" "hook.x.event|pre-commit"; do
 	key=${case%%|*}
 	value=${case#*|}
 	# shellcheck disable=SC2016 # expands in the container
@@ -858,7 +944,9 @@ test -e /tmp/ps/helper-ran && echo helper-ran || echo helper-not-run' 2>&1)
 assert_contains "the flags clear a generic helper from the repo config" "helper-not-run" "$out"
 assert_contains "the sidecar's helper returns the token" "count=1" "$out"
 
-# A stale index.lock does not stop the push of commits the agent already made.
+# The sidecar never writes the agent's index, so a stale index.lock changes nothing:
+# the agent's own commit goes to the branch, the uncommitted file to the WIP branch,
+# and the lock file stays where it is.
 # shellcheck disable=SC2016 # expands in the container
 out=$(kr -- bash -c "$ps_setup"'
 git -C work -c user.name=a -c user.email=a@x commit -q --allow-empty -m "agent own commit"
@@ -867,20 +955,95 @@ echo uncommitted > work/b.txt
 /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
 pid=$!
 sleep 3
-start=$(date +%s)
 kill -TERM $pid
 wait $pid
 echo "rc=$?"
-echo "elapsed=$(($(date +%s) - start))"
 cat /tmp/ps/out
 echo "subject=$(git -C remote.git log task -1 --format=%s)"
-git -C remote.git show task:b.txt >/dev/null 2>&1 && echo b-pushed || echo b-not-pushed' 2>&1)
+echo "wip-b=$(git -C remote.git show task-wip:b.txt 2>&1)"
+test -e work/.git/index.lock && echo lock-kept || echo lock-gone' 2>&1)
 assert_contains "lock: the agent's own commit is pushed" "subject=agent own commit" "$out"
-assert_contains "lock: the commit failure is reported" "index.lock exists" "$out"
-assert_contains "lock: the result is push-failed with exit 1" "rc=1" "$out"
-assert_contains "lock: the report says HEAD was pushed" "HEAD was pushed" "$out"
-assert_contains "lock: the uncommitted file was not pushed" "b-not-pushed" "$out"
-case "$out" in *"elapsed=0"* | *"elapsed=1"* | *"elapsed=2"* | *"elapsed=3"*) pass "lock: the final push is quick" ;; *) fail "lock: the final push is quick" "$out" ;; esac
+assert_contains "lock: the uncommitted file reaches the WIP branch" "wip-b=uncommitted" "$out"
+assert_contains "lock: the result is push-ok with exit 0" "rc=0" "$out"
+assert_contains "lock: the agent's index.lock is left alone" "lock-kept" "$out"
+
+# A periodic WIP push changes nothing in the agent's repository: HEAD, the branch,
+# the index file and what git status shows stay the same, and no index.lock is left.
+# The WIP commit's parent is HEAD. The test's own git status runs with
+# GIT_OPTIONAL_LOCKS=0, so it does not rewrite the index either. The agent then
+# commits and pushes the branch itself, which fast-forwards, and the sidecar's
+# later pushes carry that commit.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -- bash -c "$ps_setup"'
+cd work
+echo tracked > t.txt && git add t.txt && git -c user.name=a -c user.email=a@x commit -q -m base
+echo changed > t.txt; echo new > n.txt; echo staged > s.txt; git add s.txt
+export GIT_OPTIONAL_LOCKS=0
+st0=$(git status --porcelain | tr "\n" ",")
+head0=$(git rev-parse HEAD); ref0=$(git rev-parse refs/heads/task); idx0=$(sha256sum < .git/index)
+cd /tmp/ps
+PUSH_INTERVAL=1 /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
+pid=$!
+for i in $(seq 1 40); do git -C remote.git show task-wip:n.txt >/dev/null 2>&1 && break; sleep 1; done
+sleep 1
+cd work
+[ "$(git rev-parse HEAD)" = "$head0" ] && echo head-same || echo head-moved
+[ "$(git rev-parse refs/heads/task)" = "$ref0" ] && echo branch-same || echo branch-moved
+[ "$(sha256sum < .git/index)" = "$idx0" ] && echo index-same || echo index-changed
+[ "$(git status --porcelain | tr "\n" ",")" = "$st0" ] && echo status-same || echo status-changed
+test -e .git/index.lock && echo lock-left || echo no-lock
+[ "$(git -C /tmp/ps/remote.git rev-parse task-wip^)" = "$head0" ] && echo wip-parent-is-head || echo wip-parent-other
+echo "wip-tree=$(git -C /tmp/ps/remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"
+echo "wip-t=$(git -C /tmp/ps/remote.git show task-wip:t.txt)"
+git add -A && git -c user.name=a -c user.email=a@x commit -q -m "agent own commit"
+git push -q /tmp/ps/remote.git task 2>&1; echo "agent-push-rc=$?"
+[ "$(git -C /tmp/ps/remote.git rev-parse task)" = "$(git rev-parse HEAD)" ] && echo remote-has-agent-commit || echo remote-other
+echo later > l.txt
+cd /tmp/ps
+for i in $(seq 1 40); do git -C remote.git show task-wip:l.txt >/dev/null 2>&1 && break; sleep 1; done
+kill -TERM $pid
+wait $pid
+echo "rc=$?"
+echo "wip-log=$(git -C remote.git log task-wip --format=%s | tr "\n" ",")"
+echo "task-subject=$(git -C remote.git log task -1 --format=%s)"' 2>&1)
+assert_contains "WIP push: the agent's HEAD does not move" "head-same" "$out"
+assert_contains "WIP push: the agent's branch does not move" "branch-same" "$out"
+assert_contains "WIP push: the agent's index file is unchanged" "index-same" "$out"
+assert_contains "WIP push: git status in the agent's repository is unchanged" "status-same" "$out"
+assert_contains "WIP push: no index.lock is left" "no-lock" "$out"
+assert_contains "WIP push: the WIP commit's parent is HEAD" "wip-parent-is-head" "$out"
+assert_contains "WIP push: the WIP tree has the changed, new and staged files" "wip-tree=n.txt,s.txt,t.txt," "$out"
+assert_contains "WIP push: the WIP tree has the work tree content" "wip-t=changed" "$out"
+assert_contains "WIP push: the agent's own push still fast-forwards" "agent-push-rc=0" "$out"
+assert_contains "WIP push: the agent's own commit reaches the remote branch" "remote-has-agent-commit" "$out"
+assert_contains "WIP push: the next WIP commit sits on the agent's commit" "wip-log=agent WIP,agent own commit,base,init," "$out"
+assert_contains "WIP push: the branch ends at the agent's own commit" "task-subject=agent own commit" "$out"
+assert_contains "WIP push: exit 0" "rc=0" "$out"
+
+# A clean work tree moves the WIP branch to HEAD, and PUSH_WIP_BRANCH names the branch.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -- bash -c "$ps_setup"'
+git -C work -c user.name=a -c user.email=a@x commit -q --allow-empty -m "agent own commit"
+PUSH_WIP_BRANCH=snap /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
+pid=$!
+sleep 3
+kill -TERM $pid
+wait $pid
+echo "rc=$?"
+[ "$(git -C remote.git rev-parse snap)" = "$(git -C work rev-parse HEAD)" ] && echo snap-is-head || echo snap-other
+git -C remote.git rev-parse -q --verify task-wip >/dev/null && echo default-wip-exists || echo no-default-wip' 2>&1)
+assert_contains "clean tree: PUSH_WIP_BRANCH gets HEAD" "snap-is-head" "$out"
+assert_contains "clean tree: the default WIP branch is not used when PUSH_WIP_BRANCH is set" "no-default-wip" "$out"
+assert_contains "clean tree: exit 0" "rc=0" "$out"
+# PUSH_WIP_BRANCH must be a valid branch name other than PUSH_BRANCH.
+for case in "same as PUSH_BRANCH|task|must differ from PUSH_BRANCH" "with a tilde|a~b|PUSH_WIP_BRANCH is not a valid branch name"; do
+	name=${case%%|*}
+	rest=${case#*|}
+	out=$(kr -- env PUSH_URL=https://github.com/o/r.git PUSH_BRANCH=task "PUSH_WIP_BRANCH=${rest%%|*}" KELOS_GITHUB_TOKEN_FILE=/etc/hostname GIT_AUTHOR_NAME=Bot GIT_AUTHOR_EMAIL=bot@example.com /usr/local/bin/push-sidecar 2>&1)
+	rc=$?
+	if [ "$rc" -eq 1 ]; then pass "PUSH_WIP_BRANCH $name: exit 1"; else fail "PUSH_WIP_BRANCH $name: exit 1" "exit $rc"; fi
+	assert_contains "PUSH_WIP_BRANCH $name: the reason is printed" "push-failed: ${rest#*|}" "$out"
+done
 
 # A merge, rebase, cherry-pick or revert in progress is pushed as HEAD, uncommitted.
 # shellcheck disable=SC2016 # expands in the container
@@ -928,8 +1091,9 @@ out=$(kr -- bash -c "$ps_setup"'
 cd work
 printf "ignored.txt\n" > .gitignore
 echo x > ignored.txt; echo x > normal.txt
-for f in .env .env.local key.pem server.key id_rsa id_ed25519 my-credentials.json .npmrc .pypirc .netrc auth.json; do echo secret > "$f"; done
-mkdir -p .claude && echo secret > .claude/.credentials.json
+for f in .env .env.local key.pem server.key id_rsa id_ed25519 my-credentials.json .npmrc .pypirc .netrc auth.json \
+	.envrc kubeconfig prod.kubeconfig dev.tfvars dev.tfvars.json terraform.tfstate terraform.tfstate.backup; do echo secret > "$f"; done
+mkdir -p .claude .kube && echo secret > .claude/.credentials.json && echo secret > .kube/config
 head -c 11534336 /dev/zero > big.bin
 cd /tmp/ps
 /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
@@ -939,11 +1103,31 @@ kill -TERM $pid
 wait $pid
 echo "rc=$?"
 cat /tmp/ps/out
-echo "tree=$(git -C remote.git ls-tree -r --name-only task | tr "\n" ",")"' 2>&1)
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
 assert_contains "excludes: only the plain files are pushed" "tree=.gitignore,normal.txt," "$out"
 assert_contains "excludes: the large file is named" "skipped 1 file(s) over 10 MB: big.bin" "$out"
 assert_contains "excludes: the push still succeeds" "rc=0" "$out"
 assert_contains "the excludes file is in the image" "id_rsa*" "$(kr -- cat /usr/local/share/push-sidecar/excludes)"
+# The patterns match in any letter case, for files and for directories.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -- bash -c "$ps_setup"'
+cd work
+echo x > normal.txt
+for f in Credentials.json SERVER.KEY .ENV Id_RSA Prod.TFVARS KubeConfig; do echo secret > "$f"; done
+mkdir -p Secrets/CREDENTIALS && echo secret > Secrets/CREDENTIALS/inner.txt
+cd /tmp/ps
+/usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
+pid=$!
+sleep 3
+kill -TERM $pid
+wait $pid
+echo "rc=$?"
+cat /tmp/ps/out
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
+assert_contains "mixed case: only the plain file is pushed" "tree=normal.txt," "$out"
+assert_contains "mixed case: the kept files are named" "push-note: kept 7 new file(s) with secret-like names out of the commit:" "$out"
+assert_contains "mixed case: Credentials.json is named" "Credentials.json" "$out"
+assert_contains "mixed case: the push succeeds" "rc=0" "$out"
 
 # A diff driver with a .gitattributes line is refused, and the sidecar's own diff does
 # not run the driver. Without the flags git would run it.
@@ -1002,7 +1186,7 @@ sleep 3
 kill -TERM $pid
 wait $pid
 echo "rc=$?"
-echo "tree=$(git -C remote.git ls-tree -r --name-only task | tr "\n" ",")"' 2>&1)
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
 assert_contains "negations: only the plain files are pushed" "tree=.gitignore,normal.txt," "$out"
 assert_contains "negations: the push succeeds" "rc=0" "$out"
 
@@ -1042,7 +1226,7 @@ sleep 3
 kill -TERM $pid
 wait $pid
 echo "rc=$?"
-echo "tree=$(git -C remote.git ls-tree -r --name-only task | tr "\n" ",")"' 2>&1)
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
 assert_contains "folder negations: files under secret-named directories stay out" "tree=.gitignore,normal.txt,sub/ok.txt," "$out"
 assert_contains "folder negations: the push succeeds" "rc=0" "$out"
 
@@ -1064,8 +1248,8 @@ kill -TERM $pid
 wait $pid
 echo "rc=$?"
 cat /tmp/ps/out
-for f in .env.example certs/test.pem internal/credentials/store.go; do echo "$f=$(git -C remote.git show "task:$f")"; done
-echo "tree=$(git -C remote.git ls-tree -r --name-only task | tr "\n" ",")"' 2>&1)
+for f in .env.example certs/test.pem internal/credentials/store.go; do echo "$f=$(git -C remote.git show "task-wip:$f")"; done
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
 assert_contains "tracked secret-like names: the push succeeds" "rc=0" "$out"
 assert_contains "tracked .env.example: the edit is pushed" ".env.example=new" "$out"
 assert_contains "tracked certs/test.pem: the edit is pushed" "certs/test.pem=new" "$out"
@@ -1088,7 +1272,7 @@ kill -TERM $pid
 wait $pid
 echo "rc=$?"
 cat /tmp/ps/out
-echo "tree=$(git -C remote.git ls-tree -r --name-only task | tr "\n" ",")"
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"
 echo "disk=$(cat work/.env)"' 2>&1)
 assert_contains "staged secrets: only the plain file is pushed" "tree=normal.txt," "$out"
 assert_contains "staged secrets: the files are named" "push-note: kept 2 new file(s) with secret-like names out of the commit: .env keys/id_rsa" "$out"
@@ -1138,7 +1322,7 @@ wait $pid
 echo "rc=$?"
 cat /tmp/ps/out
 test -e /tmp/ps/ran && echo filter-ran || echo filter-not-run
-echo "tree=$(git -C remote.git ls-tree -r --name-only task | tr "\n" ",")"' 2>&1)
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
 assert_contains "submodule filter: a plain git status runs it (control)" "control-ran" "$out"
 assert_contains "submodule filter: the sidecar does not run it" "filter-not-run" "$out"
 assert_contains "submodule filter: the push succeeds" "rc=0" "$out"
@@ -1147,6 +1331,8 @@ assert_contains "submodule filter: the new file is pushed" "tree=normal.txt,sub,
 # push is told not to recurse into submodules.
 assert_contains "git push supports --no-recurse-submodules" "recurse-submodules" "$(kr -- git push -h 2>&1)"
 assert_contains "the sidecar passes --no-recurse-submodules" "push --no-recurse-submodules" "$(kr -- cat /usr/local/bin/push-sidecar)"
+assert_contains "git push supports --no-verify" "--no-verify" "$(kr -- git push -h 2>&1)"
+assert_contains "the sidecar pushes with --no-verify" "push --no-recurse-submodules --no-verify" "$(kr -- cat /usr/local/bin/push-sidecar)"
 
 # A file name that looks like pathspec magic does not escape the size cap.
 # shellcheck disable=SC2016 # expands in the container
@@ -1162,7 +1348,7 @@ kill -TERM $pid
 wait $pid
 echo "rc=$?"
 cat /tmp/ps/out
-echo "tree=$(git -C remote.git ls-tree -r --name-only task | tr "\n" ",")"' 2>&1)
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
 assert_contains "pathspec-like name: the large file is named as skipped" "skipped 1 file(s) over 10 MB: :(glob)z.bin" "$out"
 assert_contains "pathspec-like name: only the small file is pushed" "tree=normal.txt," "$out"
 
