@@ -15,6 +15,9 @@ from unittest.mock import call, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"))
 import bump_versions as bv  # noqa: E402
 
+# A publish time older than MIN_RELEASE_AGE_HOURS for any run of these tests.
+OLD = "2026-01-01T00:00:00Z"
+
 
 class EnvFileTests(unittest.TestCase):
     def test_failed_publisher_verification_preserves_pins(self):
@@ -23,7 +26,7 @@ class EnvFileTests(unittest.TestCase):
             original = "UV_VERSION=0.13.0\n"
             with open(path, "w") as file:
                 file.write(original)
-            release = {"tag_name": "0.13.1", "assets": [
+            release = {"tag_name": "0.13.1", "published_at": OLD, "assets": [
                 {"name": "uv-test.tar.gz", "digest": "sha256:" + "a" * 64}]}
             with patch.object(bv, "gh_latest", return_value=release), \
                     patch.object(bv, "verify_asset", side_effect=bv.VerificationFailed("wrong signer")):
@@ -62,7 +65,7 @@ class ParserTests(unittest.TestCase):
             assets.extend([{"name": name, "digest": "sha256:" + letter * 64},
                            {"name": name + ".sha256", "browser_download_url": "https://example.com/" + name}])
             responses["https://example.com/" + name] = letter * 64 + " *" + name + "\n"
-        release = {"tag_name": "v0.5.5", "assets": assets}
+        release = {"tag_name": "v0.5.5", "published_at": OLD, "assets": assets}
         with patch.object(bv, "gh_latest", return_value=release) as latest, \
                 patch.object(bv, "fetch", side_effect=responses.__getitem__) as fetched, \
                 patch.object(bv, "verify_asset", return_value=False):
@@ -75,7 +78,7 @@ class ParserTests(unittest.TestCase):
 
     def test_ruff_resolver_selects_both_official_archives_and_verifies_publisher(self):
         names = ["ruff-x86_64-unknown-linux-gnu.tar.gz", "ruff-aarch64-unknown-linux-gnu.tar.gz"]
-        release = {"tag_name": "0.17.1", "assets": [
+        release = {"tag_name": "0.17.1", "published_at": OLD, "assets": [
             {"name": name, "digest": "sha256:" + letter * 64}
             for name, letter in zip(names, "ab")]}
         with patch.object(bv, "gh_latest", return_value=release), \
@@ -93,7 +96,7 @@ class ParserTests(unittest.TestCase):
         text = "".join("%s  %s\n" % (l * 64, n) for n, l in zip(names, letters))
         if with_sums:
             assets.append({"name": sums_name, "digest": None, "browser_download_url": "https://example.com/" + sums_name})
-        return {"tag_name": "v" + version, "prerelease": False, "assets": assets}, text
+        return {"tag_name": "v" + version, "prerelease": False, "published_at": OLD, "assets": assets}, text
 
     def _resolve(self, resolver, release, text, **extra):
         with patch.object(bv, "gh_latest", return_value=release), \
@@ -187,7 +190,7 @@ class ParserTests(unittest.TestCase):
                 self.assertIn(resolver, bv.RESOLVERS)
 
     def test_fj_resolver_hashes_the_codeberg_archives(self):
-        release = {"tag_name": "v0.7.0", "assets": [
+        release = {"tag_name": "v0.7.0", "published_at": OLD, "assets": [
             {"name": "forgejo-cli-x86_64-linux.tar.gz", "browser_download_url": "https://example.com/amd64"},
             {"name": "forgejo-cli-aarch64-linux.tar.gz", "browser_download_url": "https://example.com/arm64"}]}
         blobs = {"https://example.com/amd64": b"amd64 archive", "https://example.com/arm64": b"arm64 archive"}
@@ -759,7 +762,7 @@ class WriteTests(unittest.TestCase):
         shasums = ("%s  node-v26.99.0-linux-x64.tar.xz\n%s  node-v26.99.0-linux-arm64.tar.xz\n"
                    % ("b" * 64, "a" * 64)).encode()
         err = io.StringIO()
-        with patch.object(bv, "fetch_json", return_value=[{"version": "v26.99.0"}]) as fj, \
+        with patch.object(bv, "fetch_json", return_value=[{"version": "v26.99.0", "date": "2026-01-01"}]) as fj, \
                 patch.object(bv, "fetch_bytes", side_effect=[shasums, b"not a signature"]) as fb, \
                 contextlib.redirect_stderr(err):
             self.assertEqual(bv.main(["--file", self.path, "--only", "r_node"]), 1)
@@ -1719,8 +1722,8 @@ class OpenCodeResolverTests(unittest.TestCase):
     INTEGRITY = {"linux-x64-baseline": "sha512-" + "A" * 86 + "==", "linux-arm64": "sha512-" + "B" * 86 + "=="}
 
     def fetch(self, url):
-        if url == "https://registry.npmjs.org/@opencode/cli/latest":
-            return {"version": "2.5.0"}
+        if url == "https://registry.npmjs.org/@opencode/cli":
+            return {"dist-tags": {"latest": "2.5.0"}, "versions": {"2.5.0": {}}, "time": {"2.5.0": OLD}}
         for target, integrity in self.INTEGRITY.items():
             if url == "https://registry.npmjs.org/@opencode/cli-%s/2.5.0" % target:
                 return {"dist": {"integrity": integrity, "signatures": [{"keyid": "k", "sig": "s"}]}}
@@ -1744,6 +1747,204 @@ class OpenCodeResolverTests(unittest.TestCase):
                 patch.object(bv, "load_registry_keys", return_value={}):
             with self.assertRaisesRegex(bv.LookupFailed, "unknown keyid"):
                 bv.r_opencode()
+
+
+class ReleaseAgeTests(unittest.TestCase):
+    """The MIN_RELEASE_AGE_HOURS rule, with the run time fixed by patching utcnow."""
+    NOW = datetime.datetime(2026, 11, 26, 12, 0, tzinfo=datetime.timezone.utc)
+
+    def setUp(self):
+        patcher = patch.object(bv, "utcnow", return_value=self.NOW)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        del bv.YOUNG_RELEASES[:]
+        del bv.AGE_FALLBACK[:]
+        self.addCleanup(bv.YOUNG_RELEASES.clear)
+        self.addCleanup(bv.AGE_FALLBACK.clear)
+
+    def ago(self, hours):
+        return (self.NOW - datetime.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def rel(self, tag, hours, **extra):
+        return dict({"tag_name": tag, "published_at": self.ago(hours), "draft": False, "prerelease": False}, **extra)
+
+    def test_the_minimum_is_72_hours(self):
+        self.assertEqual(bv.MIN_RELEASE_AGE_HOURS, 72)
+
+    def test_an_old_enough_latest_release_is_taken_without_the_list(self):
+        latest = self.rel("v2.0.0", 73)
+        with patch.object(bv, "gh_latest", return_value=latest), \
+                patch.object(bv, "fetch_json", side_effect=AssertionError("must not list")):
+            self.assertIs(bv.gh_release("o/r"), latest)
+        self.assertEqual(bv.YOUNG_RELEASES, [])
+        self.assertEqual(bv.AGE_FALLBACK, [])
+
+    def test_a_release_exactly_72_hours_old_is_taken(self):
+        latest = self.rel("v2.0.0", 72)
+        with patch.object(bv, "gh_latest", return_value=latest):
+            self.assertIs(bv.gh_release("o/r"), latest)
+
+    def test_a_too_young_latest_release_falls_back_to_the_previous_one(self):
+        releases = [self.rel("v2.1.0", 5), self.rel("v2.1.0-rc1", 100, prerelease=True),
+                    self.rel("v2.0.1", 80), self.rel("v2.0.0", 500), self.rel("v3.0.0", 1, draft=True)]
+        with patch.object(bv, "gh_latest", return_value=releases[0]), \
+                patch.object(bv, "fetch_json", return_value=releases) as listed:
+            self.assertEqual(bv.gh_release("o/r")["tag_name"], "v2.0.1")
+        listed.assert_called_once_with("https://api.github.com/repos/o/r/releases?per_page=30")
+        self.assertEqual(bv.YOUNG_RELEASES,
+                         ["newer release o/r v2.1.0 skipped, published 5 hours ago (minimum 72 hours)"])
+        self.assertEqual(bv.AGE_FALLBACK, ["o/r"])
+
+    def test_no_release_old_enough_keeps_the_pin(self):
+        releases = [self.rel("v2.1.0", 5), self.rel("v2.0.0", 30)]
+        err = io.StringIO()
+        with patch.object(bv, "gh_latest", return_value=releases[0]), \
+                patch.object(bv, "fetch_json", return_value=releases), \
+                patch.object(bv, "verify_asset", side_effect=AssertionError("must not verify")), \
+                contextlib.redirect_stderr(err):
+            self.assertIsNone(bv.gh_release("o/r"))
+            self.assertEqual(bv.r_ruff(), {})
+        self.assertIn("keeping the current pin", err.getvalue())
+
+    def test_a_missing_publish_time_fails_the_resolver(self):
+        with patch.object(bv, "gh_latest", return_value={"tag_name": "v1.0.0"}):
+            with self.assertRaisesRegex(bv.LookupFailed, "no valid publish time"):
+                bv.gh_release("o/r")
+
+    def test_forgejo_and_gitea_releases_fall_back_the_same_way(self):
+        latest = dict(self.rel("v0.8.0", 10), published_at="2026-11-26T03:00:00+01:00")
+        older = [latest, self.rel("v0.7.0", 2000)]
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            return latest if url.endswith("/latest") else older
+
+        with patch.object(bv, "fetch_json", side_effect=fetch):
+            self.assertEqual(bv.forge_release(bv.FJ_RELEASES, "forgejo-cli")["tag_name"], "v0.7.0")
+        self.assertEqual(calls, [bv.FJ_RELEASES,
+                                 "https://codeberg.org/api/v1/repos/forgejo-contrib/forgejo-cli/releases?limit=20"])
+        # 03:00 at +01:00 is 02:00 UTC, ten hours before NOW.
+        self.assertIn("forgejo-cli v0.8.0 skipped, published 10 hours ago", bv.YOUNG_RELEASES[0])
+
+    def test_node_falls_back_by_release_day(self):
+        doc = [{"version": "v26.14.0", "date": "2026-11-25"}, {"version": "v26.13.1", "date": "2026-11-22"},
+               {"version": "v26.13.0", "date": "2026-11-01"}]
+        # 2026-11-22 ends at 2026-11-23T00:00Z, 84 hours before NOW; 2026-11-25 ends 12 hours before.
+        self.assertEqual(bv.parse_node_index(doc, 26, now=self.NOW), "26.13.1")
+        self.assertIsNone(bv.parse_node_index(doc[:1], 26, now=self.NOW))
+        with self.assertRaises(bv.LookupFailed):
+            bv.parse_node_index([{"version": "v26.14.0"}], 26, now=self.NOW)
+
+    def test_node_with_no_release_old_enough_keeps_the_pin(self):
+        doc = [{"version": "v26.14.0", "date": "2026-11-25"}]
+        with patch.object(bv, "fetch_json", return_value=doc), \
+                patch.object(bv, "fetch_bytes", side_effect=AssertionError("must not download")), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(bv.r_node(), {})
+        self.assertIn("node 26.14.0 skipped, published 12 hours ago", bv.YOUNG_RELEASES[0])
+
+    def test_opencode_falls_back_to_the_newest_version_old_enough(self):
+        packument = {"dist-tags": {"latest": "2.5.0"}, "versions": {"2.5.0": {}, "2.4.9": {}, "2.4.8": {}},
+                     "time": {"2.5.0": self.ago(20), "2.4.9": self.ago(100), "2.4.8": self.ago(900)}}
+
+        def fetch(url):
+            if url == "https://registry.npmjs.org/@opencode/cli":
+                return packument
+            return {"dist": {"integrity": "sha512-" + "A" * 86 + "==", "signatures": []}}
+
+        with patch.object(bv, "fetch_json", side_effect=fetch), \
+                patch.object(bv, "load_registry_keys", return_value={}), \
+                patch.object(bv, "verify_registry_signature"):
+            self.assertEqual(bv.r_opencode()["OPENCODE_VERSION"], "2.4.9")
+        self.assertEqual(bv.YOUNG_RELEASES,
+                         ["newer release @opencode/cli 2.5.0 skipped, published 20 hours ago (minimum 72 hours)"])
+
+    def test_a_too_young_rust_release_keeps_the_rust_pins(self):
+        texts = {"https://static.rust-lang.org/rustup/release-stable.toml": "version = '1.29.3'\n",
+                 "https://static.rust-lang.org/dist/channel-rust-stable.toml":
+                     'manifest-version = "2"\ndate = "2026-11-25"\n[pkg.rustc]\nversion = "1.99.0 (abc 2026-11-24)"\n'}
+
+        def fetch(url):
+            if url in texts:
+                return texts[url]
+            if url.endswith("rustup-init.sha256"):
+                return "a" * 64 + "  rustup-init\n"
+            raise AssertionError(url)
+
+        with patch.object(bv, "fetch", side_effect=fetch):
+            out = bv.r_rust()
+        self.assertEqual(sorted(out), ["RUSTUP_SHA256_AMD64", "RUSTUP_SHA256_ARM64", "RUSTUP_VERSION"])
+        self.assertIn("rust 1.99.0 skipped", bv.YOUNG_RELEASES[0])
+
+    def test_a_skipped_release_is_printed_and_does_not_fail_the_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "versions.env")
+            failures = os.path.join(directory, "failures.txt")
+            with open(path, "w") as f:
+                f.write("GH_VERSION=2.104.0\n")
+
+            def resolver():
+                bv.too_young("cli/cli", "v2.106.0", self.NOW - datetime.timedelta(hours=27), self.NOW)
+                bv.AGE_FALLBACK.append("cli/cli")
+                return {"GH_VERSION": "2.105.0"}
+
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                rc = bv.main(["--file", path, "--failures", failures], resolvers=[resolver])
+            self.assertEqual(rc, 0)
+            self.assertIn("release age: newer release cli/cli v2.106.0 skipped, published 27 hours ago",
+                          out.getvalue())
+            with open(failures) as f:
+                self.assertEqual(f.read(), "")
+            with open(path) as f:
+                self.assertEqual(f.read(), "GH_VERSION=2.105.0\n")
+
+    def test_a_fallback_older_than_the_pin_keeps_the_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "versions.env")
+            with open(path, "w") as f:
+                f.write("GH_VERSION=2.106.0\n")
+
+            def resolver():
+                bv.AGE_FALLBACK.append("cli/cli")
+                return {"GH_VERSION": "2.105.0"}
+
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                self.assertEqual(bv.main(["--file", path], resolvers=[resolver]), 0)
+            self.assertIn("keeping it", err.getvalue())
+            with open(path) as f:
+                self.assertEqual(f.read(), "GH_VERSION=2.106.0\n")
+
+    def test_without_a_fallback_an_older_result_is_still_a_downgrade(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "versions.env")
+            with open(path, "w") as f:
+                f.write("GH_VERSION=2.106.0\n")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(bv.main(["--file", path], resolvers=[lambda: {"GH_VERSION": "2.105.0"}]), 1)
+
+    def test_containerssh_agent_and_buildkit_skip_young_releases(self):
+        names = ["agent_0.11.%d_linux_amd64.tar.gz", "agent_0.11.%d_linux_arm64.tar.gz"]
+        releases = []
+        for patch_level, hours in ((3, 2), (2, 200)):
+            assets = [{"name": n % patch_level, "digest": "sha256:" + l * 64} for n, l in zip(names, "ab")]
+            assets.append({"name": "agent_0.11.%d_checksums.txt" % patch_level,
+                           "browser_download_url": "https://example.com/%d" % patch_level})
+            releases.append(self.rel("v0.11.%d" % patch_level, hours, assets=assets))
+        text = "".join("%s  %s\n" % (l * 64, n % 2) for n, l in zip(names, "ab"))
+        with patch.object(bv, "fetch_json", return_value=releases), \
+                patch.object(bv, "fetch", return_value=text), \
+                patch.object(bv, "verify_asset", return_value=False), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(bv.r_containerssh_agent()["CONTAINERSSH_AGENT_VERSION"], "0.11.2")
+        self.assertIn("containerssh/agent v0.11.3 skipped", bv.YOUNG_RELEASES[0])
+        del bv.YOUNG_RELEASES[:]
+        buildkit = [self.rel("v0.30.0", 3), self.rel("v0.29.1", 300)]
+        with patch.object(bv, "fetch_json", side_effect=[buildkit, {"digest": "sha256:" + "c" * 64}]):
+            self.assertEqual(bv.r_buildkit(), {"BUILDKIT_IMAGE": "docker.io/moby/buildkit:v0.29.1@sha256:" + "c" * 64})
+        self.assertIn("moby/buildkit v0.30.0 skipped", bv.YOUNG_RELEASES[0])
 
 
 if __name__ == "__main__":

@@ -79,7 +79,33 @@ On the 1st and 15th of each month at 06:00 UTC, [`.github/workflows/bump.yml`](.
 
 An update PR lists increases to the leading number of a three-part tool version under "Major-version upgrades" and asks the maintainer to acknowledge the compatibility review in its description. CI does not enforce that checkbox. Minor updates to tools below 1.0 can also break compatibility, so review their upstream notes as well ([Semantic Versioning](https://semver.org/)).
 
-The resolver follows current upstream release pointers with no minimum release age, except for the optional extras ([Optional extras](#optional-extras)). Proposed binaries run in build and test jobs before anyone reviews the pull request. Checksums and publisher signatures establish byte identity and the signing identity, not that the code is safe, so review upstream changes before merging.
+The resolver does not pin a release published less than 72 hours before the run ([Minimum release age](#minimum-release-age)). Proposed binaries run in build and test jobs before anyone reviews the pull request. Checksums and publisher signatures establish byte identity and the signing identity, not that the code is safe, so review upstream changes before merging.
+
+### Minimum release age
+
+`MIN_RELEASE_AGE_HOURS` in [`scripts/bump_versions.py`](../scripts/bump_versions.py) is 72. When a tool's newest release was published less than 72 hours before the run, the resolver pins the newest release that is at least 72 hours old instead. When no release qualifies, the pin stays. When the release old enough to pin sorts below the current pin, which an earlier run took before this rule, the pin also stays. Each skipped release prints a line such as `release age: newer release cli/cli v2.106.0 skipped, published 27 hours ago (minimum 72 hours)`. The scheduled workflow puts the resolver's output in the pull request text, so the pull request lists every skipped release. A skipped release does not fail the run.
+
+Each resolver uses the publish time its source gives:
+
+| Source | Publish time used |
+|---|---|
+| GitHub releases (every GitHub-hosted tool, Helm, the ContainerSSH guest agent, BuildKit) | `published_at` of each release. When the latest release is too young, the newest stable, non-draft release from the 30 most recent releases. The Trivy scanner image follows the Trivy version. |
+| tea (Gitea) and forgejo-cli (Codeberg) | `published_at` of each release, from the 20 most recent releases. |
+| OpenCode | The registry's `time` entry for each version of `@opencode/cli`. |
+| Node.js | The release day in `index.json`, counted from the end of that day. |
+| Rust | The `date` line of the stable channel manifest, counted from the end of that day. No list of earlier releases is read, so a Rust release that is too young keeps the current Rust pins. |
+| unslop | The committer date of the newest commit under `pstack`, which the committer sets. When it is too young, the newest commit from before the cutoff (the commits API's `until` parameter). |
+| Optional extras | Their own rule: 7 days ([Optional extras](#optional-extras)). |
+
+These resolvers are not held back, because their source gives no publish time:
+
+- Go: `go.dev/dl/?mode=json` has no dates.
+- rustup: `release-stable.toml` has only the version.
+- kubectl: `stable.txt` on `dl.k8s.io` has only the version.
+- AWS CLI: the changelog headings have no dates.
+- Antigravity: its manifest has only `version`, `url` and `sha512`.
+- Claude Code: the release host gives no time a version reached the stable channel. `manifest.json` has a `buildDate`, but a release is published after it is built, so that time cannot show a release is old enough.
+- The Ubuntu base image, the apt snapshot (always the previous day) and the Kubernetes example images (`CONTAINERSSH_IMAGE`, `WEBHOOK_PYTHON_IMAGE`, `FILEBROWSER_IMAGE`). Each follows a tag that moves with every rebuild, and Docker Hub keeps no earlier digest to fall back to.
 
 Run the same workflow manually through its `workflow_dispatch` trigger for an urgent security fix or an upstream change that breaks an agent. GitHub documents [scheduled](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule) and [manual](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch) triggers.
 
@@ -166,7 +192,7 @@ The updater requires `gh`, `cosign` and GnuPG in addition to Python. The schedul
 | Node.js | GPG-signed `SHASUMS256.txt` by one of the release keys in `scripts/keys/nodejs-release-keys.asc`. |
 | AWS CLI | GPG signature (`<zip>.sig`) on each installer zip, by the AWS CLI Team key in `scripts/keys/aws-cli-public-key.asc` with the fingerprint pinned in the updater. AWS publishes no checksums, so the updater computes the SHA-256 pins from the verified zips. |
 | Optional extras (npm) | npm registry signature on every lockfile entry, by a key in `scripts/keys/npm-registry-keys.json` ([Optional extras](#optional-extras)). |
-| OpenCode | npm registry signature over the `dist.integrity` of `@opencode/cli-linux-x64-baseline` and `@opencode/cli-linux-arm64`, by a key in `scripts/keys/npm-registry-keys.json`. This is the registry's signature, not OpenCode's. The extras' 7-day minimum age does not apply. |
+| OpenCode | npm registry signature over the `dist.integrity` of `@opencode/cli-linux-x64-baseline` and `@opencode/cli-linux-arm64`, by a key in `scripts/keys/npm-registry-keys.json`. This is the registry's signature, not OpenCode's. The 72-hour [minimum release age](#minimum-release-age) applies, not the extras' 7 days. |
 | gosec | Checksum verified; publisher signature not verified. The SHA-256 comes from `gosec_<version>_checksums.txt`. |
 | gitleaks | Checksum verified; publisher signature not verified. The SHA-256 comes from `gitleaks_<version>_checksums.txt`. |
 | ContainerSSH guest agent | Checksum verified; publisher signature not verified. The SHA-256 comes from `agent_<version>_checksums.txt`. |

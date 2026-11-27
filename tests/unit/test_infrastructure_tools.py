@@ -43,7 +43,7 @@ class InfrastructureResolverTests(unittest.TestCase):
             arch = "arm64" if "arm64" in url else "amd64"
             value = "b" * 64 if arch == "arm64" else "a" * 64
             return checksum if checksum is not None else value + "  helm-v4.3.1-linux-" + arch + ".tar.gz\n"
-        with mock.patch.object(bump, "gh_latest", return_value=release or {"tag_name": "v4.3.1"}) as latest, \
+        with mock.patch.object(bump, "gh_latest", return_value=release or {"tag_name": "v4.3.1", "published_at": "2026-01-01T00:00:00Z"}) as latest, \
                 mock.patch.object(bump, "fetch", side_effect=fetch) as fetched:
             result = bump.r_helm()
             latest.assert_called_once_with("helm/helm")
