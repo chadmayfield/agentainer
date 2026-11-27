@@ -9,10 +9,14 @@ assert_eq "uid is 1000" "1000" "$(run_in -- id -u)"
 assert_eq "gid is 1000" "1000" "$(run_in -- id -g)"
 # shellcheck disable=SC2016 # expands in the container
 assert_eq "home is /home/agent" "/home/agent" "$(run_in -- sh -c 'echo $HOME')"
-# Startup steps must not leave the shared stdin or stderr non-blocking: ansible refuses to
-# run then (OpenCode 2.4.2 did this to stderr through entrypoint.d/70-opencode.sh).
-assert_eq "startup leaves stdin and stderr blocking" "True True" \
-	"$(run_in -- python3 -c 'import os; print(os.get_blocking(0), os.get_blocking(2))')"
+# Startup steps must not leave the shared stdin, stdout or stderr non-blocking: ansible
+# refuses to run then. OpenCode does this to the stdout and stderr it inherits, and
+# entrypoint.d/70-opencode.sh runs it. The first check runs without the entrypoint, so a
+# runtime that hands over non-blocking descriptors is told apart from a startup step.
+assert_eq "the runtime hands over blocking stdin, stdout and stderr" "True True True" \
+	"$(run_in --entrypoint python3 -- -c 'import os; print(os.get_blocking(0), os.get_blocking(1), os.get_blocking(2))')"
+assert_eq "startup leaves stdin, stdout and stderr blocking" "True True True" \
+	"$(run_in -- python3 -c 'import os; print(os.get_blocking(0), os.get_blocking(1), os.get_blocking(2))')"
 assert_eq "agent belongs only to the agent group" "agent" "$(run_in -- id -Gn)"
 assert_eq "home is owned by agent" "agent:agent" "$(run_in -- stat -c %U:%G /home/agent)"
 assert_eq "no ubuntu user" "rc=2" "$(run_in -- sh -c 'getent passwd ubuntu; echo rc=$?')"

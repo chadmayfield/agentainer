@@ -133,6 +133,49 @@ class SyncTests(SyncBase):
             self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
             writes.assert_not_called()
 
+    def test_startup_retries_a_removal_that_failed_for_one_agent(self):
+        self.write_mcp({"fs": {"command": "example"}})
+        self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+        os.unlink(os.path.join(self.home, ".agentainer", "mcp.json"))
+        codex = os.path.join(self.home, ".codex", "config.toml")
+        with open(codex) as f:
+            good = f.read()
+        with open(codex, "w") as f:
+            f.write("[broken\n")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 1)
+        self.assertIn("codex: not updated", err.getvalue())
+        self.assertNotIn("fs", self.json_servers("claude"))
+        with open(codex, "w") as f:
+            f.write(good)
+        self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
+        self.assertNotIn("[mcp_servers.fs]", self.read(".codex", "config.toml"))
+        manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
+        self.assertEqual(manifest.get("codex"), [])
+
+    def test_codex_home_and_xdg_config_home_move_the_configs(self):
+        codex_home = os.path.join(self.tmp, "codex2")
+        xdg = os.path.join(self.tmp, "xdg")
+        self.env["CODEX_HOME"] = codex_home
+        self.env["XDG_CONFIG_HOME"] = xdg
+        self.write_mcp({"fs": {"command": "example"}})
+        self.assertEqual(self.sync(), 0)
+        with open(os.path.join(codex_home, "config.toml")) as f:
+            self.assertIn("[mcp_servers.fs]", f.read())
+        with open(os.path.join(xdg, "opencode", "opencode.json")) as f:
+            self.assertIn("fs", json.load(f)["mcp"]["servers"])
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".codex", "config.toml")))
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".config", "opencode", "opencode.json")))
+        self.assertIn("fs", self.json_servers("claude"))
+
+    def test_empty_codex_home_and_xdg_config_home_mean_the_defaults(self):
+        self.env["CODEX_HOME"] = ""
+        self.env["XDG_CONFIG_HOME"] = ""
+        self.write_mcp({"fs": {"command": "example"}})
+        self.assertEqual(self.sync(), 0)
+        self.assert_added_elsewhere("fs", ("codex", "opencode"))
+
     def test_adds_servers_to_each_agent(self):
         self.write_mcp({"fs": {"command": "npx", "args": ["-y", "@example/fs"]}})
         self.assertEqual(self.sync(), 0)

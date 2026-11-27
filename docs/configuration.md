@@ -18,9 +18,9 @@ You keep one instruction file, `~/.agentainer/AGENTS.md`. Agentainer connects ea
 | Agent | Reads | How |
 |---|---|---|
 | Claude Code | `~/.claude/CLAUDE.md` | Contains `@~/.agentainer/AGENTS.md` ([imports](https://code.claude.com/docs/en/memory)) |
-| Codex | `~/.codex/AGENTS.md` | Symlink |
+| Codex | `~/.codex/AGENTS.md`, or `$CODEX_HOME/AGENTS.md` ([AGENTS.md discovery](https://learn.chatgpt.com/docs/agent-configuration/agents-md)) | Symlink |
 | Antigravity | `~/.gemini/AGENTS.md` | Symlink |
-| OpenCode | `~/.config/opencode/AGENTS.md` | Symlink |
+| OpenCode | `~/.config/opencode/AGENTS.md`, or `$XDG_CONFIG_HOME/opencode/AGENTS.md` | Symlink |
 
 The entrypoint seeds `~/.claude/CLAUDE.md` and creates each symlink only when that path is missing. An existing `~/.claude/CLAUDE.md` is kept without a message. An existing regular file at one of the three symlink paths is kept with a warning. In both cases that agent reads the shared file only if your file imports or links it.
 
@@ -74,9 +74,9 @@ The sample fixes the package version using [published npm metadata](https://regi
 | Agent | Where |
 |---|---|
 | Claude Code | `mcpServers` in `~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json` |
-| Codex | `[mcp_servers.<name>]` tables in a marked block at the end of `~/.codex/config.toml` |
+| Codex | `[mcp_servers.<name>]` tables in a marked block at the end of `~/.codex/config.toml`, or `$CODEX_HOME/config.toml` |
 | Antigravity | `mcpServers` in `~/.gemini/config/mcp_config.json` |
-| OpenCode | `mcp.servers` in `~/.config/opencode/opencode.json` |
+| OpenCode | `mcp.servers` in `~/.config/opencode/opencode.json`, or `$XDG_CONFIG_HOME/opencode/opencode.json` |
 
 The JSON paths and formats match output from `claude mcp add-json --scope user` and `agy mcp add`, checked in the image. Claude documents its [user scope](https://code.claude.com/docs/en/mcp).
 
