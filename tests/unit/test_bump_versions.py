@@ -774,15 +774,42 @@ class WriteTests(unittest.TestCase):
         self.assertEqual(bv.main(["--file", self.path], resolvers=[boom]), 1)
         self.assertEqual(self.read(), "A=1\n")
 
-    def test_failure_after_a_success_leaves_file_untouched(self):
+    def test_failure_keeps_only_that_resolvers_pins(self):
         def ok():
-            return {"A": "2"}
+            return {"GO_VERSION": "1.27.3"}
 
         def boom():
-            raise bv.LookupFailed("network down")
+            raise bv.LookupFailed("signature check reported EXPKEYSIG")
 
-        self.assertEqual(bv.main(["--file", self.path], resolvers=[ok, boom]), 1)
-        self.assertEqual(self.read(), "A=1\n")
+        def broken():
+            return {}["missing"]
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(bv.main(["--file", self.path], resolvers=[boom, ok, broken]), 1)
+        self.assertEqual(self.read(), "A=1\nGO_VERSION=1.27.3\n")
+        self.assertIn("boom: signature check reported EXPKEYSIG; its pins are unchanged", err.getvalue())
+        self.assertIn("broken: unexpected upstream data", err.getvalue())
+
+    def test_failures_file_lists_every_failed_resolver_and_the_run_exits_0(self):
+        def ok():
+            return {"GO_VERSION": "1.27.3"}
+
+        def boom():
+            raise bv.LookupFailed("network\ndown")
+
+        def boom2():
+            raise bv.LookupFailed("other")
+
+        failures = self.path + ".failures"
+        self.addCleanup(lambda: os.path.exists(failures) and os.unlink(failures))
+        out = io.StringIO()
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(out):
+            self.assertEqual(bv.main(["--file", self.path, "--failures", failures], resolvers=[boom, ok, boom2]), 0)
+        with open(failures) as f:
+            self.assertEqual(f.read(), "boom: network down\nboom2: other\n")
+        self.assertIn("boom2: other\n", out.getvalue())
+        self.assertEqual(self.read(), "A=1\nGO_VERSION=1.27.3\n")
 
     def test_unexpected_error_is_a_clean_failure(self):
         def broken():
@@ -1595,7 +1622,7 @@ class ExtrasTests(unittest.TestCase):
             self.assertNotIn("extras rea", f.read())
         self.assertIn("extras rea:", err)
 
-    def test_failed_run_still_leaves_an_empty_failures_file(self):
+    def test_failed_resolver_replaces_a_stale_failures_file(self):
         def boom():
             raise bv.LookupFailed("network down")
 
@@ -1603,16 +1630,16 @@ class ExtrasTests(unittest.TestCase):
         with open(failures, "w") as f:
             f.write("stale\n")
         rc, out, err = self.run_main(["--failures", failures], resolvers=[boom])
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 0, err)
         with open(failures) as f:
-            self.assertEqual(f.read(), "")
+            self.assertEqual(f.read(), "boom: network down\n")
         os.unlink(failures)
         rc, out, err = self.run_main(["--failures", failures, "--only", "r_nope"])
         self.assertEqual(rc, 2)
         with open(failures) as f:
             self.assertEqual(f.read(), "")
 
-    def test_failures_found_before_a_failed_run_still_reach_the_file(self):
+    def test_resolver_and_extras_failures_both_reach_the_file(self):
         def check(lock, **kwargs):
             if "node_modules/rea-agents" in lock["packages"]:
                 raise bv.LookupFailed("rea-agents@3.1.0: no registry signature verifies")
@@ -1621,14 +1648,13 @@ class ExtrasTests(unittest.TestCase):
             raise bv.LookupFailed("network down")
 
         failures = os.path.join(self.dir, "failures.txt")
-        before = self.snapshot()
         rc, out, err = self.run_main(["--failures", failures], resolvers=[bv.r_extras, boom], check=check)
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 0, err)
         with open(failures) as f:
-            self.assertEqual(f.read(), "extras rea: rea-agents@3.1.0: no registry signature verifies\n")
-        after = self.snapshot()
-        del after["failures.txt"]
-        self.assertEqual(after, before)
+            self.assertEqual(f.read(), "boom: network down\n"
+                                       "extras rea: rea-agents@3.1.0: no registry signature verifies\n")
+        self.assertIn("KANDEV_VERSION=1.1.0\n", self.read("versions.env"))
+        self.assertIn("REA_VERSION=3.0.0\n", self.read("versions.env"))
 
     def test_unwritable_failures_file_is_a_clean_error(self):
         failures = os.path.join(self.dir, "missing-dir", "failures.txt")
@@ -1680,7 +1706,7 @@ class ExtrasTests(unittest.TestCase):
         failures = os.path.join(self.dir, "failures.txt")
         with self.failing_report_write(failures):
             rc, out, err = self.run_main(["--failures", failures], resolvers=[bv.r_extras, boom], check=check)
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 2)
         self.assertIn("bump_versions: cannot write --failures %s: " % failures, err)
 
     def test_failures_file_write_error_does_not_mask_an_exception(self):
@@ -1763,18 +1789,51 @@ class ExtrasTests(unittest.TestCase):
         bv.write_atomic(target, "A=2\n")
         self.assertEqual(os.stat(target).st_mode & 0o777, 0o644)
 
-    def test_failure_in_another_resolver_writes_nothing(self):
+    def test_failure_in_another_resolver_still_writes_the_extras(self):
         def boom():
             raise bv.LookupFailed("network down")
 
         before = self.snapshot()
         rc, out, err = self.run_main(resolvers=[bv.r_extras, boom])
         self.assertEqual(rc, 1)
-        self.assertEqual(self.snapshot(), before)
-        # Files computed by the failed run are not written by the next one.
+        after = self.snapshot()
+        self.assertNotEqual(after, before)
+        self.assertIn("KANDEV_VERSION=1.1.0\n", self.read("versions.env"))
+        # Files computed by one run are not written again by the next one.
         rc, out, err = self.run_main(resolvers=[lambda: {}])
         self.assertEqual(rc, 0, err)
-        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.snapshot(), after)
+
+
+class OpenCodeResolverTests(unittest.TestCase):
+    INTEGRITY = {"linux-x64-baseline": "sha512-" + "A" * 86 + "==", "linux-arm64": "sha512-" + "B" * 86 + "=="}
+
+    def fetch(self, url):
+        if url == "https://registry.npmjs.org/@opencode/cli/latest":
+            return {"version": "2.5.0"}
+        for target, integrity in self.INTEGRITY.items():
+            if url == "https://registry.npmjs.org/@opencode/cli-%s/2.5.0" % target:
+                return {"dist": {"integrity": integrity, "signatures": [{"keyid": "k", "sig": "s"}]}}
+        raise AssertionError(url)
+
+    def test_each_platform_package_needs_a_registry_signature(self):
+        with patch.object(bv, "fetch_json", side_effect=self.fetch), \
+                patch.object(bv, "load_registry_keys", return_value={"k": {}}), \
+                patch.object(bv, "verify_registry_signature") as verify:
+            out = bv.r_opencode()
+        self.assertEqual(out["OPENCODE_INTEGRITY_AMD64"], self.INTEGRITY["linux-x64-baseline"])
+        self.assertEqual(out["OPENCODE_INTEGRITY_ARM64"], self.INTEGRITY["linux-arm64"])
+        self.assertEqual([c.args[:4] for c in verify.call_args_list],
+                         [("@opencode/cli-linux-x64-baseline", "2.5.0", self.INTEGRITY["linux-x64-baseline"],
+                           [{"keyid": "k", "sig": "s"}]),
+                          ("@opencode/cli-linux-arm64", "2.5.0", self.INTEGRITY["linux-arm64"],
+                           [{"keyid": "k", "sig": "s"}])])
+
+    def test_a_signature_that_does_not_verify_keeps_the_pins(self):
+        with patch.object(bv, "fetch_json", side_effect=self.fetch), \
+                patch.object(bv, "load_registry_keys", return_value={}):
+            with self.assertRaisesRegex(bv.LookupFailed, "unknown keyid"):
+                bv.r_opencode()
 
 
 if __name__ == "__main__":

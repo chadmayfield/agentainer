@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Resolve the latest upstream pins and rewrite versions.env.
 
-Every value comes from the upstream source named in its resolver. Any failure
-stops the run and leaves the file unchanged. The extras resolver is the one
-exception: a failed check for one extra keeps that extra's pin and catalog files,
-the run continues, and --failures FILE lists the failed checks. Uses the Python
+Every value comes from the upstream source named in its resolver. A resolver that
+fails keeps every pin it owns, and the other resolvers still run and write theirs.
+The extras resolver does the same for each extra and its catalog files. --failures
+FILE lists every failed resolver and extra, one per line; without --failures, a
+failed resolver makes the exit status 1 after the other pins are written. A refused
+value or a downgrade still stops the run and leaves the file unchanged. Uses the Python
 standard library, the publisher verification CLIs documented in docs/versions.md,
 npm to generate extras lockfiles, and openssl to verify npm registry signatures.
 """
@@ -832,9 +834,20 @@ def r_agy():
 def r_opencode():
     ver = fetch_json("https://registry.npmjs.org/@opencode/cli/latest")["version"]
     out = {"OPENCODE_VERSION": ver}
+    keys = load_registry_keys(NPM_KEYS)
     for up, target in (("AMD64", "linux-x64-baseline"), ("ARM64", "linux-arm64")):
-        meta = fetch_json("https://registry.npmjs.org/@opencode/cli-%s/%s" % (target, ver))
-        out["OPENCODE_INTEGRITY_" + up] = meta["dist"]["integrity"]
+        name = "@opencode/cli-%s" % target
+        dist = fetch_json(NPM_REGISTRY + name + "/" + ver)["dist"]
+        integrity = dist["integrity"]
+
+        # The per-version document has no publish time; the packument's time map does.
+        def published(name=name):
+            times = fetch_json(NPM_REGISTRY + name).get("time")
+            return parse_registry_time(times.get(ver) if isinstance(times, dict) else None)
+
+        # The same registry signature check as the extras lockfile entries.
+        verify_registry_signature(name, ver, integrity, dist.get("signatures") or [], keys, published=published)
+        out["OPENCODE_INTEGRITY_" + up] = integrity
     return out
 
 
@@ -909,6 +922,8 @@ class ExtraFiles:
 
 
 EXTRA_FILES = ExtraFiles()
+# One "<resolver>: <reason>" line per resolver that failed in this run of main.
+RESOLVER_FAILURES = []
 
 
 def utcnow():
@@ -1313,9 +1328,10 @@ def main(argv=None, resolvers=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--file", default="versions.env")
     ap.add_argument("--only", nargs="*", help="resolver names such as r_go r_agy")
-    ap.add_argument("--failures", help="file to list failed extras checks in, one per line (empty when none)")
+    ap.add_argument("--failures", help="file to list failed resolvers and extras checks in, one per line (empty when none)")
     args = ap.parse_args(argv)
     EXTRA_FILES.reset(None, {})
+    del RESOLVER_FAILURES[:]
     if args.failures:
         # A later workflow step reads this file, so it exists even when the run fails.
         try:
@@ -1336,14 +1352,14 @@ def main(argv=None, resolvers=None):
 
 
 def report_failures(path):
-    """Write the failed extras checks to path and print them, on every exit from main.
+    """Write the failed resolvers and extras checks to path and print them, on every exit from main.
 
     Failed checks keep their pins while the other pins still go out. The lines
     go to path, which a later workflow step fails on when it is not empty, then
     to stdout (and a GitHub Actions warning). Never raises. Returns False when
     failures exist but path could not be written, True otherwise.
     """
-    failures = list(EXTRA_FILES.failures)
+    failures = RESOLVER_FAILURES + list(EXTRA_FILES.failures)
     ok = True
     if path:
         try:
@@ -1382,16 +1398,22 @@ def bump(args, resolvers):
     base = os.path.dirname(os.path.abspath(args.file))
     EXTRA_FILES.reset(base, values(lines))
     updates = {}
-    try:
-        for r in chosen:
+    # A failed resolver keeps its pins; one failed publisher check, such as an expired
+    # signing key, must not hold back every other tool.
+    for r in chosen:
+        name = getattr(r, "__name__", repr(r))
+        try:
             updates.update(r())
-    except LookupFailed as e:
-        print("bump_versions: %s" % e, file=sys.stderr)
-        return 1
-    except (KeyError, IndexError, TypeError, ValueError) as e:
-        # Upstream returned something with an unexpected shape.
-        print("bump_versions: unexpected upstream data in %s: %r" % (getattr(r, "__name__", r), e), file=sys.stderr)
-        return 1
+        except LookupFailed as e:
+            reason = str(e)
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            # Upstream returned something with an unexpected shape.
+            reason = "unexpected upstream data: %r" % (e,)
+        else:
+            continue
+        line = "%s: %s" % (name, " ".join(reason.split()))
+        print("bump_versions: %s; its pins are unchanged" % line, file=sys.stderr)
+        RESOLVER_FAILURES.append(line)
     bad = [why for why in (invalid(k, v) for k, v in sorted(updates.items())) if why]
     if bad:
         for why in bad:
@@ -1437,7 +1459,8 @@ def bump(args, resolvers):
                 text = rewrite_release_ref(text, prefix, release_old, release_new)
             write_atomic(path, text)
     write_atomic(args.file, render_env(lines, updates))
-    return 0
+    # With --failures, the workflow fails the run on that file after the pull request opens.
+    return 1 if RESOLVER_FAILURES and not args.failures else 0
 
 
 if __name__ == "__main__":
