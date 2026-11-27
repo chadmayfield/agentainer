@@ -28,6 +28,23 @@ spec:
         # work without NET_RAW, which the image removed from ping.
         sysctls:
           - {name: net.ipv4.ping_group_range, value: "1000 1000"}  # the agent group; a wider range breaks under keep-id user namespaces
+      # FileBrowser writes an upload through a symbolic link that the agent planted in the
+      # transfer folder (docs/kubernetes.md, FileBrowser security). Before either container
+      # starts, this removes every link under it and logs each path. find does not follow
+      # links, so a link's target is never touched. A link planted while the pod runs
+      # stays until the next start. A failed removal stops the pod from starting.
+      initContainers:
+        - name: transfer-links
+          image: ghcr.io/chadmayfield/agentainer:latest
+          command: [sh, -ec, 'echo "removing symbolic links under /srv/transfer:"; find /srv/transfer -mindepth 1 -type l -print -delete']
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:  # example values
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 500m, memory: 128Mi}
+          volumeMounts:
+            - {name: transfer, mountPath: /srv/transfer, subPath: files}
       containers:
         - name: agentainer
           image: ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1
