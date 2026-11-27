@@ -6,6 +6,15 @@ assert_eq "raw image permits container sudo" "0" "$(run_in --network none -- sud
 # shellcheck disable=SC2016 # expands inside the container
 assert_eq "no-new-privileges blocks sudo" "SUDO_BLOCKED" \
 	"$(run_in --network none --security-opt no-new-privileges=true -- sh -c 'if sudo -n true 2>/dev/null; then echo SUDO_ALLOWED; else echo SUDO_BLOCKED; fi')"
+# A long-running start (AGENTAINER_QUIET=0) warns when sudo works and says nothing about it
+# under no-new-privileges. The credential summary proves the steps ran.
+assert_contains "startup warns when sudo works" "sudo works in this container" \
+	"$(run_in --network none -e AGENTAINER_QUIET=0 -- true 2>&1)"
+assert_absent "no sudo warning under no-new-privileges" \
+	"$(run_in --network none --security-opt no-new-privileges=true -e AGENTAINER_QUIET=0 -- true 2>&1)" \
+	"credential variables" "sudo works"
+assert_absent "one-shot commands get no sudo warning" \
+	"$(run_in --network none -- sh -c 'echo STARTED' 2>&1)" STARTED "sudo works"
 
 # sudo drops NPM_CONFIG_PREFIX, so root's npm uses the prefix from npm's builtin config.
 repo=$(cd "$(dirname "$0")/.." && pwd)
