@@ -80,4 +80,25 @@ out=$(STUB_RUN_FAIL=1 build 5.6.0)
 assert_contains "an image that cannot run says the apt source was not checked" "apt source not checked: the linux/" "$(cat "$T/err")"
 out=$(STUB_RUN_FAIL=1 STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --platform linux/amd64 2>"$T/err")
 assert_contains "the note names the platform" "linux/amd64 image could not be run" "$(cat "$T/err")"
+
+# A missing option value and options the chosen build would ignore are refused.
+for opt in --platform --tag --uid --gid --variant --from; do
+	out=$(STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" "$opt" 2>&1)
+	rc=$?
+	assert_eq "$opt without a value exits 2" "2" "$rc"
+	assert_contains "$opt without a value says so" "$opt needs a value" "$out"
+done
+for opt in "--uid 1001" "--gid 20" "--strict-apt"; do
+	# shellcheck disable=SC2086 # split the option from its value
+	out=$(STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --variant kelos $opt 2>&1)
+	rc=$?
+	assert_eq "kelos refuses ${opt%% *}" "2" "$rc"
+	assert_contains "kelos names the refused ${opt%% *}" "does not take ${opt%% *}" "$out"
+done
+out=$(STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --from example.com/image:tag 2>&1)
+rc=$?
+assert_eq "--from without the kelos variant exits 2" "2" "$rc"
+assert_contains "--from without the kelos variant says so" "--from needs --variant kelos" "$out"
+out=$(STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --variant kelos --from example.com/image:tag 2>"$T/err")
+has_line "kelos with --from still builds" "AGENTAINER_IMAGE=example.com/image:tag" "$out"
 finish
