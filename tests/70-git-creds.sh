@@ -18,7 +18,9 @@ H="-v $VOL:/home/agent"
 # No credentials at all.
 out=$(run_in $H -- sh -c 'claude --version && codex --version && opencode --version && agy --version && echo ALL-STARTED' 2>&1)
 assert_contains "all agents start with no credentials" "ALL-STARTED" "$out"
-assert_absent "one-shot commands print no startup log" "$(run_in $H -- echo STARTED 2>&1)" STARTED "agentainer:"
+# The sudo warning prints for one-shot commands too, so this start turns sudo off.
+assert_absent "one-shot commands print no startup log" \
+	"$(run_in $H --security-opt no-new-privileges=true -- echo STARTED 2>&1)" STARTED "agentainer:"
 run_bg "$name" -v "$VOL:/home/agent"
 # Step 9 logs the summary last, so wait until it appears.
 if wait_for 30 sh -c '"$1" logs "$2" 2>&1 | grep -q "credential variables"' sh "$RUNTIME" "$name"; then

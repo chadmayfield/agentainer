@@ -269,7 +269,7 @@ assert_contains "persist install lands in the home tools root" "/home/agent/.age
 	"$(ex "$c2" 'readlink -f "$(command -v fixture-extra)"')"
 "$RUNTIME" rm -f "$c2" >/dev/null
 assert_eq "persist install survives a new container" "fixture-extra ok 1.0.0" \
-	"$(run_in -v "$VOL:/home/agent" --network none -e AGENTAINER_TOOLS=persist -- fixture-extra 2>&1)"
+	"$(run_in -v "$VOL:/home/agent" --network none -e AGENTAINER_TOOLS=persist -- sh -c 'fixture-extra 2>&1')"
 
 # Extras are left out of the image-change warning; other persisted npm tools still trigger it.
 run_in -v "$VOL:/home/agent" --network none --entrypoint sh -- -c 'echo old >/home/agent/.agentainer/tools-image-version'

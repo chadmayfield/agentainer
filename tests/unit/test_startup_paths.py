@@ -18,6 +18,22 @@ HOME_PATH = re.search(r"^home_path\(\) \{\n.*?^\}\n",
                       (ROOT / "rootfs/usr/local/bin/agentainer-entrypoint").read_text(), re.S | re.M).group(0)
 
 
+class HomePathTests(unittest.TestCase):
+    def home_path(self, relative, **env):
+        result = subprocess.run(["sh", "-ec", HOME_PATH + 'home_path "$1"', "sh", relative],
+                                env=dict(ENV, HOME="/h", **env), capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+
+    def test_claude_config_dir_moves_only_the_claude_directory(self):
+        self.assertEqual(self.home_path(".claude/settings.json"), "/h/.claude/settings.json")
+        self.assertEqual(self.home_path(".claude/settings.json", CLAUDE_CONFIG_DIR="/c"), "/c/settings.json")
+        self.assertEqual(self.home_path(".claude", CLAUDE_CONFIG_DIR="/c"), "/c")
+        # An empty variable means the default, as in agentainer-mcp and agentainer-doctor.
+        self.assertEqual(self.home_path(".claude/CLAUDE.md", CLAUDE_CONFIG_DIR=""), "/h/.claude/CLAUDE.md")
+        self.assertEqual(self.home_path(".claude.json", CLAUDE_CONFIG_DIR="/c"), "/h/.claude.json")
+        self.assertEqual(self.home_path(".claudex/x", CLAUDE_CONFIG_DIR="/c"), "/h/.claudex/x")
+
+
 @unittest.skipUnless(shutil.which("flock"), "startup path tests require Linux flock")
 class StartupPathsTests(unittest.TestCase):
     def test_blocked_agents_ledger_warns_without_stopping_startup(self):
@@ -103,6 +119,28 @@ class StartupPathsTests(unittest.TestCase):
             self.assertFalse((home / ".config/opencode").exists())
             # Only OpenCode's directory moves; other tools keep their ~/.config paths.
             self.assertTrue((home / ".config/bat/config").is_file())
+
+    def test_seeding_follows_claude_config_dir(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            home = base / "home"
+            (home / ".agentainer").mkdir(parents=True)
+            source = base / "image"
+            for relative in (".claude/CLAUDE.md", ".claude/settings.json", ".claude/themes/github-dark.json"):
+                (source / relative).parent.mkdir(parents=True, exist_ok=True)
+                (source / relative).write_text(relative + "\n")
+            step = base / "step.sh"
+            step.write_text((STEPS / "20-seed.sh").read_text().replace("src=/etc/agentainer/home", "src=" + str(source)))
+            shell = HOME_PATH + 'warn() { echo "$*"; }; seed_file() { mkdir -p "$(dirname "$2")" && cp "$1" "$2"; }; . "$1"'
+            result = subprocess.run(["sh", "-ec", shell, "sh", str(step)],
+                                    env=dict(ENV, HOME=str(home), CLAUDE_CONFIG_DIR=str(base / "claude")),
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            # CLAUDE.md holds the import of ~/.agentainer/AGENTS.md, so it must land where
+            # Claude Code reads its user memory.
+            for relative in ("CLAUDE.md", "settings.json", "themes/github-dark.json"):
+                self.assertTrue((base / "claude" / relative).is_file(), relative)
+            self.assertFalse((home / ".claude").exists())
 
     def test_instruction_links_follow_codex_home_and_xdg_config_home(self):
         with tempfile.TemporaryDirectory() as directory:

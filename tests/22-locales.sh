@@ -21,7 +21,7 @@ de=$(run_in --network none -e LC_TIME=de_DE.UTF-8 -- sh -c "$tmux_date" 2>&1)
 assert_match "tmux %x follows LC_TIME=de_DE" '^[0-9]{2}\.[0-9]{2}\.[0-9]{4}$' "$de"
 
 # en_PH has the widest %x of the installed locales; the status bar is sized for it.
-width=$(run_in --network none -e LC_TIME=en_PH.UTF-8 -- python3 -c "import locale,datetime; locale.setlocale(locale.LC_TIME,''); print(len(datetime.date(2027,9,29).strftime('%x')))" 2>&1)
+width=$(run_in --network none -e LC_TIME=en_PH.UTF-8 -- python3 -c "import locale,datetime; locale.setlocale(locale.LC_TIME,''); print(len(datetime.date(2027,9,29).strftime('%x')))")
 assert_eq "widest %x is 29 characters (en_PH)" 29 "$width"
 
 # A locale the image lacks falls back to the C format and the shell still starts.

@@ -1,8 +1,16 @@
 """Scan every tracked text file for personal or infrastructure data (AGENTS.md, "Public and generic").
 
-The checks look for email addresses, private and shared IPv4 addresses, IPv6 unique local
-and link-local addresses, home directory paths and private network host names. Each
-exception below is explicit and says why it is allowed. Binary files are skipped.
+The checks look for email addresses, URLs with a password, private and shared IPv4
+addresses, IPv6 unique local and link-local addresses, home directory paths and private
+network host names. Each exception below is explicit and says why it is allowed.
+
+What this scan does not cover:
+- Tokens and keys in other forms, such as API keys, private keys and cloud credentials.
+  CI's lint-unit job runs the pinned gitleaks over the tracked files for those
+  (.github/workflows/build.yml, .gitleaks.toml).
+- Public host names and domains. Only the private suffixes in HOST are checked.
+- Binary files, files that are not UTF-8, and symlinks, which are skipped.
+- Git history and untracked files. Only the files git tracks now are read.
 """
 import ipaddress
 from pathlib import Path
@@ -39,6 +47,11 @@ ALLOWED_ADDRESSES = {
     # The manifest test checks that the rendered policy has exactly these exclusions.
     "tests/host/test-manifests.sh": EGRESS_RANGES,
 }
+# Files that hold a URL with a password on purpose, with the exact user info and host.
+ALLOWED_URL_PASSWORDS = {
+    # The push sidecar test checks that the sidecar refuses a PUSH_URL with credentials.
+    "tests/kelos/test_image.sh": {"u:p@github.com"},
+}
 # Home directories of the users the images create: agent (Containerfile), filebrowser (the
 # FileBrowser sidecar's config) and kelos (Containerfile.kelos).
 ALLOWED_HOMES = {"agent", "filebrowser", "kelos"}
@@ -46,6 +59,10 @@ ALLOWED_HOMES = {"agent", "filebrowser", "kelos"}
 ALLOWED_HOSTS = {"host.containers.internal"}
 
 EMAIL = re.compile(r"(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})(?![A-Za-z0-9-])")
+# The text from a URL scheme up to the start of a match, when the match begins inside that
+# URL's user info: scheme://, then characters that do not end the user info or the token
+# (RFC 3986, section 3.2.1). The group holds the user info before the match.
+USERINFO = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://([^\s/?#@\[\]\"'<>(){},;|\\`]*)$")
 IPV4 = re.compile(r"(?<![0-9.])((?:[0-9]{1,3}\.){3}[0-9]{1,3})(/[0-9]{1,2})?(?![0-9]|\.[0-9])")
 IPV6 = re.compile(r"(?i)(?<![0-9a-z:])((?:f[cd][0-9a-f]{2}|fe[89ab][0-9a-f]):[0-9a-f:]*)(/[0-9]{1,3})?")
 HOME = re.compile(r"(?<![A-Za-z0-9._~/-])(?:/Users/|/home/|[A-Za-z]:\\Users\\)([A-Za-z0-9._-]+)")
@@ -56,12 +73,16 @@ PRIVATE_V4 = [ipaddress.ip_network(n) for n in
 PRIVATE_V6 = [ipaddress.ip_network(n) for n in ("fc00::/7", "fe80::/10")]
 
 
-def email_problems(line):
+def email_problems(line, allowed_passwords=frozenset()):
     for m in EMAIL.finditer(line):
         local, domain = m.group(1), m.group(2).lower()
-        # user@host in a URL is credentials or a user name, not an email address.
-        start = line.rfind(" ", 0, m.start()) + 1
-        if "://" in line[start:m.start()]:
+        # In scheme://user@host the match is the URL's user name, not an email address. A
+        # password (scheme://user:password@host) is a credential. The problem names only
+        # the host, so the scan never prints the password.
+        url = USERINFO.search(line, 0, m.start())
+        if url:
+            if ":" in url.group(1) + local and "%s%s@%s" % (url.group(1), local, domain) not in allowed_passwords:
+                yield "URL with a password for " + domain
             continue
         address = "%s@%s" % (local, domain)
         if EXAMPLE_DOMAINS.search(domain) or domain in ALLOWED_EMAIL_DOMAINS or address in ALLOWED_EMAILS:
@@ -106,7 +127,7 @@ def host_problems(line):
 def problems(rel, text):
     allowed = ALLOWED_ADDRESSES.get(rel, set())
     for n, line in enumerate(text.splitlines(), 1):
-        for checks in (email_problems(line), address_problems(line, allowed), home_problems(line),
+        for checks in (email_problems(line, ALLOWED_URL_PASSWORDS.get(rel, set())), address_problems(line, allowed), home_problems(line),
                        host_problems(line)):
             for problem in checks:
                 yield "%s:%d: %s" % (rel, n, problem)
@@ -147,7 +168,7 @@ class NoLeakTests(unittest.TestCase):
 
     def test_allowed_addresses_are_still_in_their_files(self):
         # An exception for a file that no longer lists the value would hide a later leak there.
-        for rel, values in ALLOWED_ADDRESSES.items():
+        for rel, values in list(ALLOWED_ADDRESSES.items()) + list(ALLOWED_URL_PASSWORDS.items()):
             text = (ROOT / rel).read_text()
             for value in values:
                 with self.subTest(rel=rel, value=value):
@@ -174,10 +195,39 @@ class NoLeakTests(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertEqual(list(problems("x.md", line)), ["x.md:1: " + problem])
 
+    def test_emails_near_urls_are_found(self):
+        # Only the user info of the URL that holds the match is skipped, not a whole token
+        # after "://".
+        cases = {
+            "https://example.com/contact?to=jane.doe@gmail.com": ["email address jane.doe@gmail.com"],
+            "[mail](https://x.com/?e=jane@gmail.com)": ["email address jane@gmail.com"],
+            '{"url":"https://example.com","owner":"alice@company.com"}': ["email address alice@company.com"],
+            "https://example.com,alice@company.com": ["email address alice@company.com"],
+            "https://example.com\talice@company.com": ["email address alice@company.com"],
+            "https://example.com/a#frag@gmail.com": ["email address frag@gmail.com"],
+            "https://alice:real-token@github.com/example/repo.git": ["URL with a password for github.com"],
+            "https://user:pass@github.com/o/r.git": ["URL with a password for github.com"],
+            "git clone https://:token@github.com/o/r": ["URL with a password for github.com"],
+        }
+        for line, found in cases.items():
+            with self.subTest(line=line):
+                self.assertEqual(list(problems("x.md", line)), ["x.md:1: " + f for f in found])
+
+    def test_url_password_exception_applies_only_to_its_file(self):
+        line = "PUSH_URL=https://u:p@github.com/o/r.git"
+        self.assertEqual(list(problems("tests/kelos/test_image.sh", line)), [])
+        self.assertEqual(list(problems("docs/other.md", line)), ["docs/other.md:1: URL with a password for github.com"])
+        self.assertEqual(list(problems("tests/kelos/test_image.sh", "https://u:q@github.com/o/r.git")),
+                         ["tests/kelos/test_image.sh:1: URL with a password for github.com"])
+
+    def test_url_problem_omits_the_password(self):
+        self.assertNotIn("real-token", "".join(problems("x.md", "https://alice:real-token@github.com/r")))
+
     def test_allowed_forms_pass(self):
         for line in ("you@example.com", "t@test.example", "1+bot[bot]@users.noreply.github.com",
                      "Co-Authored-By: Claude <noreply@anthropic.com>", "sk-ssh-ed25519@openssh.com",
-                     "https://user:pass@github.com/o/r.git", "ghost@1.0.0.abc123", "npm i pkg@1.2.3",
+                     "ssh://git@github.com/o/r.git", "https://user@gitlab.com/o/r.git",
+                     "https://x-access-token:${GH_TOKEN}@github.com/o/r", "ghost@1.0.0.abc123", "npm i pkg@1.2.3",
                      "203.0.113.7", "8.8.8.8", "1.27.4.1", "/home/agent/.bashrc", "/home/filebrowser",
                      "rootfs/etc/agentainer/home/.claude", "host.containers.internal", "Path.home()",
                      "self.home", "version 10.0.1"):

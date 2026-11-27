@@ -35,7 +35,7 @@ BROWSER_CHANNEL=chrome npm run screenshots
 
 `--source-defaults` changes only the mounted home seed files and shared instructions. It does not test changes to the Containerfile or entrypoint. The gallery labels the defaults as either `image` or `checkout overlay`. An overlay preview does not verify a newly built image.
 
-Use `--runtime docker` for Docker Engine, or set `RUNTIME=docker`. `IMAGE` can supply the image reference instead of `--image`. These invocation options are documented by `python3 capture.py --help`; container flags were verified with `podman run --help` and the [Docker run reference](https://docs.docker.com/reference/cli/docker/container/run/).
+Use `--runtime docker` for Docker Engine, or set `RUNTIME=docker`. `IMAGE` can supply the image reference instead of `--image`. The gallery records an image reference that starts with `localhost/` or `ghcr.io/` as given. For any other reference it records only the tag (`:dev`) or digest (`@sha256:...`), or `(no tag or digest)`, so a private registry name never reaches the committed `index.md`. These invocation options are documented by `python3 capture.py --help`; container flags were verified with `podman run --help` and the [Docker run reference](https://docs.docker.com/reference/cli/docker/container/run/).
 
 `BROWSER_CHANNEL=chrome` selects installed Google Chrome. With an existing Playwright Chromium installation, omit that variable. The command does not install browsers automatically. Follow [Playwright's browser documentation](https://playwright.dev/docs/browsers) to install a browser if needed. Do not install one on someone else's machine without their approval.
 

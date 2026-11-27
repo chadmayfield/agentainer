@@ -54,6 +54,39 @@ class VisualCaptureTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 capture.validate(changed)
 
+    def test_only_local_and_ghcr_references_are_recorded_in_full(self):
+        digest = 'sha256:' + 'a' * 64
+        cases = {
+            'localhost/agentainer:dev': 'localhost/agentainer:dev',
+            'ghcr.io/owner/agentainer:1.2.3': 'ghcr.io/owner/agentainer:1.2.3',
+            'registry.example.com:5000/team/agentainer:dev': ':dev',
+            'registry.example.com/team/agentainer@' + digest: '@' + digest,
+            'registry.example.com/team/agentainer:dev@' + digest: '@' + digest,
+            'registry.example.com:5000/team/agentainer': capture.NO_TAG,
+            'agentainer:dev': ':dev',
+            'docker.io/library/ubuntu': capture.NO_TAG,
+            'x@not-a-digest.example.com': capture.NO_TAG,
+            'x:bad/tag': capture.NO_TAG,
+        }
+        for reference, recorded in cases.items():
+            with self.subTest(reference=reference):
+                self.assertEqual(capture.recorded_image(reference), recorded)
+
+    def test_capture_records_only_the_tag_of_another_registry(self):
+        with tempfile.TemporaryDirectory(prefix='cx-visual-test-') as directory:
+            root = Path(directory)
+            with patch.object(capture, 'ROOT', root), patch.object(capture.subprocess, 'run') as run:
+                run.side_effect = [subprocess.CompletedProcess([], 0, json.dumps(valid_document()), ''),
+                                   subprocess.CompletedProcess([], 0, '', '')]
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(capture.main(['--runtime', 'fake-engine', '--image',
+                                                   'registry.example.com/team/agentainer:rc1']), 0)
+                text = (root / 'artifacts/visual/captures.json').read_text()
+                self.assertEqual(json.loads(text)['image'], ':rc1')
+                self.assertNotIn('registry.example.com', text)
+                # The engine still gets the full reference.
+                self.assertIn('registry.example.com/team/agentainer:rc1', run.call_args_list[0].args[0])
+
     def test_complete_capture_is_published_with_overlay_label(self):
         with tempfile.TemporaryDirectory(prefix='cx-visual-test-') as directory:
             root = Path(directory)

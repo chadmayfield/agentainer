@@ -121,6 +121,27 @@ jobs:
         run: sh tests/host/test-fetch.sh
       - name: Extras catalog tests
         run: sh tests/host/test-extras-catalog.sh
+      # tests/unit/test_no_leaks.py looks for personal and network data; gitleaks looks for
+      # tokens and keys. gitleaks comes from the versions.env pin, checked by build/fetch.sh,
+      # as in the image build (build/install-tool.sh). The scan reads a copy of the tracked
+      # files, so .git and anything else in the workspace stay out of it. .gitleaks.toml
+      # lists the allowed false positives.
+      - name: Secret scan of the tracked files with gitleaks
+        shell: bash
+        run: |
+          set -eu
+          test "$(uname -m)" = x86_64
+          v=$(sed -n 's/^GITLEAKS_VERSION=//p' versions.env)
+          sum=$(sed -n 's/^GITLEAKS_SHA256_AMD64=//p' versions.env)
+          test -n "$v"
+          test -n "$sum"
+          sh build/fetch.sh "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" sha256 "$sum" "$RUNNER_TEMP/gitleaks.tgz"
+          mkdir -p "$RUNNER_TEMP/gitleaks" "$RUNNER_TEMP/tracked"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP/gitleaks" gitleaks
+          rm "$RUNNER_TEMP/gitleaks.tgz"
+          "$RUNNER_TEMP/gitleaks/gitleaks" version
+          git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$RUNNER_TEMP/tracked"
+          "$RUNNER_TEMP/gitleaks/gitleaks" dir --no-banner --redact --config .gitleaks.toml "$RUNNER_TEMP/tracked"
       - name: Extras lockfile vulnerability scan with trivy (report only)
         shell: bash
         run: |

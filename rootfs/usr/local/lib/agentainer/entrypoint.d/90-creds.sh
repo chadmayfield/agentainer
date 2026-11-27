@@ -1,5 +1,6 @@
 # Step 9: list credential variable names, never values. Quiet for one-shot
-# commands (AGENTAINER_QUIET=1, set by the entrypoint); warnings always print.
+# commands (AGENTAINER_QUIET=1, set by the entrypoint). Warnings, here and in 85-sudo.sh,
+# always print.
 is_set() { eval "[ -n \"\${$1+x}\" ]"; }
 is_blank() { eval "[ -z \"\$(printf '%s' \"\${$1}\" | tr -d '[:space:]')\" ]"; }
 found=""

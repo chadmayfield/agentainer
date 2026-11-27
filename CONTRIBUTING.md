@@ -139,6 +139,8 @@ The scheduled update ([`.github/workflows/bump.yml`](.github/workflows/bump.yml)
 
 The workflow uses the App only when both the variable and the secret are set. If either is missing, it uses `GITHUB_TOKEN`. With both set, wrong App credentials fail the App job without falling back; remove the variable or the secret to go back to `GITHUB_TOKEN`.
 
+The `GITHUB_TOKEN` path needs the repository setting "Allow GitHub Actions to create and approve pull requests", under Settings, Actions, General, Workflow permissions. GitHub turns it off by default for repositories owned by a personal account; an organization's repositories take their default from the organization ([GitHub Actions settings](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)). With the setting off, `gh pr create` fails after the bump branch is pushed, and the action deletes that branch. The App path does not need the setting.
+
 ## Security problems
 
 Do not open a public issue. See [SECURITY.md](SECURITY.md).
