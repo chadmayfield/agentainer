@@ -13,6 +13,7 @@
 # The build is always local. Pushing an image is a separate step.
 # --variant kelos builds Containerfile.kelos on top of --from (default: the
 # digest-pinned image in Containerfile.kelos). Its default tag is localhost/agentainer-kelos:dev.
+# That build takes no --uid, --gid or --strict-apt, and --from needs --variant kelos.
 set -eu
 cd "$(dirname "$0")/.."
 RUNTIME=${RUNTIME:-podman}
@@ -25,7 +26,20 @@ from=""
 # Unset means fall back; set but empty means strict.
 fallback=${APT_FALLBACK-archive}
 nocache=""
+# Options that only the main image uses, for the check after parsing.
+main_only=""
 while [ "$#" -gt 0 ]; do
+	case "$1" in
+	--platform | --tag | --uid | --gid | --variant | --from)
+		if [ "$#" -lt 2 ]; then
+			echo "build.sh: $1 needs a value" >&2
+			exit 2
+		fi
+		;;
+	esac
+	case "$1" in
+	--uid | --gid | --strict-apt) main_only="$main_only $1" ;;
+	esac
 	case "$1" in
 	--platform)
 		platform=$2
@@ -67,8 +81,17 @@ while [ "$#" -gt 0 ]; do
 done
 containerfile=Containerfile
 case "$variant" in
-"") ;;
+"")
+	if [ -n "$from" ]; then
+		echo "build.sh: --from needs --variant kelos" >&2
+		exit 2
+	fi
+	;;
 kelos)
+	if [ -n "$main_only" ]; then
+		echo "build.sh: --variant kelos does not take${main_only}" >&2
+		exit 2
+	fi
 	containerfile=Containerfile.kelos
 	[ "$tag" != "localhost/agentainer:dev" ] || tag="localhost/agentainer-kelos:dev"
 	;;

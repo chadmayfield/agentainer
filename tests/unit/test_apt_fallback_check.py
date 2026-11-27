@@ -72,6 +72,14 @@ class AptFallbackCheckTests(unittest.TestCase):
         self.assertIn("::warning title=apt snapshot fallback::", result.stdout)
         self.assertIn(SNAP, result.stdout)
 
+    def test_pull_request_without_pr_head_has_no_base(self):
+        self.write("versions.env", "APT_SNAPSHOT=20261105T000000Z\nGO_VERSION=1.27.3\n")
+        self.commit("change on a single-parent commit")
+        result = self.run_check(FALLBACK, EVENT="pull_request")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("No base commit", result.stdout)
+        self.assertNotIn("::error", result.stdout)
+
     def test_fallback_fails_when_the_change_modifies_the_snapshot(self):
         head = self.pull_request({"versions.env": "APT_SNAPSHOT=20261105T000000Z\nGO_VERSION=1.27.3\n"})
         result = self.run_check(FALLBACK, EVENT="pull_request", PR_HEAD=head)
