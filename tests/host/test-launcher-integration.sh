@@ -17,7 +17,18 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
-"$real_runtime" image inspect "$IMAGE" >/dev/null
+# step NAME COMMAND...: runs COMMAND with its output discarded. Later steps depend on it, so a
+# failure reports NAME as not ok and stops. Under set -e a bare failing command would stop the
+# script without a TAP line.
+step() {
+	_what=$1
+	shift
+	if "$@" >/dev/null; then return 0; fi
+	fail "$_what"
+	finish || true
+	exit 1
+}
+step "the local image $IMAGE exists" "$real_runtime" image inspect "$IMAGE"
 mkdir -p "$tmp/work space" "$tmp/bin"
 chmod 777 "$tmp/work space"
 printf '%s\n' 'CX_LAUNCHER_VALUE=retained value' >"$tmp/env"
@@ -72,10 +83,10 @@ serve() {
 	"$real_runtime" exec -d "$name" python3 -m http.server 8765 --bind 0.0.0.0 --directory /workspace
 	wait_for 30 served
 }
-launch up --name "$name" --publish "$host_port:8765" "$tmp/work space" >/dev/null
-wait_for 60 ready
-first=$("$real_runtime" inspect --type container --format '{{.Id}}' "$name")
-"$real_runtime" exec "$name" sh -ec '
+step "launcher up starts a container" launch up --name "$name" --publish "$host_port:8765" "$tmp/work space"
+step "the new container becomes ready" wait_for 60 ready
+first=$("$real_runtime" inspect --type container --format '{{.Id}}' "$name") || first=
+step "launcher starts a real container with its env file and workspace" "$real_runtime" exec "$name" sh -ec '
  test "$CX_LAUNCHER_VALUE" = "retained value"
  printf home >"$HOME/launcher-marker"
  printf workspace >/workspace/launcher-marker
@@ -83,22 +94,28 @@ first=$("$real_runtime" inspect --type container --format '{{.Id}}' "$name")
 pass "launcher starts a real container with its env file and workspace"
 assert_eq "published port binds only the loopback address" "127.0.0.1:$host_port" \
 	"$("$real_runtime" port "$name" 8765/tcp)"
-serve
+step "published port serves the workspace to the host" serve
 pass "published port serves the workspace to the host"
-"$real_runtime" stop "$name" >/dev/null
-launch start "$name" >/dev/null
-wait_for 60 ready
+step "the container stops" "$real_runtime" stop "$name"
+step "launcher start restarts the container" launch start "$name"
+step "the restarted container becomes ready" wait_for 60 ready
 assert_eq "start preserves container identity" "$first" "$("$real_runtime" inspect --type container --format '{{.Id}}' "$name")"
 # Update must use recorded labels, even from another directory with conflicting defaults.
-(cd / && AGENTAINER_HOME_VOLUME=cx-unused-home AGENTAINER_ENV_FILE=/cx-missing-env AGENTAINER_IMAGE=localhost/cx-unused:missing launch update "$name") >/dev/null
-wait_for 60 ready
-second=$("$real_runtime" inspect --type container --format '{{.Id}}' "$name")
-[ -n "$first" ] && [ -n "$second" ] && [ "$first" != "$second" ]
-pass "update recreates the real container"
+update_elsewhere() {
+	(cd / && AGENTAINER_HOME_VOLUME=cx-unused-home AGENTAINER_ENV_FILE=/cx-missing-env AGENTAINER_IMAGE=localhost/cx-unused:missing launch update "$name")
+}
+step "launcher update from another directory succeeds" update_elsewhere
+step "the updated container becomes ready" wait_for 60 ready
+second=$("$real_runtime" inspect --type container --format '{{.Id}}' "$name") || second=
+if [ -n "$first" ] && [ -n "$second" ] && [ "$first" != "$second" ]; then
+	pass "update recreates the real container"
+else
+	fail "update recreates the real container" "before [$first] after [$second]"
+fi
 assert_eq "update retains home, workspace and original environment" "PRESERVED" "$("$real_runtime" exec "$name" sh -ec 'test "$(cat "$HOME/launcher-marker")" = home; test "$(cat /workspace/launcher-marker)" = workspace; test "$CX_LAUNCHER_VALUE" = "retained value"; echo PRESERVED')"
 assert_eq "update retains the same loopback mapping" "127.0.0.1:$host_port" \
 	"$("$real_runtime" port "$name" 8765/tcp)"
-serve
+step "published port works after replacement" serve
 pass "published port works after replacement"
 for failure in create startup; do
 	if CX_TEST_UPDATE_FAILURE="$failure" launch update "$name" >"$tmp/failed-update.log" 2>&1; then
@@ -110,15 +127,18 @@ for failure in create startup; do
 		"$("$real_runtime" inspect --type container --format '{{.Id}}' "$name")"
 	assert_eq "$failure failure restores a working container and home" "home" \
 		"$("$real_runtime" exec "$name" cat /home/agent/launcher-marker)"
-	serve
+	step "$failure failure restores the published port" serve
 	pass "$failure failure restores the published port"
 done
-launch down "$name" >/dev/null
+step "launcher down runs" launch down "$name"
 if "$real_runtime" inspect --type container "$name" >/dev/null 2>&1; then
 	fail "down removes the container"
 else
 	pass "down removes the container"
 fi
-"$real_runtime" volume inspect "$volume" >/dev/null
-pass "down retains the home volume"
+if "$real_runtime" volume inspect "$volume" >/dev/null 2>&1; then
+	pass "down retains the home volume"
+else
+	fail "down retains the home volume"
+fi
 finish

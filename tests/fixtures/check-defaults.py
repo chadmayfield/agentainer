@@ -256,7 +256,17 @@ class DefaultsTests(unittest.TestCase):
                 os.killpg(pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-            os.waitpid(pid, 0)
+            # SIGKILL if OpenCode is still running 5 seconds after SIGTERM.
+            deadline = time.monotonic() + 5
+            while os.waitpid(pid, os.WNOHANG) == (0, 0):
+                if time.monotonic() >= deadline:
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    os.waitpid(pid, 0)
+                    break
+                time.sleep(0.05)
             os.close(master)
 
     def assert_opencode_loaded_theme(self, output):
@@ -394,6 +404,11 @@ class DefaultsTests(unittest.TestCase):
     def test_user_edits_survive_a_second_start(self):
         paths = [HOME / name for name in ('.bashrc', '.gitconfig', '.vimrc', '.tmux.conf',
                     '.config/eza/theme.yml', '.config/fzf/config', '.config/bat/config')]
+        # Put every file back afterwards, so the edits never reach another test.
+        for path in paths + [HOME / name for name in (
+                '.claude/settings.json', '.gemini/antigravity-cli/settings.json',
+                '.config/opencode/opencode.json', '.config/opencode/cli.json', '.codex/config.toml')]:
+            self.addCleanup(path.write_bytes, path.read_bytes())
         for path in paths:
             with path.open('a') as file:
                 file.write('\n# User customization marker\n' if path.name != '.vimrc'

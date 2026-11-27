@@ -10,7 +10,10 @@ if ! out=$(kubectl kustomize deploy/kubernetes); then
 	exit 1
 fi
 pass "kustomize renders"
-q() { printf '%s\n' "$out" | "$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" "$1"; }
+# yq runs from the local image: q reads the rendered manifests, fq reads one source file.
+yq_in() { "$RUNTIME" run --rm -i --pull=never ${PLATFORM:+--platform "$PLATFORM"} --entrypoint yq "$IMAGE" "$1"; }
+q() { printf '%s\n' "$out" | yq_in "$1"; }
+fq() { yq_in "$1" <"$2"; }
 sts='select(.kind=="StatefulSet")'
 assert_eq "startup probe permits three minutes" "5 36" \
 	"$(q "$sts.spec.template.spec.containers[0].startupProbe | (.periodSeconds | tostring) + \" \" + (.failureThreshold | tostring)")"
@@ -36,7 +39,7 @@ containerssh-config-?*) pass "containerssh config name carries a content hash, s
 esac
 assert_eq "webhook URLs do not assume cluster.local" "" "$(printf '%s\n' "$out" | grep 'cluster\.local' || true)"
 assert_eq "agentainer image is set through kustomize images" "ghcr.io/chadmayfield/agentainer" \
-	"$("$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" '.images[0].name' <deploy/kubernetes/agentainer/kustomization.yaml)"
+	"$(fq '.images[0].name' deploy/kubernetes/agentainer/kustomization.yaml)"
 assert_eq "RBAC is limited to the agentainer-0 pod" "agentainer-0 agentainer-0" \
 	"$(q 'select(.kind=="Role") | .rules[].resourceNames[]' | grep -v '^---' | paste -sd ' ' -)"
 wh='select(.kind=="NetworkPolicy" and .metadata.name=="agentainer-auth-ingress")'
@@ -50,7 +53,7 @@ fm='select(.kind=="ConfigMap" and .metadata.name=="agentainer-features")'
 assert_eq "features ConfigMap keeps a stable name in containerssh" "agentainer-features containerssh" \
 	"$(q "$fm | .metadata.name + \" \" + .metadata.namespace")"
 assert_eq "features ConfigMap is a resource, not a generator" "resource=true generator=false" \
-	"$("$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" '"resource=" + ((.resources // []) | any_c(. == "features.yaml") | tostring) + " generator=" + ((.configMapGenerator // []) | any_c(.name == "agentainer-features") | tostring)' <deploy/kubernetes/auth-webhook/kustomization.yaml)"
+	"$(fq '"resource=" + ((.resources // []) | any_c(. == "features.yaml") | tostring) + " generator=" + ((.configMapGenerator // []) | any_c(.name == "agentainer-features") | tostring)' deploy/kubernetes/auth-webhook/kustomization.yaml)"
 whp='select(.kind=="Deployment" and .metadata.name=="agentainer-auth").spec.template.spec'
 assert_eq "features volume is optional" "features true" \
 	"$(q "$whp.volumes[] | select(.configMap.name==\"agentainer-features\") | .name + \" \" + (.configMap.optional | tostring)")"
@@ -122,6 +125,7 @@ assert_absent "selectors do not carry part-of" \
 	"$(q '"selectors=" + ([.spec.selector, .spec.podSelector] | map(select(. != null)) | length | tostring) + " part-of=" + ([.spec.selector."app.kubernetes.io/part-of", .spec.selector.matchLabels."app.kubernetes.io/part-of", .spec.podSelector.matchLabels."app.kubernetes.io/part-of"] | map(select(. != null)) | length | tostring)')" \
 	"selectors=1 " part-of=1 part-of=2 part-of=3
 . ./versions.env
+require_pins CONTAINERSSH_IMAGE WEBHOOK_PYTHON_IMAGE FILEBROWSER_IMAGE
 assert_contains "containerssh digest matches versions.env" "$CONTAINERSSH_IMAGE" "$out"
 assert_contains "webhook python digest matches versions.env" "$WEBHOOK_PYTHON_IMAGE" "$out"
 private=$(printf '%s\n' "$out" | grep -E '(^|[^0-9.])(10\.[0-9]+\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+)' || true)
@@ -193,7 +197,6 @@ kz=deploy/kubernetes/agentainer/kustomization.yaml
 assert_contains "kustomization lists the egress policy as optional" "# - networkpolicy.yaml" "$(cat "$kz")"
 assert_contains "kustomization lists the ingress policy as optional" "# - ingress-policy.yaml" "$(cat "$kz")"
 # The optional policies are not rendered, so read their source files.
-fq() { "$RUNTIME" run --rm -i --entrypoint yq "$IMAGE" "$1" <"$2"; }
 np=deploy/kubernetes/agentainer/networkpolicy.yaml
 assert_eq "egress policy still allows DNS to any destination" "UDP/53 TCP/53 to=false" \
 	"$(fq '.spec.egress[0] | (.ports | map(.protocol + "/" + (.port | tostring)) | join(" ")) + " to=" + (has("to") | tostring)' "$np")"

@@ -1349,6 +1349,12 @@ def bump(args, resolvers):
         for why in bad:
             print("bump_versions: refusing to write %s" % why, file=sys.stderr)
         return 1
+    # A manifest that repeats a pin must exist, or versions.env and the manifest drift apart.
+    missing = [rel for key, _, _, rel in K8S_IMAGES if key in updates and not os.path.isfile(os.path.join(base, rel))]
+    if missing:
+        for rel in missing:
+            print("bump_versions: %s is missing; pins unchanged" % rel, file=sys.stderr)
+        return 1
     old = values(lines)
     npm_keys = {key for key, _, _ in EXTRAS}
     for key, value in updates.items():
@@ -1371,7 +1377,7 @@ def bump(args, resolvers):
     # The Kubernetes example must use the same image references as versions.env.
     for key, _, _, rel in K8S_IMAGES:
         path = os.path.join(base, rel)
-        if key in updates and os.path.exists(path):
+        if key in updates:
             with open(path) as f:
                 text = f.read()
             write_atomic(path, rewrite_image_ref(text, updates[key]))

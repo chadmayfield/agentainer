@@ -34,7 +34,7 @@ case " $* " in
   *) exit 2 ;;
 esac
 ''',
-                "docker": '#!/bin/sh\ntouch "$CHECK_ROOT/cpu-check"\n',
+                "docker": '#!/bin/sh\nprintf "%s\\0" "$@" >"$CHECK_ROOT/cpu-check"\n',
             }
             for name, body in stubs.items():
                 path = root / name
@@ -45,7 +45,9 @@ esac
                        IMAGE="fixture", GITHUB_STEP_SUMMARY=str(root / "summary"))
             result = subprocess.run(["bash", "-eo", "pipefail", "-c", script], env=env,
                                     capture_output=True, text=True, timeout=10)
-            return result, (root / "calls").read_text(), (root / "cpu-check").exists()
+            check = root / "cpu-check"
+            self.docker_args = check.read_text().split("\0")[:-1] if check.exists() else None
+            return result, (root / "calls").read_text(), check.exists()
 
     def test_refreshes_indexes_before_installing_qemu(self):
         result, calls, checked = self.setup_check()
@@ -53,6 +55,11 @@ esac
         self.assertIn("update --error-on=any", calls)
         self.assertIn("install -y -qq qemu-user", calls)
         self.assertTrue(checked)
+        self.assertEqual(self.docker_args[:7], ["run", "--rm", "-v", "/usr/bin/qemu-x86_64:/usr/local/bin/qemu-x86_64:ro",
+                                                "--entrypoint", "bash", "fixture"])
+        self.assertEqual(self.docker_args[7], "-c")
+        self.assertIn("qemu-x86_64 -cpu SandyBridge", self.docker_args[8])
+        self.assertEqual(len(self.docker_args), 9)
 
     def test_failed_index_refresh_stops_before_install(self):
         result, calls, checked = self.setup_check("update")

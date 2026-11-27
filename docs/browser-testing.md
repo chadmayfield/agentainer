@@ -1,6 +1,6 @@
 # Optional browser testing
 
-Install Playwright in the project that needs it. Agentainer supplies Node.js, npm and the OS libraries and fonts that Playwright lists for Chromium on Ubuntu 26.04 (`nativeDeps.ts` in Playwright v1.64.1, without `xvfb`). The browsers themselves are not in the image. They download into your home as the `agent` user, with no sudo. Playwright supports Ubuntu 26.04 on amd64 and arm64 ([system requirements](https://playwright.dev/docs/intro#system-requirements)). Follow an existing project's package-manager instructions and lockfile instead of creating a second setup.
+Install Playwright in the project that needs it. Agentainer supplies Node.js, npm and the OS libraries and fonts that Playwright lists for Chromium on Ubuntu 26.04 (`nativeDeps.ts` in Playwright v1.65.0, without `xvfb`). The browsers themselves are not in the image. They download into your home as the `agent` user, with no sudo. Playwright supports Ubuntu 26.04 on amd64 and arm64 ([system requirements](https://playwright.dev/docs/intro#system-requirements)). Follow an existing project's package-manager instructions and lockfile instead of creating a second setup.
 
 ## Contents
 

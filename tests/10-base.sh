@@ -3,14 +3,15 @@
 . "$(dirname "$0")/lib.sh"
 # shellcheck source=versions.env
 . "$(dirname "$0")/../versions.env"
+require_pins APT_SNAPSHOT
 
 assert_eq "user is agent" "agent" "$(run_in -- id -un)"
 assert_eq "uid is 1000" "1000" "$(run_in -- id -u)"
 assert_eq "gid is 1000" "1000" "$(run_in -- id -g)"
 # shellcheck disable=SC2016 # expands in the container
 assert_eq "home is /home/agent" "/home/agent" "$(run_in -- sh -c 'echo $HOME')"
-# Startup steps must not leave the shared stdin or stderr non-blocking: ansible refuses to
-# run then (OpenCode 2.4.2 did this to stderr through entrypoint.d/70-opencode.sh).
+# Startup steps must not leave the shared stdin or stderr non-blocking (O_NONBLOCK), for
+# example through a tool that a step in entrypoint.d runs. ansible refuses to run then.
 assert_eq "startup leaves stdin and stderr blocking" "True True" \
 	"$(run_in -- python3 -c 'import os; print(os.get_blocking(0), os.get_blocking(2))')"
 assert_eq "agent belongs only to the agent group" "agent" "$(run_in -- id -Gn)"

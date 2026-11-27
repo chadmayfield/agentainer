@@ -603,7 +603,8 @@ class RobustnessTests(SyncBase):
         spaces = " " * 100000
         for line in ("[a" + spaces + "x", "[a" + spaces + "]x", "[" + "a." * 100000, '["' + "x" * 200000):
             self.assertIsNone(mcp.codex_header_parts(line))
-        self.assertLess(time.monotonic() - start, 2.0)
+        # A loose limit, so a slow runner passes. The check is for backtracking, not speed.
+        self.assertLess(time.monotonic() - start, 10.0)
         self.assertEqual(mcp.codex_header_parts('[ mcp_servers . "a]b" ] # [c]'), ["mcp_servers", "a]b"])
         self.assertEqual(mcp.codex_header_parts("[[mcp_servers.'x'.y]]"), ["mcp_servers", "x", "y"])
 
@@ -690,13 +691,15 @@ class RobustnessTests(SyncBase):
         self.write_mcp({"k": {"command": "x"}})
         original = mcp.write_atomic
 
-        def fail(path, text):
+        def fail(path, text, **kwargs):
             if path == os.path.join(self.home, ".claude.json"):
                 raise OSError("injected failure")
-            return original(path, text)
+            return original(path, text, **kwargs)
 
         with mock.patch.object(mcp, "write_atomic", side_effect=fail):
-            self.assertNotEqual(self.sync(), 0)
+            rc, err = self.sync_err()
+        self.assertNotEqual(rc, 0)
+        self.assertIn("claude: not updated (OSError)", err)
         manifest = json.loads(self.read(".agentainer", "mcp-managed.json"))
         self.assertNotIn("k", manifest.get("claude", []))
         self.assertIn("k", manifest["agy"])

@@ -5,7 +5,9 @@
 . "$(dirname "$0")/../lib.sh"
 L="$(cd "$(dirname "$0")/../.." && pwd)/bin/agentainer"
 T=$(cd "$(mktemp -d)" && pwd -P) # resolved, as the launcher resolves paths
-trap 'rm -rf "$T"' EXIT INT TERM
+trap 'rm -rf "$T"' EXIT
+# dash skips the EXIT trap on a signal; exiting from the signal trap runs it.
+trap 'exit 130' INT TERM
 cat >"$T/podman" <<'EOF'
 #!/bin/sh
 if [ "$1" = inspect ]; then echo 1; else printf '%s\n' "$@"; fi

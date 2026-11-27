@@ -592,9 +592,9 @@ class HelperTests(unittest.TestCase):
             env = os.path.join(d, "versions.env")
             with open(env, "w") as f:
                 f.write(env_text)
-            os.makedirs(os.path.join(d, os.path.dirname(rel)))
-            with open(os.path.join(d, rel), "w") as f:
-                f.write(manifest)
+            for _, _, _, path in bv.K8S_IMAGES:
+                os.makedirs(os.path.join(d, os.path.dirname(path)), exist_ok=True)
+                shutil.copyfile(os.path.join(root, path), os.path.join(d, path))
             with patch.object(bv, "fetch_json", return_value={"digest": "sha256:" + "c" * 64}) as fj, \
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(bv.main(["--file", env, "--only", "r_k8s_images"]), 0)
@@ -603,6 +603,27 @@ class HelperTests(unittest.TestCase):
                 self.assertEqual(f.read(), manifest.replace(old, new))
             with open(env) as f:
                 self.assertEqual(bv.values(bv.parse_env(f.read()))["FILEBROWSER_IMAGE"], new)
+
+    def test_missing_k8s_manifest_fails_and_writes_nothing(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+        rel = os.path.join("deploy", "kubernetes", "agentainer", "statefulset.yaml")
+        with open(os.path.join(root, "versions.env")) as f:
+            env_text = f.read()
+        with tempfile.TemporaryDirectory() as d:
+            env = os.path.join(d, "versions.env")
+            with open(env, "w") as f:
+                f.write(env_text)
+            os.makedirs(os.path.join(d, os.path.dirname(rel)))
+            shutil.copyfile(os.path.join(root, rel), os.path.join(d, rel))
+            err = io.StringIO()
+            with patch.object(bv, "fetch_json", return_value={"digest": "sha256:" + "c" * 64}), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                self.assertEqual(bv.main(["--file", env, "--only", "r_k8s_images"]), 1)
+            self.assertIn("is missing; pins unchanged", err.getvalue())
+            with open(env) as f:
+                self.assertEqual(f.read(), env_text)
+            with open(os.path.join(d, rel)) as f, open(os.path.join(root, rel)) as g:
+                self.assertEqual(f.read(), g.read())
 
     def test_strip_v(self):
         self.assertEqual(bv.strip_v("v2.102.0"), "2.102.0")

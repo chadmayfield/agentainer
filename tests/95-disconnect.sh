@@ -5,10 +5,16 @@
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
 name="agentainer-disc-$$"
-trap '"$RUNTIME" rm -f "$name" >/dev/null 2>&1' EXIT
+# The PID of the sleep that keeps the host-side session's stdin open.
+hold=$(mktemp "${TMPDIR:-/tmp}/cx-disc.XXXXXX")
+trap '"$RUNTIME" rm -f "$name" >/dev/null 2>&1; kill "$(cat "$hold" 2>/dev/null)" 2>/dev/null; rm -f "$hold"' EXIT
 # dash skips the EXIT trap on a signal; exiting from the signal trap runs it.
 trap 'exit 130' INT TERM
-run_bg "$name"
+if ! run_bg "$name"; then
+	fail "the test container starts"
+	finish
+	exit 1
+fi
 x() { "$RUNTIME" exec "$name" "$@"; }
 # The entrypoint execs the default command, sleep infinity, after its last step. Agents
 # started before then could race the startup steps that write their config.
@@ -65,14 +71,21 @@ same_panes "every agent pane survived with the same PID"
 # "script" gives the host-side exec a TTY (BSD syntax on macOS, util-linux on Linux). Its
 # stdin stays open and idle: end-of-input would reach the active agent as Ctrl-D, which
 # a dropped connection never sends.
+# idle_stdin runs in the pipeline's subshell and records its sleep, which $! below does not name.
+idle_stdin() {
+	sleep 60 &
+	echo "$!" >"$hold"
+	wait
+}
 if script --version >/dev/null 2>&1; then
-	sleep 60 | script -qfc "$RUNTIME exec -it $name tmux new-session -A -s main" /dev/null >/dev/null 2>&1 &
+	idle_stdin | script -qfc "$RUNTIME exec -it $name tmux new-session -A -s main" /dev/null >/dev/null 2>&1 &
 else
-	sleep 60 | script -q /dev/null "$RUNTIME" exec -it "$name" tmux new-session -A -s main >/dev/null 2>&1 &
+	idle_stdin | script -q /dev/null "$RUNTIME" exec -it "$name" tmux new-session -A -s main >/dev/null 2>&1 &
 fi
 host_session=$!
 if wait_for 15 one_client; then pass "the host-side session attached"; else fail "the host-side session attached" "clients: $(clients)"; fi
 kill -9 "$host_session" 2>/dev/null
+kill "$(cat "$hold")" 2>/dev/null
 pkill -9 -f "exec -it $name tmux" 2>/dev/null
 wait_for 15 no_client || true
 same_panes "agents survive a killed host-side exec session"

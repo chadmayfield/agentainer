@@ -26,11 +26,14 @@ class CurlTransferTests(unittest.TestCase):
         root = Path(cls.certificates.name)
         cls.cert = root / "cert.pem"
         cls.key = root / "key.pem"
-        subprocess.run([
-            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-            "-days", "1", "-subj", "/CN=localhost", "-addext",
-            "subjectAltName=IP:127.0.0.1", "-keyout", str(cls.key), "-out", str(cls.cert),
-        ], check=True, capture_output=True)
+        # A second certificate for the same address that the server never presents.
+        cls.unrelated = root / "unrelated.pem"
+        for cert, key in ((cls.cert, cls.key), (cls.unrelated, root / "unrelated-key.pem")):
+            subprocess.run([
+                "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                "-days", "1", "-subj", "/CN=localhost", "-addext",
+                "subjectAltName=IP:127.0.0.1", "-keyout", str(key), "-out", str(cert),
+            ], check=True, capture_output=True)
 
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -68,8 +71,8 @@ class CurlTransferTests(unittest.TestCase):
         self.thread.join(timeout=5)
         self.server.server_close()
 
-    def fetch(self):
-        env = dict(os.environ, CURL_CA_BUNDLE=str(self.cert), NO_PROXY="127.0.0.1")
+    def fetch(self, ca=None):
+        env = dict(os.environ, CURL_CA_BUNDLE=str(ca or self.cert), NO_PROXY="127.0.0.1")
         url = "https://127.0.0.1:%d/archive" % self.server.server_port
         return subprocess.run([
             "sh", str(ROOT / "build/fetch.sh"), url, "sha256",
@@ -90,6 +93,14 @@ class CurlTransferTests(unittest.TestCase):
         self.assertIn("checksum mismatch", result.stderr)
         self.assertFalse(self.output.exists())
 
+    def test_untrusted_certificate_fails_without_output(self):
+        self.failures = 0
+        result = self.fetch(ca=self.unrelated)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("download failed", result.stderr)
+        self.assertEqual(self.requests, 0, "a request reached the server over an untrusted connection")
+        self.assertFalse(self.output.exists())
+
     def test_repeated_transfer_failures_stop_and_remove_partial_output(self):
         self.failures = 10
         result = self.fetch()
@@ -101,6 +112,11 @@ class CurlTransferTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("apt-get"), "APT required")
 class AptIndexTests(unittest.TestCase):
+    """Run the apt-get update options from apt-install.sh against an unreachable source.
+
+    tests/host/test-apt-install.sh runs apt-install.sh itself with stub commands.
+    """
+
     def test_snapshot_index_failure_returns_failure(self):
         text = (ROOT / "build" / "apt-install.sh").read_text()
         options = re.search(r'^APT_OPTS="([^"]+)"', text, re.M)[1]

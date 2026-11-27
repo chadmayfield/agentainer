@@ -27,7 +27,7 @@ The pinned versions are in [`versions.env`](../versions.env). The commands below
 - [Default configuration](defaults.md#agent-configurations) lists what the image seeds in each settings file.
 - `opencode debug paths` prints OpenCode's resolved config, data and cache directories.
 - Agentainer's instruction links use the fixed instruction paths in this table and do not follow these variables.
-- The MCP sync writes other files, such as `~/.claude.json` and `~/.gemini/config/mcp_config.json`. [MCP servers](configuration.md#mcp-servers) lists them; `CLAUDE_CONFIG_DIR` is the only override the sync follows.
+- The MCP sync writes other files, such as `~/.claude.json` and `~/.gemini/config/mcp_config.json`. [MCP servers](configuration.md#mcp-servers) lists them; `CLAUDE_CONFIG_DIR` is the only override the sync follows. `agentainer-doctor` also follows `CODEX_HOME` and `XDG_CONFIG_HOME`, so with either set, doctor checks a different Codex or OpenCode file from the one the sync writes.
 
 ## Skills
 
