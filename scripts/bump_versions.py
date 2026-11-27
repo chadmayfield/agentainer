@@ -6,7 +6,9 @@ fails keeps every pin it owns, and the other resolvers still run and write their
 The extras resolver does the same for each extra and its catalog files. --failures
 FILE lists every failed resolver and extra, one per line; without --failures, a
 failed resolver makes the exit status 1 after the other pins are written. A refused
-value or a downgrade still stops the run and leaves the file unchanged. Uses the Python
+value or a downgrade still stops the run and leaves the file unchanged. No resolver
+pins a release younger than MIN_RELEASE_AGE_HOURS; skipped releases are printed with
+the pin changes and never fail the run. Uses the Python
 standard library, the publisher verification CLIs documented in docs/versions.md,
 npm to generate extras lockfiles, and openssl to verify npm registry signatures.
 """
@@ -276,13 +278,106 @@ def gh_latest(repo):
     return fetch_json("https://api.github.com/repos/%s/releases/latest" % repo)
 
 
+# ---- release age ------------------------------------------------------------
+# No resolver pins a release published less than MIN_RELEASE_AGE_HOURS before the run.
+# When the newest release is younger, the resolver pins the newest release that is old
+# enough; when none is, the pin stays. Each skipped release goes to YOUNG_RELEASES, which
+# bump prints with the pin changes, so it reaches the pull request text without failing
+# the run. Resolvers whose source gives no publish time say so in a comment and are not
+# held back (docs/versions.md, "Minimum release age"). The extras keep their own, longer
+# EXTRA_MIN_AGE_DAYS.
+MIN_RELEASE_AGE_HOURS = 72
+YOUNG_RELEASES = []
+# A resolver that picked an older release because of its age records it here. bump then
+# keeps the current pin when that older release sorts below it, instead of stopping the run
+# as a downgrade.
+AGE_FALLBACK = []
+
+
+def release_cutoff(now):
+    return now - datetime.timedelta(hours=MIN_RELEASE_AGE_HOURS)
+
+
+def parse_time(value, what):
+    """An ISO 8601 time with a UTC offset (GitHub, Gitea and Forgejo published_at) in UTC."""
+    when = None
+    if isinstance(value, str):
+        try:
+            when = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            when = None
+    if when is None or when.tzinfo is None:
+        raise LookupFailed("%s: no valid publish time %r" % (what, value))
+    return when.astimezone(datetime.timezone.utc)
+
+
+def too_young(what, version, published, now, note=""):
+    """True when published is less than MIN_RELEASE_AGE_HOURS before now; records the skip."""
+    if published <= release_cutoff(now):
+        return False
+    hours = int((now - published).total_seconds() // 3600)
+    YOUNG_RELEASES.append("newer release %s %s skipped, published %d hours ago%s (minimum %d hours)"
+                          % (what, version, hours, note, MIN_RELEASE_AGE_HOURS))
+    return True
+
+
+def gh_release(repo):
+    """The GitHub release to pin for repo, or None when no stable release is old enough.
+
+    That is the latest release, or, when it is too young, the stable release with the
+    newest published_at that is at least MIN_RELEASE_AGE_HOURS old.
+    """
+    now = utcnow()
+    latest = gh_latest(repo)
+    if not too_young(repo, latest.get("tag_name"), parse_time(latest.get("published_at"), repo), now):
+        return latest
+    AGE_FALLBACK.append(repo)
+    older = []
+    for rel in fetch_json("https://api.github.com/repos/%s/releases?per_page=30" % repo):
+        if not isinstance(rel, dict) or rel.get("draft") or rel.get("prerelease"):
+            continue
+        published = parse_time(rel.get("published_at"), repo)
+        if published <= release_cutoff(now):
+            older.append((published, rel))
+    return max(older, key=lambda pair: pair[0])[1] if older else None
+
+
+def forge_release(latest_url, what):
+    """The release to pin from a Gitea or Forgejo releases/latest URL, as gh_release does for GitHub.
+
+    The list endpoint takes a limit parameter (Gitea API, "List a repo's releases").
+    """
+    now = utcnow()
+    latest = fetch_json(latest_url)
+    if not too_young(what, latest.get("tag_name"), parse_time(latest.get("published_at"), what), now):
+        return latest
+    AGE_FALLBACK.append(what)
+    older = []
+    for rel in fetch_json(latest_url.rsplit("/latest", 1)[0] + "?limit=20"):
+        if not isinstance(rel, dict) or rel.get("draft") or rel.get("prerelease"):
+            continue
+        published = parse_time(rel.get("published_at"), what)
+        if published <= release_cutoff(now):
+            older.append((published, rel))
+    return max(older, key=lambda pair: pair[0])[1] if older else None
+
+
+def keep_pin(what):
+    print("%s: no release is %d hours old yet; keeping the current pin" % (what, MIN_RELEASE_AGE_HOURS),
+          file=sys.stderr)
+    return {}
+
+
 def r_base():
+    # Unchanged by the release age rule: the tag moves with each Ubuntu image rebuild, and
+    # the apt snapshot is always the previous day.
     tag = fetch_json("https://hub.docker.com/v2/repositories/library/ubuntu/tags/26.04")
     snap = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).strftime("%Y%m%dT000000Z")
     return {"BASE_IMAGE": "docker.io/library/ubuntu:26.04@" + tag["digest"], "APT_SNAPSHOT": snap}
 
 
 def r_go():
+    # go.dev/dl/?mode=json gives no release time, so the release age rule does not apply.
     return parse_go(fetch_json("https://go.dev/dl/?mode=json"))
 
 
@@ -290,12 +385,27 @@ def rust_manifest_url(version):
     return "https://static.rust-lang.org/dist/channel-rust-%s.toml" % version
 
 
+def parse_rust_date(text):
+    """The end of the day in the channel manifest's date line, the latest time it can mean."""
+    m = re.search(r'^date = "([0-9]{4}-[0-9]{2}-[0-9]{2})"$', text, re.M)
+    if not m:
+        raise LookupFailed("rust: no date in the channel manifest")
+    day = datetime.datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+    return day + datetime.timedelta(days=1)
+
+
 def r_rust():
+    # rustup's release-stable.toml gives no release time, so the age rule covers only Rust.
+    # The channel manifest gives only a day. No list of earlier releases is fetched, so a
+    # Rust release that is too young keeps the current Rust pins.
     rustup = parse_rustup_release(fetch("https://static.rust-lang.org/rustup/release-stable.toml"))
-    rust = parse_rust_channel(fetch("https://static.rust-lang.org/dist/channel-rust-stable.toml"))
-    out = {"RUSTUP_VERSION": rustup, "RUST_VERSION": rust,
-           # rustup checks every component against this versioned manifest; the build checks the manifest.
-           "RUST_MANIFEST_SHA256": parse_checksum_file(fetch(rust_manifest_url(rust) + ".sha256"))}
+    channel = fetch("https://static.rust-lang.org/dist/channel-rust-stable.toml")
+    rust = parse_rust_channel(channel)
+    out = {"RUSTUP_VERSION": rustup}
+    if not too_young("rust", rust, parse_rust_date(channel), utcnow(), note=" (the manifest gives only the day)"):
+        out["RUST_VERSION"] = rust
+        # rustup checks every component against this versioned manifest; the build checks the manifest.
+        out["RUST_MANIFEST_SHA256"] = parse_checksum_file(fetch(rust_manifest_url(rust) + ".sha256"))
     for up, triple in (("AMD64", "x86_64-unknown-linux-gnu"), ("ARM64", "aarch64-unknown-linux-gnu")):
         url = "https://static.rust-lang.org/rustup/archive/%s/%s/rustup-init.sha256" % (rustup, triple)
         out["RUSTUP_SHA256_" + up] = parse_checksum_file(fetch(url))
@@ -305,9 +415,12 @@ def r_rust():
 def github_tool(prefix, repo, names, rel=None, checksums=None):
     """names maps AMD64/ARM64 to a function of the bare version returning the asset name.
 
-    rel is the release to pin; the default is the repository's latest release.
+    rel is the release to pin; the default is gh_release, which applies the release age rule.
     """
-    rel = rel or gh_latest(repo)
+    if rel is None:
+        rel = gh_release(repo)
+        if rel is None:
+            return keep_pin(repo)
     ver = strip_v(rel["tag_name"])
     if checksums:
         # Only the named checksum list may supply the hashes; an asset digest alone is not enough.
@@ -395,11 +508,21 @@ def r_containerssh_agent():
         return {}
     wanted = re.compile(r"v?%s\.([0-9]+)" % re.escape(series))
     found = []
+    young = False
+    now = utcnow()
     for rel in fetch_json("https://api.github.com/repos/containerssh/agent/releases?per_page=50"):
         m = wanted.fullmatch(rel.get("tag_name", ""))
         if m and not rel.get("prerelease") and not rel.get("draft"):
+            if too_young("containerssh/agent", rel["tag_name"],
+                         parse_time(rel.get("published_at"), "containerssh/agent"), now):
+                young = True
+                continue
             found.append((int(m.group(1)), rel))
+    if young:
+        AGE_FALLBACK.append("containerssh/agent")
     if not found:
+        if young:
+            return keep_pin("containerssh/agent")
         raise LookupFailed("containerssh/agent: no stable %s.x release found" % series)
     return github_tool("CONTAINERSSH_AGENT", "containerssh/agent", {
         "AMD64": lambda v: "agent_%s_linux_amd64.tar.gz" % v,
@@ -411,6 +534,8 @@ def r_trivy():
     out = github_tool("TRIVY", "aquasecurity/trivy", {
         "AMD64": lambda v: "trivy_%s_Linux-64bit.tar.gz" % v,
         "ARM64": lambda v: "trivy_%s_Linux-ARM64.tar.gz" % v})
+    if not out:
+        return out
     tag = out["TRIVY_VERSION"]
     out["TRIVY_SCANNER_IMAGE"] = hub_ref("aquasec/trivy", tag, fetch_json(
         "https://hub.docker.com/v2/repositories/aquasec/trivy/tags/" + tag))
@@ -428,9 +553,21 @@ def r_unslop():
     # The pstack directory includes the skill and its license. Source files have no
     # published checksums, so compute both from the same immutable upstream commit.
     # https://github.com/cursor/plugins/tree/main/pstack
-    commits = fetch_json('https://api.github.com/repos/cursor/plugins/commits?path=pstack&per_page=1')
+    # The age rule uses the commit's committer date, which the committer sets. The commits
+    # API's until parameter returns only commits from before that time.
+    url = 'https://api.github.com/repos/cursor/plugins/commits?path=pstack&per_page=1'
+    commits = fetch_json(url)
     if not commits or not isinstance(commits[0], dict):
         raise LookupFailed('unslop: no upstream commit')
+    now = utcnow()
+    when = parse_time(((commits[0].get('commit') or {}).get('committer') or {}).get('date'), 'unslop')
+    if too_young('unslop commit', str(commits[0].get('sha', ''))[:12], when, now):
+        AGE_FALLBACK.append('unslop')
+        commits = fetch_json(url + '&until=' + release_cutoff(now).strftime('%Y-%m-%dT%H:%M:%SZ'))
+        if not commits:
+            return keep_pin('unslop')
+        if not isinstance(commits[0], dict):
+            raise LookupFailed('unslop: no upstream commit')
     commit = commits[0].get('sha', '')
     if not isinstance(commit, str) or not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise LookupFailed('unslop: expected a full lowercase commit SHA')
@@ -448,6 +585,7 @@ def r_golangci():
 
 def r_kubectl():
     # https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
+    # stable.txt and dl.k8s.io give no release time, so the release age rule does not apply.
     tag = fetch("https://dl.k8s.io/release/stable.txt").strip()
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
         raise LookupFailed("kubectl: stable release must be a version tag")
@@ -460,7 +598,9 @@ def r_kubectl():
 
 def r_helm():
     # https://helm.sh/docs/intro/install/#from-the-binary-releases
-    release = gh_latest("helm/helm")
+    release = gh_release("helm/helm")
+    if release is None:
+        return keep_pin("helm/helm")
     tag = release["tag_name"]
     if release.get("prerelease") or release.get("draft") or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
         raise LookupFailed("helm: latest release must be a stable version tag")
@@ -487,8 +627,13 @@ def r_codex():
         "ARM64": lambda v: codex_asset("aarch64")})
 
 
+TEA_RELEASES = "https://gitea.com/api/v1/repos/gitea/tea/releases/latest"
+
+
 def r_tea():
-    rel = fetch_json("https://gitea.com/api/v1/repos/gitea/tea/releases/latest")
+    rel = forge_release(TEA_RELEASES, "gitea/tea")
+    if rel is None:
+        return keep_pin("gitea/tea")
     ver = strip_v(rel["tag_name"])
     out = {"TEA_VERSION": ver}
     for up, arch in ARCHES.items():
@@ -509,7 +654,9 @@ FJ_TRIPLES = (("AMD64", "x86_64"), ("ARM64", "aarch64"))
 def r_fj():
     # forgejo-cli publishes no checksums and the Forgejo release API returns no asset digest,
     # so the pins are SHA-256 values computed here from the downloaded archives.
-    rel = fetch_json(FJ_RELEASES)
+    rel = forge_release(FJ_RELEASES, "forgejo-cli")
+    if rel is None:
+        return keep_pin("forgejo-cli")
     ver = strip_v(rel["tag_name"])
     out = {"FJ_VERSION": ver}
     for up, triple in FJ_TRIPLES:
@@ -713,6 +860,9 @@ def verify_signature(data, sig, key, fingerprints):
 
 def r_claude():
     # The "stable" channel Anthropic documents for Claude Code (code.claude.com/docs/en/setup).
+    # The release host gives no time a version reached that channel. manifest.json has a
+    # buildDate, but a release is published after it is built, so buildDate cannot show that
+    # a release is old enough. The release age rule does not apply.
     ver = fetch(CLAUDE_RELEASES + "/stable").strip()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", ver):
         raise LookupFailed("claude: unexpected stable version %r" % ver[:40])
@@ -727,16 +877,33 @@ NODE_DIST = "https://nodejs.org/dist"
 NODE_MAJOR = 26
 
 
-def parse_node_index(doc, major):
-    """Newest release of one Node.js major from nodejs.org/dist/index.json, without the v."""
+def node_release_end(entry):
+    """The end of the day in an index.json entry's date, the latest time it can mean."""
+    try:
+        day = datetime.datetime.strptime(str(entry.get("date")), "%Y-%m-%d")
+    except ValueError:
+        raise LookupFailed("node: no valid date for %s in index.json" % entry.get("version"))
+    return day.replace(tzinfo=datetime.timezone.utc) + datetime.timedelta(days=1)
+
+
+def parse_node_index(doc, major, now=None):
+    """Newest release of one Node.js major from nodejs.org/dist/index.json, without the v.
+
+    With now, only releases whose day ended at least MIN_RELEASE_AGE_HOURS before now count,
+    and the result is None when there is none.
+    """
     if not isinstance(doc, list):
         raise LookupFailed("node: unexpected index.json shape")
     pattern = re.compile(r"v(%d\.[0-9]+\.[0-9]+)" % major)
-    found = [m.group(1) for m in (pattern.fullmatch(str(e.get("version", ""))) for e in doc if isinstance(e, dict))
-             if m]
+    found = [(m.group(1), e) for m, e in ((pattern.fullmatch(str(e.get("version", ""))), e)
+                                          for e in doc if isinstance(e, dict)) if m]
     if not found:
         raise LookupFailed("node: no release of major %d in index.json" % major)
-    return max(found, key=version_key)
+    if now is not None:
+        found = [(v, e) for v, e in found if node_release_end(e) <= release_cutoff(now)]
+        if not found:
+            return None
+    return max((v for v, _ in found), key=version_key)
 
 
 def parse_node_shasums(text, ver):
@@ -759,7 +926,17 @@ def parse_node_shasums(text, ver):
 
 def r_node():
     # nodejs.org signs SHASUMS256.txt with the release keys pinned in scripts/keys.
-    ver = parse_node_index(fetch_json(NODE_DIST + "/index.json"), NODE_MAJOR)
+    # index.json gives each release's day, which counts as the end of that day.
+    doc = fetch_json(NODE_DIST + "/index.json")
+    now = utcnow()
+    newest = parse_node_index(doc, NODE_MAJOR)
+    ver = parse_node_index(doc, NODE_MAJOR, now=now)
+    if ver != newest:
+        entry = next(e for e in doc if isinstance(e, dict) and e.get("version") == "v" + newest)
+        too_young("node", newest, node_release_end(entry), now, note=" (index.json gives only the day)")
+        AGE_FALLBACK.append("node")
+    if ver is None:
+        return keep_pin("node")
     base = "%s/v%s/SHASUMS256.txt" % (NODE_DIST, ver)
     shasums = fetch_bytes(base)
     sig = fetch_bytes(base + ".sig")
@@ -800,6 +977,7 @@ def awscli_zip_url(triple, ver):
 
 
 def r_awscli():
+    # The changelog headings give no release time, so the release age rule does not apply.
     ver = parse_awscli_changelog(fetch(AWSCLI_CHANGELOG))
     # The zips are about 75 MB each. When the version is already pinned, its checksums are
     # already pinned too, so nothing is downloaded and the pins stay as they are. main
@@ -818,6 +996,8 @@ def r_awscli():
 
 
 def r_agy():
+    # The manifest has only version, url and sha512, no release time, so the release age
+    # rule does not apply.
     out = {}
     versions = set()
     for up, arch in ARCHES.items():
@@ -832,7 +1012,19 @@ def r_agy():
 
 
 def r_opencode():
-    ver = fetch_json("https://registry.npmjs.org/@opencode/cli/latest")["version"]
+    # The release age rule uses the registry's time for each version of @opencode/cli.
+    packument = fetch_json(NPM_REGISTRY + "@opencode/cli")
+    now = utcnow()
+    latest = packument["dist-tags"]["latest"]
+    try:
+        ver = pick_version(packument, now, datetime.timedelta(hours=MIN_RELEASE_AGE_HOURS))
+    except NothingNewer:
+        ver = None
+    if ver != latest:
+        too_young("@opencode/cli", latest, parse_registry_time(packument["time"].get(latest)), now)
+        AGE_FALLBACK.append("@opencode/cli")
+    if ver is None:
+        return keep_pin("@opencode/cli")
     out = {"OPENCODE_VERSION": ver}
     keys = load_registry_keys(NPM_KEYS)
     for up, target in (("AMD64", "linux-x64-baseline"), ("ARM64", "linux-arm64")):
@@ -952,15 +1144,20 @@ def npm_version_key(value):
     return tuple(int(n) for n in m.group(1, 2, 3)) + (int(m.group(4) is None),)
 
 
-def pick_version(packument, now):
-    """Newest stable, non-deprecated version up to dist-tags.latest published at least EXTRA_MIN_AGE_DAYS before now."""
+def pick_version(packument, now, min_age=None):
+    """Newest stable, non-deprecated version up to dist-tags.latest published at least min_age before now.
+
+    min_age defaults to EXTRA_MIN_AGE_DAYS.
+    """
+    if min_age is None:
+        min_age = datetime.timedelta(days=EXTRA_MIN_AGE_DAYS)
     if not isinstance(packument, dict) or not isinstance(packument.get("versions"), dict):
         raise LookupFailed("packument is not an object with versions")
     latest = npm_version_key(packument["dist-tags"]["latest"])
     times = packument.get("time")
     if not isinstance(times, dict) or not times:
         raise LookupFailed("packument has no time object")
-    cutoff = now - datetime.timedelta(days=EXTRA_MIN_AGE_DAYS)
+    cutoff = now - min_age
     found = []
     candidates = timed = 0
     for ver, meta in packument["versions"].items():
@@ -979,7 +1176,7 @@ def pick_version(packument, now):
     if candidates and not timed:
         raise LookupFailed("packument time has no valid entry for any stable version")
     if not found:
-        raise NothingNewer("no stable version published at least %d days ago" % EXTRA_MIN_AGE_DAYS)
+        raise NothingNewer("no stable version published at least %d hours ago" % (min_age.total_seconds() // 3600))
     return max(found, key=npm_version_key)
 
 
@@ -1225,6 +1422,8 @@ def rewrite_image_ref(text, ref):
 
 
 def r_k8s_images():
+    # Unchanged by the release age rule: each tag follows a series and moves with every
+    # rebuild, and Docker Hub keeps no earlier digests to fall back to.
     return {key: hub_ref(repo, tag, fetch_json("https://hub.docker.com/v2/repositories/%s/tags/%s" % (repo, tag)))
             for key, repo, tag, _ in K8S_IMAGES}
 
@@ -1239,7 +1438,23 @@ def buildkit_tag(releases):
 
 def r_buildkit():
     # The BuildKit image buildx uses to build the published image (build.yml, publish job).
-    tag = buildkit_tag(fetch_json("https://api.github.com/repos/moby/buildkit/releases?per_page=20"))
+    now = utcnow()
+    releases = []
+    young = False
+    for r in fetch_json("https://api.github.com/repos/moby/buildkit/releases?per_page=20"):
+        if not r.get("prerelease") and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", r.get("tag_name", "")) \
+                and too_young("moby/buildkit", r["tag_name"], parse_time(r.get("published_at"), "moby/buildkit"), now):
+            young = True
+            continue
+        releases.append(r)
+    if young:
+        AGE_FALLBACK.append("moby/buildkit")
+    try:
+        tag = buildkit_tag(releases)
+    except LookupFailed:
+        if young:
+            return keep_pin("moby/buildkit")
+        raise
     return {"BUILDKIT_IMAGE": hub_ref("moby/buildkit", tag,
                                       fetch_json("https://hub.docker.com/v2/repositories/moby/buildkit/tags/%s" % tag))}
 
@@ -1332,6 +1547,7 @@ def main(argv=None, resolvers=None):
     args = ap.parse_args(argv)
     EXTRA_FILES.reset(None, {})
     del RESOLVER_FAILURES[:]
+    del YOUNG_RELEASES[:]
     if args.failures:
         # A later workflow step reads this file, so it exists even when the run fails.
         try:
@@ -1384,6 +1600,19 @@ def report_failures(path):
     return ok
 
 
+def older_than_pin(result, old, npm_keys):
+    """The first _VERSION key in result whose value sorts below its current pin, or None."""
+    for key, value in result.items():
+        if key.endswith("_VERSION") and key in old and old[key] != value:
+            order = npm_version_key if key in npm_keys else version_key
+            try:
+                if order(strip_v(value)) < order(strip_v(old[key])):
+                    return key
+            except ValueError:
+                continue
+    return None
+
+
 def bump(args, resolvers):
     known = {r.__name__ for r in RESOLVERS}
     unknown = sorted(set(args.only or []) - known)
@@ -1398,12 +1627,23 @@ def bump(args, resolvers):
     base = os.path.dirname(os.path.abspath(args.file))
     EXTRA_FILES.reset(base, values(lines))
     updates = {}
+    old = values(lines)
+    npm_keys = {key for key, _, _ in EXTRAS}
     # A failed resolver keeps its pins; one failed publisher check, such as an expired
     # signing key, must not hold back every other tool.
     for r in chosen:
         name = getattr(r, "__name__", repr(r))
+        del AGE_FALLBACK[:]
         try:
-            updates.update(r())
+            result = r()
+            below = AGE_FALLBACK and older_than_pin(result, old, npm_keys)
+            if below:
+                # The release old enough to pin is older than the current pin, which an
+                # earlier run took before it was old enough. Keep the current pin.
+                print("bump_versions: %s: the newest release old enough sorts below the %s pin; keeping it"
+                      % (name, below), file=sys.stderr)
+                result = {}
+            updates.update(result)
         except LookupFailed as e:
             reason = str(e)
         except (KeyError, IndexError, TypeError, ValueError) as e:
@@ -1414,13 +1654,15 @@ def bump(args, resolvers):
         line = "%s: %s" % (name, " ".join(reason.split()))
         print("bump_versions: %s; its pins are unchanged" % line, file=sys.stderr)
         RESOLVER_FAILURES.append(line)
+    # Releases skipped for their age go to stdout with the pin changes, which the scheduled
+    # workflow puts in the pull request text. They never fail the run.
+    for line in YOUNG_RELEASES:
+        print("release age: %s" % line)
     bad = [why for why in (invalid(k, v) for k, v in sorted(updates.items())) if why]
     if bad:
         for why in bad:
             print("bump_versions: refusing to write %s" % why, file=sys.stderr)
         return 1
-    old = values(lines)
-    npm_keys = {key for key, _, _ in EXTRAS}
     for key, value in updates.items():
         if key.endswith("_VERSION") and key in old and old[key] != value:
             order = npm_version_key if key in npm_keys else version_key

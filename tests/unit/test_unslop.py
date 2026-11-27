@@ -17,12 +17,16 @@ bump = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bump)
 
 
+# A committer date older than MIN_RELEASE_AGE_HOURS for any run of these tests.
+OLD = {'committer': {'date': '2026-01-01T00:00:00Z'}}
+
+
 class UnslopResolverTests(unittest.TestCase):
     def test_resolves_skill_and_license_from_one_immutable_commit(self):
         commit = 'a' * 40
         prefix = 'https://raw.githubusercontent.com/cursor/plugins/' + commit + '/pstack/'
         responses = {prefix + 'skills/unslop/SKILL.md': b'skill bytes\n', prefix + 'LICENSE': b'license bytes\n'}
-        with patch.object(bump, 'fetch_json', return_value=[{'sha': commit}]) as metadata, \
+        with patch.object(bump, 'fetch_json', return_value=[{'sha': commit, 'commit': OLD}]) as metadata, \
                 patch.object(bump, 'fetch_bytes', side_effect=responses.__getitem__) as fetch:
             pins = bump.r_unslop()
         metadata.assert_called_once_with('https://api.github.com/repos/cursor/plugins/commits?path=pstack&per_page=1')
@@ -34,10 +38,27 @@ class UnslopResolverTests(unittest.TestCase):
         for key, value in pins.items():
             self.assertIsNone(bump.invalid(key, value))
 
+    def test_a_too_young_commit_falls_back_to_one_from_before_the_cutoff(self):
+        young, old = 'b' * 40, 'c' * 40
+        now = bump.datetime.datetime(2026, 11, 26, 12, 0, tzinfo=bump.datetime.timezone.utc)
+        listings = [[{'sha': young, 'commit': {'committer': {'date': '2026-11-26T02:00:00Z'}}}],
+                    [{'sha': old, 'commit': OLD}]]
+        del bump.YOUNG_RELEASES[:]
+        self.addCleanup(bump.YOUNG_RELEASES.clear)
+        with patch.object(bump, 'utcnow', return_value=now), \
+                patch.object(bump, 'fetch_json', side_effect=listings) as metadata, \
+                patch.object(bump, 'fetch_bytes', return_value=b'bytes\n'):
+            pins = bump.r_unslop()
+        self.assertEqual(pins['UNSLOP_COMMIT'], old)
+        self.assertEqual(metadata.call_args_list[1].args[0],
+                         'https://api.github.com/repos/cursor/plugins/commits?path=pstack&per_page=1'
+                         '&until=2026-11-23T12:00:00Z')
+        self.assertIn('unslop commit bbbbbbbbbbbb skipped, published 10 hours ago', bump.YOUNG_RELEASES[0])
+
     def test_refuses_unsafe_or_abbreviated_commits_before_download(self):
         for commit in ('main', 'a' * 12, 'A' * 40, '../main', 'a' * 40 + ';id'):
             with self.subTest(commit=commit), \
-                    patch.object(bump, 'fetch_json', return_value=[{'sha': commit}]), \
+                    patch.object(bump, 'fetch_json', return_value=[{'sha': commit, 'commit': OLD}]), \
                     patch.object(bump, 'fetch_bytes') as fetch:
                 with self.assertRaises(bump.LookupFailed):
                     bump.r_unslop()
