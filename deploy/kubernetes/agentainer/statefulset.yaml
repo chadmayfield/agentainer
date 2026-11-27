@@ -35,7 +35,7 @@ spec:
       # stays until the next start. A failed removal stops the pod from starting.
       initContainers:
         - name: transfer-links
-          image: ghcr.io/chadmayfield/agentainer:latest
+          image: ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1
           command: [sh, -ec, 'echo "removing symbolic links under /srv/transfer:"; find /srv/transfer -mindepth 1 -type l -print -delete']
           securityContext:
             allowPrivilegeEscalation: false
