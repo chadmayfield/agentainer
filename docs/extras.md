@@ -98,9 +98,12 @@ OpenChamber starts on port 3000. `--lan` makes it listen on `0.0.0.0`, and `--ui
 
 ```sh
 bin/agentainer up --publish 3000:3000 "$HOME/code"
-# inside the container
-openchamber --lan --port 3000 --ui-password '<password>'
+# inside the container: type the password, which bash does not echo
+read -rs OPENCHAMBER_UI_PASSWORD && export OPENCHAMBER_UI_PASSWORD
+openchamber --lan --port 3000
 ```
+
+OpenChamber reads `OPENCHAMBER_UI_PASSWORD` as the alternative to `--ui-password` (`bin/lib/cli-args.js` in [`@openchamber/web` 2.7.2](https://unpkg.com/@openchamber/web@2.7.2/bin/lib/cli-args.js)). A password given with `--ui-password` stays in `~/.bash_history` on the home volume, and any process in the container can read it from `/proc/<pid>/cmdline`. The variable keeps it out of both, but processes that run as the same user, the agents included, can still read it from `/proc/<pid>/environ`.
 
 Then open `http://localhost:3000` on the host. Its terminal uses `node-pty`. The install check runs `openchamber --version` and loads `node-pty`'s prebuilt binding, since its install script never runs.
 

@@ -92,10 +92,11 @@ bin/agentainer up --publish 38429:38429 "$HOME/code"
 kandev --port 38429 --headless                       # inside the container
 # OpenChamber
 bin/agentainer up --publish 3000:3000 "$HOME/code"
-openchamber --lan --port 3000 --ui-password '<password>'   # inside the container
+read -rs OPENCHAMBER_UI_PASSWORD && export OPENCHAMBER_UI_PASSWORD   # inside the container
+openchamber --lan --port 3000                         # inside the container
 ```
 
-Kandev's local mode is not an authenticated multi-user boundary, and OpenChamber needs `--ui-password` to protect browser access, so keep the default `127.0.0.1` host binding ([Kandev](extras.md#kandev), [OpenChamber](extras.md#openchamber)).
+Kandev's local mode is not an authenticated multi-user boundary, and OpenChamber needs a UI password (`OPENCHAMBER_UI_PASSWORD`, [OpenChamber](extras.md#openchamber)) to protect browser access, so keep the default `127.0.0.1` host binding ([Kandev](extras.md#kandev), [OpenChamber](extras.md#openchamber)).
 
 Ports must be 1 through 65535. For a remote engine, the bind address belongs to the engine host. With a local VM, reachability also depends on the runtime's port forwarding.
 
