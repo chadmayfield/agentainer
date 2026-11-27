@@ -437,6 +437,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      - id: image
+        name: Image name from the repository
+        # Registry repository names are lowercase (distribution reference grammar), and
+        # github.repository keeps the owner's case.
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - id: pins
         name: Build arguments, as scripts/build.sh passes them
         # Each pin a Containerfile stage declares with ARG becomes a build argument, plus
@@ -473,14 +481,15 @@ jobs:
             IMAGE_VERSION=${{ needs.version.outputs.version }}
             VCS_REF=${{ github.sha }}
             BUILD_DATE=${{ steps.pins.outputs.date }}
+            IMAGE_SOURCE=https://github.com/${{ github.repository }}
           sbom: true
           provenance: mode=min,version=v0.2
           # zstd makes this image's download about 20% smaller than gzip. BuildKit maps levels 9
           # to 22 to its "Best" setting (about zstd 11; Docker build exporters docs).
-          outputs: type=image,name=ghcr.io/chadmayfield/agentainer,push-by-digest=true,name-canonical=true,push=true,compression=zstd,compression-level=9,force-compression=true,rewrite-timestamp=true
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true,compression=zstd,compression-level=9,force-compression=true,rewrite-timestamp=true
       - name: Check the pushed image on its native runner
         env:
-          REF: ghcr.io/chadmayfield/agentainer@${{ steps.build.outputs.digest }}
+          REF: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
           ARCH: ${{ matrix.arch }}
           SHA: ${{ github.sha }}
           VERSION: ${{ needs.version.outputs.version }}
@@ -503,7 +512,7 @@ jobs:
       - name: Scan the pushed image for secrets and vulnerabilities
         env:
           ARCH: ${{ matrix.arch }}
-          REF: ghcr.io/chadmayfield/agentainer@${{ steps.build.outputs.digest }}
+          REF: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
         run: |
           set -eu
           docker pull "$REF"
@@ -536,6 +545,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with: {fetch-depth: 0, persist-credentials: false}
+      - id: image
+        name: Image name from the repository
+        # Registry repository names are lowercase (distribution reference grammar), and
+        # github.repository keeps the owner's case.
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with: {pattern: digest-*, merge-multiple: true, path: digests}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
@@ -556,11 +573,12 @@ jobs:
         shell: bash
         env:
           SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
         run: bash scripts/release-image.sh prepare
       - name: Attest the signed index
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
         with:
-          subject-name: ghcr.io/${{ github.repository }}
+          subject-name: ${{ steps.image.outputs.name }}
           subject-digest: ${{ steps.prepare-index.outputs.digest }}
           push-to-registry: true
           create-storage-record: false

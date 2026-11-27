@@ -60,7 +60,7 @@ For an existing project, follow its Playwright configuration and test command. A
 
 ## Other browsers and older images
 
-The image carries Chromium's libraries only. Firefox and WebKit need their own downloads and OS dependencies, and images older than this change have no browser libraries at all. Both cases need root for `install-deps`. The launcher blocks sudo by default, so create a container with `--sudo` for that step, or use a [custom image](customization.md#customize-the-image-itself) that already has the libraries ([Linux dependencies](https://playwright.dev/docs/browsers#install-system-dependencies)).
+The image carries Chromium's libraries only. Firefox and WebKit need their own downloads and OS dependencies, and images older than `0.1.0-dev.20261104.1` have no browser libraries at all. Both cases need root for `install-deps`. The launcher blocks sudo by default, so create a container with `--sudo` for that step, or use a [custom image](customization.md#customize-the-image-itself) that already has the libraries ([Linux dependencies](https://playwright.dev/docs/browsers#install-system-dependencies)).
 
 Select an available image as described in [running Agentainer](running.md), then run this from the repository root for a separate browser-testing home:
 

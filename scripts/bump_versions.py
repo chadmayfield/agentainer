@@ -1229,11 +1229,59 @@ def r_buildkit():
                                       fetch_json("https://hub.docker.com/v2/repositories/moby/buildkit/tags/%s" % tag))}
 
 
+AGENTAINER_REPO = "chadmayfield/agentainer"
+AGENTAINER_IMAGE = "ghcr.io/" + AGENTAINER_REPO
+# Files that use AGENTAINER_RELEASE_VERSION as their default or example tag, each with the
+# text that comes right before the tag. bump() rewrites them when the pin changes, and
+# tests/unit/test_bump_versions.py checks that every entry holds the current pin.
+RELEASE_REFS = (("bin/agentainer", AGENTAINER_IMAGE + ":"),
+                ("deploy/kubernetes/agentainer/statefulset.yaml", AGENTAINER_IMAGE + ":"),
+                ("deploy/kubernetes/agentainer/kustomization.yaml", "newTag: "),
+                ("README.md", AGENTAINER_IMAGE + ":"),
+                ("docs/running.md", AGENTAINER_IMAGE + ":"),
+                ("docs/versions.md", AGENTAINER_IMAGE + ":"),
+                ("docs/versions.md", "version="))
+
+
+def agentainer_release(releases):
+    """Newest published release by version order, without its leading v.
+
+    Prereleases count, because they are the only published images before the first
+    stable release. Drafts and tags that are not release versions are skipped.
+    """
+    found = []
+    for r in releases:
+        tag = r.get("tag_name") or ""
+        if r.get("draft") or not tag.startswith("v"):
+            continue
+        try:
+            version_key(tag[1:])
+        except ValueError:
+            continue
+        found.append(tag[1:])
+    if not found:
+        raise LookupFailed("%s: no published release found" % AGENTAINER_REPO)
+    return max(found, key=version_key)
+
+
+def r_agentainer_release():
+    # The list endpoint includes prereleases. /releases/latest leaves them out and returns
+    # 404 while every release is a prerelease.
+    releases = fetch_json("https://api.github.com/repos/%s/releases?per_page=100" % AGENTAINER_REPO)
+    return {"AGENTAINER_RELEASE_VERSION": agentainer_release(releases)}
+
+
+def rewrite_release_ref(text, prefix, old, new):
+    """Replace prefix+old with prefix+new where old is the whole version, not the start of a longer one."""
+    pattern = re.escape(prefix + old) + r"(?![0-9A-Za-z-]|\.[0-9A-Za-z])"
+    return re.sub(pattern, lambda _: prefix + new, text)
+
+
 RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_gosec, r_gitleaks, r_containerssh_agent,
              r_abtop, r_unslop, r_golangci, r_kubectl, r_helm, r_awscli, r_tea, r_fj, r_crane, r_kyverno,
              r_actionlint, r_zizmor, r_hadolint, r_ast_grep, r_difftastic, r_delta, r_scc, r_hyperfine,
              r_lazygit, r_glow, r_syft, r_grype, r_claude, r_node, r_codex, r_agy,
-             r_opencode, r_k8s_images, r_buildkit, r_extras]
+             r_opencode, r_k8s_images, r_buildkit, r_agentainer_release, r_extras]
 
 
 def write_atomic(path, text):
@@ -1375,6 +1423,19 @@ def bump(args, resolvers):
             with open(path) as f:
                 text = f.read()
             write_atomic(path, rewrite_image_ref(text, updates[key]))
+    # The launcher, the Kubernetes example and the docs default to the pinned release.
+    release_old = old.get("AGENTAINER_RELEASE_VERSION")
+    release_new = updates.get("AGENTAINER_RELEASE_VERSION")
+    if release_old and release_new and release_old != release_new:
+        for rel in sorted({rel for rel, _ in RELEASE_REFS}):
+            path = os.path.join(base, rel)
+            if not os.path.exists(path):
+                continue
+            with open(path) as f:
+                text = f.read()
+            for prefix in (p for r, p in RELEASE_REFS if r == rel):
+                text = rewrite_release_ref(text, prefix, release_old, release_new)
+            write_atomic(path, text)
     write_atomic(args.file, render_env(lines, updates))
     return 0
 

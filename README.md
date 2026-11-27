@@ -21,13 +21,12 @@ These docs describe the current source. Features merged after the newest release
 
 You need Podman or Docker. The launcher [`bin/agentainer`](bin/agentainer) is a POSIX shell script.
 
-Set `AGENTAINER_IMAGE` to a published version tag; no `latest` tag exists before the first stable release ([release versions](docs/versions.md#releases)). Or build locally with `scripts/build.sh` (`RUNTIME=docker sh scripts/build.sh` on a Docker host) and use `localhost/agentainer:dev`.
+The launcher defaults to the published release `ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1`. The scheduled pin update moves this default to each new release. To run another version, set `AGENTAINER_IMAGE` to its tag ([release versions](docs/versions.md#releases)). Or build locally with `scripts/build.sh` (`RUNTIME=docker sh scripts/build.sh` on a Docker host) and set `AGENTAINER_IMAGE=localhost/agentainer:dev`.
 
 ```sh
 mkdir -p ~/.config/agentainer
 cp env.example ~/.config/agentainer/env
 chmod 600 ~/.config/agentainer/env      # then fill in the keys you use
-export AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261024.1
 bin/agentainer up ~/code                 # ~/code becomes /workspace
 bin/agentainer attach                    # tmux session "main"
 ```

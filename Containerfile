@@ -450,14 +450,19 @@ ARG IMAGE_VERSION=dev
 ENV AGENTAINER_IMAGE_VERSION="${IMAGE_VERSION}"
 ARG VCS_REF=unknown
 ARG BUILD_DATE
+# The release workflow passes the repository it runs in, so a fork's image names its own source.
+ARG IMAGE_SOURCE=https://github.com/chadmayfield/agentainer
+# bin/agentainer reads the uid and gid labels to map the host user to the agent user.
 LABEL org.opencontainers.image.version="${IMAGE_VERSION}" \
 	org.opencontainers.image.revision="${VCS_REF}" \
 	org.opencontainers.image.created="${BUILD_DATE}" \
 	org.opencontainers.image.title="Agentainer" \
 	org.opencontainers.image.description="Claude Code, Codex, Antigravity CLI and OpenCode in one container" \
-	org.opencontainers.image.source="https://github.com/chadmayfield/agentainer" \
+	org.opencontainers.image.source="${IMAGE_SOURCE}" \
 	org.opencontainers.image.base.name="${BASE_IMAGE}" \
-	io.github.chadmayfield.agentainer.versions="/etc/agentainer/versions.json"
+	io.github.chadmayfield.agentainer.versions="/etc/agentainer/versions.json" \
+	io.github.chadmayfield.agentainer.uid="${AGENT_UID}" \
+	io.github.chadmayfield.agentainer.gid="${AGENT_GID}"
 
 # The Claude Playwright plugin runs `npx @playwright/mcp@latest` with no arguments (its
 # .mcp.json), which defaults to the chrome channel. @playwright/mcp reads

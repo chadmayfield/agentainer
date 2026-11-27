@@ -9,8 +9,10 @@ resources:
   # Optional policies. Both need a CNI plugin that enforces NetworkPolicy.
   # - networkpolicy.yaml
   # - ingress-policy.yaml
-# Set newTag to a published SemVer release, or replace it with digest: sha256:...
-# "latest" follows only the highest stable release and is absent before the first one.
+# newTag repeats AGENTAINER_RELEASE_VERSION in versions.env, a published release that the
+# scheduled update moves to each new release. To stay on one release, set your own tag, or
+# replace newTag with digest: sha256:... The "latest" tag follows only the highest stable
+# release and does not exist before the first one.
 images:
   - name: ghcr.io/chadmayfield/agentainer
-    newTag: latest
+    newTag: 0.1.0-dev.20261104.1

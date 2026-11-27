@@ -2,7 +2,7 @@
 
 Agentainer uses GitHub Dark colors on a #010409 background. Review contrast, selections, error colors, gutters and status lines.
 
-- Image: localhost/agentainer:gdt-int
+- Image: localhost/agentainer:dev
 - Defaults: image
 - Renderer: 156.0.8078.80
 - Terminal: 120 × 32 and narrow 80 × 24, JetBrains Mono 14px.

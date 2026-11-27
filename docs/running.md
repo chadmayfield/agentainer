@@ -32,7 +32,7 @@ N defaults to `agentainer`. These variables override the launcher's defaults:
 
 | Variable | Default |
 |---|---|
-| `AGENTAINER_IMAGE` | `ghcr.io/chadmayfield/agentainer:latest` |
+| `AGENTAINER_IMAGE` | `ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1`, a published release that the scheduled pin update moves |
 | `AGENTAINER_ENV_FILE` | `~/.config/agentainer/env` |
 | `AGENTAINER_HOME_VOLUME` | `agentainer-home` |
 | `AGENTAINER_RUNTIME` | `podman` if installed, else `docker` |
@@ -53,12 +53,12 @@ Limits:
 
 - `LANG` and `LC_ALL`.
 - The locale categories glibc defines: `LC_CTYPE`, `LC_NUMERIC`, `LC_TIME`, `LC_COLLATE`, `LC_MONETARY`, `LC_MESSAGES`, `LC_PAPER`, `LC_NAME`, `LC_ADDRESS`, `LC_TELEPHONE`, `LC_MEASUREMENT` and `LC_IDENTIFICATION`. Other `LC_` names, such as iTerm2's `LC_TERMINAL`, stay on the host.
-- `TZ`. When `TZ` is unset, the launcher reads the zone name from the `/etc/localtime` link, the part after `zoneinfo/`. On macOS that link is `/var/db/timezone/zoneinfo/America/Denver`, for example.
+- `TZ`. When `TZ` is unset, the launcher reads the zone name from the `/etc/localtime` link, the part after `zoneinfo/`. On macOS that link is `/var/db/timezone/zoneinfo/Europe/Berlin`, for example.
 
 The launcher skips a value it cannot use:
 
 - A locale must be `C.UTF-8`, `C.utf8`, or `language_TERRITORY.UTF-8` (or `.utf8`) with an optional `@modifier`, such as `en_US.UTF-8` or `sr_RS.UTF-8@latin`. Other codesets, and macOS's bare `LC_CTYPE=UTF-8`, are skipped, because tmux needs a UTF-8 locale.
-- `TZ` must be a zone name such as `America/Denver` or `UTC`. A value that starts with `:` names a file and is skipped.
+- `TZ` must be a zone name such as `Europe/Berlin` or `UTC`. A value that starts with `:` names a file and is skipped.
 
 Variables your env file sets win. Both runtimes let `-e` override `--env-file` ([docker/cli `opts/parse.go`](https://github.com/docker/cli/blob/master/opts/parse.go), [Podman environment precedence](https://docs.podman.io/en/latest/markdown/podman-run.1.html)), so the launcher reads the variable names in the env file and does not pass those variables. It reads names only and never prints the file's values.
 
@@ -112,7 +112,7 @@ docker run -d --name agentainer --hostname agentainer \
   -v agentainer-home:/home/agent \
   -v "$HOME/code:/workspace" -w /workspace \
   --env-file "$HOME/.config/agentainer/env" \
-  ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261024.1
+  ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1
 docker exec -it agentainer tmux new-session -A -s main
 ```
 
@@ -170,7 +170,7 @@ With sudo on, an agent can change anything in the container, including the agent
 RUNTIME=docker sh scripts/build.sh --uid "$(id -u)" --gid "$(id -g)"
 ```
 
-With a GID other than 1000, also set `--sysctl "net.ipv4.ping_group_range=<gid> <gid>"` in your `run` command, or `ping` fails. The launcher always passes `1000 1000`.
+The image records the IDs in its `io.github.chadmayfield.agentainer.uid` and `io.github.chadmayfield.agentainer.gid` labels. When the image is local, the launcher reads them and passes them to `--userns=keep-id` under Podman and to `net.ipv4.ping_group_range` under both runtimes. When the image is not local yet, or has no such labels, the launcher uses 1000 for both, the IDs of the published images. Without the launcher and with a GID other than 1000, set `--sysctl "net.ipv4.ping_group_range=<gid> <gid>"` in your `run` command, or `ping` fails.
 
 `sh tests/host/test-build-uid.sh` builds an image with `--uid 1001 --gid 20` and checks the agent user. When the build fails, it prints the last 80 lines of the build output.
 

@@ -38,6 +38,8 @@ assert_contains "versions.json lists pins" "\"CODEX_VERSION\": \"$CODEX_VERSION\
 assert_contains "versions.json lists apt packages" "\"tmux\":" "$(run_in -- cat /etc/agentainer/versions.json)"
 assert_eq "source label" "https://github.com/chadmayfield/agentainer" \
 	"$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')"
+assert_eq "uid and gid labels name the agent user" "1000 1000" \
+	"$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Config.Labels "io.github.chadmayfield.agentainer.uid"}} {{index .Config.Labels "io.github.chadmayfield.agentainer.gid"}}')"
 assert_eq "version label is ours, not the base image's" "rc=0" \
 	"$(
 		v=$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')

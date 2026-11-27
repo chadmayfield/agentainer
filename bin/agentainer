@@ -1,7 +1,8 @@
 #!/bin/sh
 # agentainer: start and attach to an Agentainer container with Podman or Docker.
 set -eu
-IMAGE=${AGENTAINER_IMAGE:-ghcr.io/chadmayfield/agentainer:latest}
+# The default tag repeats AGENTAINER_RELEASE_VERSION in versions.env, a published release.
+IMAGE=${AGENTAINER_IMAGE:-ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1}
 ENV_FILE=${AGENTAINER_ENV_FILE:-$HOME/.config/agentainer/env}
 HOME_VOLUME=${AGENTAINER_HOME_VOLUME:-agentainer-home}
 LABEL=io.github.chadmayfield.agentainer=1
@@ -188,6 +189,23 @@ if [ -z "$R" ]; then
 	echo "agentainer: neither podman nor docker found" >&2
 	exit 1
 fi
+# agent_ids: set agent_uid and agent_gid to the IDs of the image's agent user. An image
+# records them in its uid and gid labels (scripts/build.sh --uid and --gid change them).
+# When $IMAGE is not local yet, or has no such labels, both are 1000, the published
+# images' IDs. run pulls the image after this check, so a custom-ID image must be local.
+agent_ids() {
+	agent_uid=1000
+	agent_gid=1000
+	ids=$("$R" image inspect --format "{{index .Config.Labels \"$OPT.uid\"}} {{index .Config.Labels \"$OPT.gid\"}}" -- "$IMAGE" 2>/dev/null) || return 0
+	case "$ids" in *' '*) ;; *) return 0 ;; esac
+	u=${ids%% *}
+	g=${ids#* }
+	case "$u" in '' | *[!0-9]*) return 0 ;; esac
+	case "$g" in '' | *[!0-9]*) return 0 ;; esac
+	agent_uid=$u
+	agent_gid=$g
+}
+
 # create NAME SUDO DIR: run a new container from $IMAGE with $HOME_VOLUME and $ENV_FILE.
 # Exits before running anything when DIR or a home path cannot be mounted.
 create() {
@@ -246,6 +264,7 @@ create() {
 		;;
 	esac
 	if [ "$home" = "$HOME" ]; then echo "agentainer: warning: container home exposes the host home directory" >&2; fi
+	agent_ids
 	# ping uses unprivileged ICMP sockets (the image removes its NET_RAW file capability).
 	# The range names the agent group only: with keep-id the GID map is not contiguous,
 	# and a wider range no longer contains the agent group after translation.
@@ -253,10 +272,10 @@ create() {
 		--label "$OPT.dir=$dir" --label "$OPT.image=$IMAGE" --label "$OPT.sudo=$sudo" \
 		--label "$OPT.home=$home" --label "$OPT.env-file=$envf" --label "$OPT.ports=$ports" \
 		-v "$home:/home/agent" -v "$dir:/workspace" -w /workspace \
-		--sysctl "net.ipv4.ping_group_range=1000 1000"
+		--sysctl "net.ipv4.ping_group_range=$agent_gid $agent_gid"
 	if [ "$sudo" != 1 ]; then set -- "$@" --security-opt no-new-privileges=true; fi
 	case "$(basename "$R")" in
-	podman) set -- "$@" --userns=keep-id:uid=1000,gid=1000 ;;
+	podman) set -- "$@" "--userns=keep-id:uid=$agent_uid,gid=$agent_gid" ;;
 	esac
 	if [ -n "$envf" ]; then
 		# Following symlinks, any group or other permission bit is too open.

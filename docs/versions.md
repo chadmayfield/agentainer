@@ -107,8 +107,8 @@ A release requires a maintainer-signed tag on a release merge in `main`; a branc
 Pull an explicit version tag. Prereleases never move `latest`, so before the first stable release there is no `latest` tag:
 
 ```sh
-podman pull ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261024.1
-AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261024.1 bin/agentainer up
+podman pull ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1
+AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1 bin/agentainer up
 ```
 
 A version exists only after its release workflow completes. A merge to `develop` runs CI and does not publish an image. To use features merged after the newest release tag, build the image locally with `scripts/build.sh`.
@@ -129,7 +129,7 @@ Use a trusted checkout of this repository and independently installed Docker Bui
 
 ```sh
 set -eu
-version=0.1.0-dev.20261024.1
+version=0.1.0-dev.20261104.1
 git verify-tag "v$version"
 commit=$(git rev-parse "v$version^{commit}")
 # Replace this placeholder with the release's full index digest.
@@ -241,7 +241,7 @@ For each extra, [`scripts/bump_versions.py`](../scripts/bump_versions.py):
 
 A failed check for one extra, including a missing `npm` or `openssl`, keeps that extra's pin and catalog files and does not stop the run. The other pins still update. `bump_versions.py --failures FILE` writes one line per failed extra to FILE. In the scheduled workflow, the `extras-failures` job prints those lines in the run summary and fails the run after the pull request for the other pins is open.
 
-The pull request job applies the resolver's patch only when it modifies `versions.env`, `deploy/kubernetes/*/deployment.yaml`, `deploy/kubernetes/agentainer/statefulset.yaml` (the `FILEBROWSER_IMAGE` pin) or an extras `package.json` or `package-lock.json`, and creates, deletes or renames no file ([`.github/actions/bump-pr/action.yml`](../.github/actions/bump-pr/action.yml)).
+The pull request job applies the resolver's patch only when it modifies `versions.env`, `deploy/kubernetes/*/deployment.yaml`, `deploy/kubernetes/agentainer/statefulset.yaml` (the `FILEBROWSER_IMAGE` and `AGENTAINER_RELEASE_VERSION` pins), the other files that name the `AGENTAINER_RELEASE_VERSION` tag (`bin/agentainer`, `deploy/kubernetes/agentainer/kustomization.yaml`, `README.md`, `docs/running.md` and `docs/versions.md`) or an extras `package.json` or `package-lock.json`, and creates, deletes or renames no file ([`.github/actions/bump-pr/action.yml`](../.github/actions/bump-pr/action.yml)).
 
 CI's `lint-unit` job runs `tests/host/test-extras-catalog.sh` and scans the extras lockfiles with Trivy, using the `TRIVY_SCANNER_IMAGE` pin. The scan is report only: findings go to the job's step summary and never fail the job.
 
