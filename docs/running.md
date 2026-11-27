@@ -155,7 +155,7 @@ The launcher does not add these options ([Podman options](https://docs.podman.io
 
 ## sudo
 
-The image has passwordless sudo, and `--security-opt no-new-privileges=true` turns it off ([Docker reference](https://docs.docker.com/reference/cli/docker/container/run/)). `agentainer up --sudo` leaves that option out.
+The image has passwordless sudo, and `--security-opt no-new-privileges=true` turns it off ([Docker reference](https://docs.docker.com/reference/cli/docker/container/run/)). `agentainer up --sudo` leaves that option out. When sudo works, a long-running container logs `agentainer: warning: sudo works in this container, so agents can become root` at startup. One-shot commands skip the warning unless `AGENTAINER_QUIET=0` is set.
 
 With sudo on, an agent can change anything in the container, including the agent binaries and the settings that stop them from updating themselves. Packages installed with `sudo apt install` are gone when the container is recreated. Under rootful Docker, container root is UID 0 on the host, limited by the container's namespaces.
 
