@@ -3,6 +3,7 @@
 . "$(dirname "$0")/lib.sh"
 # shellcheck source=versions.env
 . "$(dirname "$0")/../versions.env"
+require_pins AGY_VERSION CLAUDE_CODE_VERSION CODEX_VERSION OPENCODE_VERSION
 
 # Exact version lines, so a pin of 1.3.2 cannot match 1.3.21.
 assert_eq "claude version" "$CLAUDE_CODE_VERSION (Claude Code)" "$(run_in -- claude --version 2>/dev/null)"
@@ -38,6 +39,8 @@ assert_contains "versions.json lists pins" "\"CODEX_VERSION\": \"$CODEX_VERSION\
 assert_contains "versions.json lists apt packages" "\"tmux\":" "$(run_in -- cat /etc/agentainer/versions.json)"
 assert_eq "source label" "https://github.com/chadmayfield/agentainer" \
 	"$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')"
+assert_eq "uid and gid labels name the agent user" "1000 1000" \
+	"$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Config.Labels "io.github.chadmayfield.agentainer.uid"}} {{index .Config.Labels "io.github.chadmayfield.agentainer.gid"}}')"
 assert_eq "version label is ours, not the base image's" "rc=0" \
 	"$(
 		v=$("$RUNTIME" image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')

@@ -11,7 +11,8 @@
 # Exit codes: 78 for a refused pod, 2 for an unknown or missing agent type.
 #
 # Order of work: preflight (refuse BASH_ENV, ENV and exported bash functions),
-# guard, proxy CA bundle, guard again, then run the entrypoint as a child. The guard also runs a last time
+# guard, refuse CA variables the pod set itself, proxy CA bundle, guard again, then
+# run the entrypoint as a child. The guard also runs a last time
 # in /usr/local/lib/kelos/bin/claude, right before the real claude starts, after
 # the Kelos entrypoint has written its files. The Kelos entrypoints stay
 # unmodified for that.
@@ -22,14 +23,27 @@ CAT=/usr/bin/cat MKTEMP=/usr/bin/mktemp
 
 # When the pod gives a proxy CA file, build a bundle of the system CAs plus that
 # CA. GIT_SSL_CAINFO and SSL_CERT_FILE replace the whole CA list of the tool that
-# reads them, so each must point at the combined file. Readers:
+# reads them, so each must point at the combined file. PROXY_CA_FILE must be an
+# absolute path outside /workspace, so a file in the cloned repository cannot
+# become a trusted CA. Readers:
 #   git (libcurl)   GIT_SSL_CAINFO   combined bundle
 #   gh (Go)         SSL_CERT_FILE    combined bundle (also read by OpenSSL tools)
 #   Claude Code     NODE_EXTRA_CA_CERTS  the proxy CA alone; Node adds it to its own list
 proxy_ca_setup() {
-  local ca=${PROXY_CA_FILE:-} dir bundle
+  local ca=${PROXY_CA_FILE:-} dir bundle real
   [ -n "$ca" ] || return 0
+  case "$ca" in
+  /*) ;;
+  *) refuse "PROXY_CA_FILE $ca is not an absolute path" ;;
+  esac
   [ -r "$ca" ] || refuse "PROXY_CA_FILE $ca is not readable"
+  # The path and, through any symlinks, the file it names must be outside /workspace.
+  real=$(/usr/bin/readlink -f -- "$ca") || refuse "PROXY_CA_FILE $ca cannot be resolved"
+  for dir in "$ca" "$real"; do
+    case "$dir/" in
+    /workspace/*) refuse "PROXY_CA_FILE $ca is inside /workspace" ;;
+    esac
+  done
   "$GREP" -q 'BEGIN CERTIFICATE' "$ca" || refuse "PROXY_CA_FILE $ca holds no certificate"
   dir=$("$MKTEMP" -d "${TMPDIR:-/tmp}/kelos-ca.XXXXXX") || refuse "cannot create a directory for the CA bundle"
   bundle="$dir/ca-bundle.crt"
@@ -181,6 +195,7 @@ kelos_preflight
 case "${KELOS_AGENT_TYPE:-}" in
 claude-code)
   claude_guard
+  ca_env_guard
   proxy_ca_setup
   claude_guard
   # The Claude entrypoint writes KELOS_AGENTS_MD and ~/.claude.json after this
@@ -191,6 +206,7 @@ claude-code)
   ;;
 codex)
   codex_guard
+  ca_env_guard
   proxy_ca_setup
   # codex_guard allows CODEX_HOME only unset or set to this path. Kelos sets it
   # only for Sessions, so a Task arrives without it. The Codex entrypoint refuses

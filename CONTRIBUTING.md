@@ -24,6 +24,8 @@ sh tests/14-unit-linux.sh                   # image Python and Linux-only unit m
 sh tests/host/test-launcher.sh              # launcher tests, no container needed
 sh tests/host/test-build-script.sh          # scripts/build.sh tests, no container needed
 sh tests/host/test-fetch.sh                 # fetch.sh and Rust manifest check tests, no container needed
+sh tests/host/test-apt-install.sh           # build/apt-install.sh tests with stub apt, no container needed
+sh tests/host/test-extras-catalog.sh        # offline extras catalog checks, no container needed
 sh tests/host/test-manifests.sh             # Kubernetes manifest tests (kubectl, and the image for yq)
 sh tests/host/test-launcher-integration.sh  # real engine, existing local image
 sh tests/host/test-build-uid.sh             # slow: builds a full image with --uid 1001 --gid 20
@@ -61,7 +63,7 @@ Without `--from`, the build uses the digest-pinned image named in `Containerfile
 
 [`.github/workflows/build.yml`](.github/workflows/build.yml) runs on every pull request, every push to `develop` and `main`, and every `v*` tag push. A pull request also runs it again when you edit it, which includes changing its base branch:
 
-- the `lint-unit` job: actionlint, the Python unit tests, and the launcher, `scripts/build.sh` and `build/fetch.sh` tests;
+- the `lint-unit` job: actionlint, the Python unit tests, the launcher, `scripts/build.sh`, `build/apt-install.sh`, `build/fetch.sh` and extras catalog tests, and a trivy scan of the extras lockfiles (findings are reported, not failed);
 - the `image` job, on amd64 and arm64: the image build, shellcheck and shfmt (`tests/lint.sh` runs them from the image), the container tests and real launcher lifecycle under Docker and rootless Podman, a custom UID/GID build, the manifest tests, and trivy scans (a secret fails the build; vulnerabilities are reported). On amd64 only, it also checks that the four agents and Node.js start on a CPU without AVX2.
 
 The `layer-repro` job runs on amd64 and arm64 and uses the pinned BuildKit image to build an isolated copy of every tool twice with no cache. It compares the exported tool-layer digests. This checks unchanged inputs; it does not test every possible combination of pin changes. The required `ci` check includes this job.
@@ -136,6 +138,8 @@ The scheduled update ([`.github/workflows/bump.yml`](.github/workflows/bump.yml)
 6. Run `gh workflow run bump.yml`. If it opens a pull request, its CI starts on its own, and the commit author is the App's bot user.
 
 The workflow uses the App only when both the variable and the secret are set. If either is missing, it uses `GITHUB_TOKEN`. With both set, wrong App credentials fail the App job without falling back; remove the variable or the secret to go back to `GITHUB_TOKEN`.
+
+The `GITHUB_TOKEN` path needs the repository setting "Allow GitHub Actions to create and approve pull requests", under Settings, Actions, General, Workflow permissions. GitHub turns it off by default for repositories owned by a personal account; an organization's repositories take their default from the organization ([GitHub Actions settings](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)). With the setting off, `gh pr create` fails after the bump branch is pushed, and the action deletes that branch. The App path does not need the setting.
 
 ## Security problems
 

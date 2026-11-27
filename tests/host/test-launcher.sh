@@ -5,7 +5,9 @@
 . "$(dirname "$0")/../lib.sh"
 L="$(cd "$(dirname "$0")/../.." && pwd)/bin/agentainer"
 T=$(cd "$(mktemp -d)" && pwd -P) # resolved, as the launcher resolves paths
-trap 'rm -rf "$T"' EXIT INT TERM
+trap 'rm -rf "$T"' EXIT
+# dash skips the EXIT trap on a signal; exiting from the signal trap runs it.
+trap 'exit 130' INT TERM
 cat >"$T/podman" <<'EOF'
 #!/bin/sh
 if [ "$1" = inspect ]; then echo 1; else printf '%s\n' "$@"; fi
@@ -13,6 +15,13 @@ EOF
 cp "$T/podman" "$T/docker"
 chmod +x "$T/podman" "$T/docker"
 export AGENTAINER_ENV_FILE=/nonexistent
+# The launcher's default image is the release pinned in versions.env.
+release=$(sed -n 's/^AGENTAINER_RELEASE_VERSION=//p' "$(dirname "$L")/../versions.env")
+case "$release" in
+[0-9]*.[0-9]*.[0-9]*) pass "versions.env pins AGENTAINER_RELEASE_VERSION" ;;
+*) fail "versions.env pins AGENTAINER_RELEASE_VERSION" "got [$release]" ;;
+esac
+default_image=ghcr.io/chadmayfield/agentainer:$release
 # The host's locale and time zone would otherwise reach the dry-run output.
 unset LANG LC_ALL LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY LC_MESSAGES \
 	LC_PAPER LC_NAME LC_ADDRESS LC_TELEPHONE LC_MEASUREMENT LC_IDENTIFICATION TZ
@@ -33,7 +42,7 @@ has_line "sysctl value stays one argument" "net.ipv4.ping_group_range=1000 1000"
 has_line "home volume" "agentainer-home:/home/agent" "$out"
 has_line "default name" "agentainer" "$out"
 has_line "containers are labelled for status" "io.github.chadmayfield.agentainer=1" "$out"
-has_line "image is last" "ghcr.io/chadmayfield/agentainer:latest" "$(printf '%s\n' "$out" | tail -1)"
+has_line "image is last and defaults to the pinned release" "$default_image" "$(printf '%s\n' "$out" | tail -1)"
 has_line "relative DIR becomes absolute" "$(cd "$T/here/code" && pwd -P):/workspace" "$(cd "$T/here" && pod up code)"
 has_line "CDPATH is ignored" "$(cd "$T/here/code" && pwd -P):/workspace" "$(cd "$T/here" && CDPATH="$T/cdp" pod up code)"
 assert_contains "missing DIR fails" "no such directory" "$(pod up "$T/nonexistent" 2>&1 || true)"
@@ -50,6 +59,28 @@ has_line "a relative home path is mounted as an absolute path" "$T/here/home:/ho
 has_line "a relative home path is recorded as an absolute path" "io.github.chadmayfield.agentainer.home=$T/here/home" "$out"
 assert_contains "a missing home path fails" "no such directory: ./nohome" "$(cd "$T/here" && AGENTAINER_HOME_VOLUME=./nohome pod up "$T/my code" 2>&1 || true)"
 assert_eq "a missing home path runs nothing" "" "$(cd "$T/here" && AGENTAINER_HOME_VOLUME=./nohome pod up "$T/my code" 2>/dev/null || true)"
+
+# An image built with --uid and --gid records them in labels; the launcher maps those.
+mkdir -p "$T/ids"
+cat >"$T/ids/podman" <<'EOF'
+#!/bin/sh
+case "$1 $2" in
+"image inspect") echo "${CX_IDS-1001 20}" ;;
+inspect*) echo 1 ;;
+*) printf '%s\n' "$@" ;;
+esac
+EOF
+cp "$T/ids/podman" "$T/ids/docker"
+chmod +x "$T/ids/podman" "$T/ids/docker"
+out=$(AGENTAINER_RUNTIME="$T/ids/podman" sh "$L" up "$T/my code")
+has_line "podman keep-id uses the image's uid and gid labels" "--userns=keep-id:uid=1001,gid=20" "$out"
+has_line "ping range uses the image's gid label" "net.ipv4.ping_group_range=20 20" "$out"
+has_line "docker ping range uses the image's gid label" "net.ipv4.ping_group_range=20 20" \
+	"$(AGENTAINER_RUNTIME="$T/ids/docker" sh "$L" up "$T/my code")"
+for ids in "" " " "1001" "<no value> <no value>" "1001 x" "-1 20"; do
+	has_line "labels [$ids] fall back to 1000" "--userns=keep-id:uid=1000,gid=1000" \
+		"$(CX_IDS=$ids AGENTAINER_RUNTIME="$T/ids/podman" sh "$L" up "$T/my code")"
+done
 
 out=$(dock up --sudo --name proj "$T/my code")
 case "$out" in
@@ -69,13 +100,13 @@ has_line "uses the env file when present" "$envf" "$(AGENTAINER_ENV_FILE=$envf p
 chmod 400 "$envf"
 # The image name is the last argument of the run command, so it proves the launcher got that far.
 assert_absent "mode 400 is accepted quietly" "$(AGENTAINER_ENV_FILE=$envf pod up "$T/my code" 2>&1)" \
-	ghcr.io/chadmayfield/agentainer:latest "should"
+	"$default_image" "should"
 chmod 644 "$envf"
 assert_contains "warns about a readable env file" "should not be readable by others" "$(AGENTAINER_ENV_FILE=$envf pod up "$T/my code" 2>&1)"
 ln -s "$envf" "$T/envlink"
 chmod 600 "$envf"
 assert_absent "a symlinked 600 env file is accepted quietly" "$(AGENTAINER_ENV_FILE=$T/envlink pod up "$T/my code" 2>&1)" \
-	ghcr.io/chadmayfield/agentainer:latest "should"
+	"$default_image" "should"
 
 assert_eq "attach uses tmux" "exec|-it|agentainer|tmux|new-session|-A|-s|main" "$(pod attach | paste -sd '|' -)"
 assert_eq "shell opens a bash login shell" "exec|-it|agentainer|bash|-l" "$(pod shell | paste -sd '|' -)"
@@ -192,12 +223,12 @@ assert_contains "unknown command fails" "usage" "$(sh "$L" bogus 2>&1 || true)"
 assert_contains "no runtime found is an error" "neither podman nor docker" "$(AGENTAINER_RUNTIME='' PATH=/nonexistent /bin/sh "$L" status 2>&1 || true)"
 
 # up passes the host locale and time zone and records them in a label.
-img=ghcr.io/chadmayfield/agentainer:latest
-out=$(LANG=en_US.UTF-8 TZ=America/Denver pod up "$T/my code")
+img=$default_image
+out=$(LANG=en_US.UTF-8 TZ=Europe/Berlin pod up "$T/my code")
 has_line "up passes locale variables with -e" "-e" "$out"
 has_line "up passes LANG" "LANG=en_US.UTF-8" "$out"
-has_line "up passes TZ" "TZ=America/Denver" "$out"
-has_line "up records the locale" "$p.locale=LANG=en_US.UTF-8 TZ=America/Denver" "$out"
+has_line "up passes TZ" "TZ=Europe/Berlin" "$out"
+has_line "up records the locale" "$p.locale=LANG=en_US.UTF-8 TZ=Europe/Berlin" "$out"
 out=$(TZ=UTC LC_IDENTIFICATION=fr_FR.UTF-8 LC_TIME=de_DE.UTF-8 LC_ALL=en_GB.UTF-8 LC_CTYPE=en_US.UTF-8 LANG=en_US.UTF-8 pod up "$T/my code")
 has_line "up records the locale in a fixed order" \
 	"$p.locale=LANG=en_US.UTF-8 LC_ALL=en_GB.UTF-8 LC_CTYPE=en_US.UTF-8 LC_TIME=de_DE.UTF-8 LC_IDENTIFICATION=fr_FR.UTF-8 TZ=UTC" "$out"
@@ -216,20 +247,20 @@ assert_absent "a bad modifier is skipped" "$(LANG=en_US.UTF-8@ LC_TIME=de_DE.UTF
 # The env file wins over the host, and the launcher never prints its values.
 printf '%s\n' "TZ=Asia/Tokyo" "# x" "LANG" "" "  SECRET_TOKEN=cx-secret-123" >"$T/env"
 chmod 600 "$T/env"
-out=$(AGENTAINER_ENV_FILE="$T/env" TZ=America/Denver LANG=en_US.UTF-8 LC_TIME=de_DE.UTF-8 pod up "$T/my code" 2>&1)
-assert_absent "the env file wins over the host" "$out" "$img" "TZ=America/Denver" "LANG=en_US.UTF-8"
+out=$(AGENTAINER_ENV_FILE="$T/env" TZ=Europe/Berlin LANG=en_US.UTF-8 LC_TIME=de_DE.UTF-8 pod up "$T/my code" 2>&1)
+assert_absent "the env file wins over the host" "$out" "$img" "TZ=Europe/Berlin" "LANG=en_US.UTF-8"
 assert_absent "env file values are never printed" "$out" "$img" "cx-secret-123" "Asia/Tokyo"
 has_line "variables the env file does not set still pass" "LC_TIME=de_DE.UTF-8" "$out"
 has_line "the label records only what passed" "$p.locale=LC_TIME=de_DE.UTF-8" "$out"
 # Docker strips a UTF-8 byte order mark before the first key, so the key still counts.
 printf '\357\273\277%s\n' "TZ=Asia/Tokyo" >"$T/env"
-out=$(AGENTAINER_ENV_FILE="$T/env" TZ=America/Denver pod up "$T/my code" 2>&1)
-assert_absent "an env file with a byte order mark still wins" "$out" "$img" "TZ=America/Denver" "Asia/Tokyo"
+out=$(AGENTAINER_ENV_FILE="$T/env" TZ=Europe/Berlin pod up "$T/my code" 2>&1)
+assert_absent "an env file with a byte order mark still wins" "$out" "$img" "TZ=Europe/Berlin" "Asia/Tokyo"
 printf '\357\273\277\t%s\n' "LANG=de_DE.UTF-8" >"$T/env"
 out=$(AGENTAINER_ENV_FILE="$T/env" LANG=en_US.UTF-8 pod up "$T/my code" 2>&1)
 assert_absent "a byte order mark before leading whitespace is stripped" "$out" "$img" "LANG=en_US.UTF-8" "de_DE"
 printf '%s' "TZ=Asia/Tokyo" >"$T/env"
-out=$(AGENTAINER_ENV_FILE="$T/env" TZ=America/Denver pod up "$T/my code" 2>&1)
-assert_absent "a one-line env file without a newline still wins" "$out" "$img" "TZ=America/Denver"
+out=$(AGENTAINER_ENV_FILE="$T/env" TZ=Europe/Berlin pod up "$T/my code" 2>&1)
+assert_absent "a one-line env file without a newline still wins" "$out" "$img" "TZ=Europe/Berlin"
 
 finish

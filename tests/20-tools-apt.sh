@@ -15,7 +15,10 @@ assert_eq "all apt tools on PATH" "DONE" "$out"
 # ping needs no capability: its file capability is removed and the runtime allows
 # unprivileged ICMP sockets through net.ipv4.ping_group_range.
 assert_contains "ping works without NET_RAW" "1 received" \
-	"$(run_in --sysctl 'net.ipv4.ping_group_range=1000 1000' -- ping -c1 -W2 127.0.0.1 2>&1)"
+	"$(run_in --cap-drop NET_RAW --sysctl 'net.ipv4.ping_group_range=1000 1000' -- ping -c1 -W2 127.0.0.1 2>&1)"
+assert_absent "ping has no file capability" \
+	"$(run_in -- python3 -c 'import os; print(os.listxattr("/usr/bin/ping")); print("XATTR_READ")' 2>&1)" \
+	XATTR_READ security.capability
 assert_contains "fd runs" "fd" "$(run_in -- fd --version)"
 assert_contains "bat runs" "bat" "$(run_in -- bat --version)"
 assert_contains "python is 3.14" "Python 3.14" "$(run_in -- python3 --version)"
@@ -25,7 +28,7 @@ assert_contains "pip --user is refused (PEP 668)" "externally-managed" "$(run_in
 # ansible-core only: the commands without the 450 MB of bundled collections.
 assert_eq "ansible-core without bundled collections" "none" "$(run_in -- sh -c 'ls -d /usr/lib/python3/dist-packages/ansible_collections 2>/dev/null || echo none')"
 # Builds a collection in the container and installs the tarball with no network.
-assert_eq "ansible-galaxy installs collections" "agentainer.fixture 1.0.0" "$(run_in --network none -- sh -c '
+assert_eq "ansible-galaxy installs collections" "agentainer.fixture 1.0.0" "$(run_in --network none --security-opt no-new-privileges=true -- sh -c '
 	set -e
 	ansible-galaxy collection init agentainer.fixture --init-path /tmp/c >/dev/null
 	ansible-galaxy collection build /tmp/c/agentainer/fixture --output-path /tmp/b >/dev/null

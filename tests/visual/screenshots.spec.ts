@@ -22,6 +22,9 @@ test('render all terminal states and publish an offline review gallery', async (
   const recording = JSON.parse(fs.readFileSync(path.join(output, 'captures.json'), 'utf8'));
   expect(recording.schema).toBe(1);
   expect(recording.captures.map((capture: any) => capture.id)).toEqual(expectedIds);
+  // index.md is meant to be committed. capture.py records a full reference only under
+  // localhost/ or ghcr.io/, and only the tag or digest of any other.
+  expect(recording.image).toMatch(/^(localhost\/|ghcr\.io\/|:[A-Za-z0-9_][A-Za-z0-9._-]*$|@[a-z0-9]+:[0-9a-f]+$|\(no tag or digest\)$)/);
   const template = fs.readFileSync(path.join(__dirname, 'gallery.html'), 'utf8');
   const xtermJs = fs.readFileSync(path.join(__dirname, 'node_modules/@xterm/xterm/lib/xterm.js'), 'utf8');
   const xtermCss = fs.readFileSync(path.join(__dirname, 'node_modules/@xterm/xterm/css/xterm.css'), 'utf8');
@@ -45,12 +48,13 @@ test('render all terminal states and publish an offline review gallery', async (
   const navigation = navigationGroups.map(([tool, links]) =>
     `<div class="nav-group"><span class="nav-label">${tool}</span><div class="nav-links">${links.map(([id, label]) =>
       `<a href="#${id}">${label}</a>`).join('')}</div></div>`).join('');
+  // Replacement functions keep "$&", "$'" and "$$" in captured text literal.
   const html = (cards: string) => template
     .replace('/*__FONT__*/', '')
     .replace('/*__XTERM_CSS__*/', '')
-    .replace('__METADATA__', metadata.map(item => `<li>${escapeHtml(item)}</li>`).join(''))
-    .replace('__NAV__', navigation)
-    .replace('__CARDS__', cards).replace('__RENDERER__', '');
+    .replace('__METADATA__', () => metadata.map(item => `<li>${escapeHtml(item)}</li>`).join(''))
+    .replace('__NAV__', () => navigation)
+    .replace('__CARDS__', () => cards).replace('__RENDERER__', '');
   const terminalPage = `<!doctype html><html><head><meta charset="utf-8"><style>
     ${fontCss()}
 ${xtermCss}

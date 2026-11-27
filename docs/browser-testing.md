@@ -1,6 +1,6 @@
 # Optional browser testing
 
-Install Playwright in the project that needs it. Agentainer supplies Node.js, npm and the OS libraries and fonts that Playwright lists for Chromium on Ubuntu 26.04 (`nativeDeps.ts` in Playwright v1.64.1, without `xvfb`). The browsers themselves are not in the image. They download into your home as the `agent` user, with no sudo. Playwright supports Ubuntu 26.04 on amd64 and arm64 ([system requirements](https://playwright.dev/docs/intro#system-requirements)). Follow an existing project's package-manager instructions and lockfile instead of creating a second setup.
+Install Playwright in the project that needs it. Agentainer supplies Node.js, npm and the OS libraries and fonts that Playwright lists for Chromium on Ubuntu 26.04 (`nativeDeps.ts` in Playwright v1.65.0, without `xvfb`). The browsers themselves are not in the image. They download into your home as the `agent` user, with no sudo. Playwright supports Ubuntu 26.04 on amd64 and arm64 ([system requirements](https://playwright.dev/docs/intro#system-requirements)). Follow an existing project's package-manager instructions and lockfile instead of creating a second setup.
 
 ## Contents
 
@@ -60,7 +60,7 @@ For an existing project, follow its Playwright configuration and test command. A
 
 ## Other browsers and older images
 
-The image carries Chromium's libraries only. Firefox and WebKit need their own downloads and OS dependencies, and images older than this change have no browser libraries at all. Both cases need root for `install-deps`. The launcher blocks sudo by default, so create a container with `--sudo` for that step, or use a [custom image](customization.md#customize-the-image-itself) that already has the libraries ([Linux dependencies](https://playwright.dev/docs/browsers#install-system-dependencies)).
+The image carries Chromium's libraries only. Firefox and WebKit need their own downloads and OS dependencies, and images older than `0.1.0-dev.20261104.1` have no browser libraries at all. Both cases need root for `install-deps`. The launcher blocks sudo by default, so create a container with `--sudo` for that step, or use a [custom image](customization.md#customize-the-image-itself) that already has the libraries ([Linux dependencies](https://playwright.dev/docs/browsers#install-system-dependencies)).
 
 Select an available image as described in [running Agentainer](running.md), then run this from the repository root for a separate browser-testing home:
 

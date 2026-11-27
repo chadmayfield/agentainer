@@ -132,3 +132,24 @@ else:
         self.assertIn("needs: [version, authorize-release]", publish)
         self.assertNotIn("if: always()", publish)
         self.assertNotIn("continue-on-error", approval)
+
+    def test_publish_and_release_derive_the_image_name_from_the_repository(self):
+        workflow = (ROOT / ".github/workflows/build.yml").read_text()
+        publish = workflow.split("\n  publish:\n", 1)[1].split("\n  release:\n", 1)[0]
+        release = workflow.split("\n  release:\n", 1)[1]
+        for name, job in (("publish", publish), ("release", release)):
+            with self.subTest(job=name):
+                self.assertNotIn("ghcr.io/chadmayfield", job)
+                self.assertIn("- id: image\n", job)
+        self.assertIn("name=${{ steps.image.outputs.name }},push-by-digest=true", publish)
+        self.assertIn("IMAGE_SOURCE=https://github.com/${{ github.repository }}", publish)
+        self.assertIn("subject-name: ${{ steps.image.outputs.name }}", release)
+        prepare = release.split("- id: prepare-index", 1)[1].split("run: bash scripts/release-image.sh prepare", 1)[0]
+        self.assertIn("REPOSITORY: ${{ github.repository }}", prepare)
+        step = publish.split("- id: image\n", 1)[1]
+        command = step.split("        run: ", 1)[1].split("\n", 1)[0]
+        with tempfile.TemporaryDirectory(prefix="cx-workflow-image-") as d:
+            out = Path(d) / "output"
+            subprocess.run(["bash", "-e", "-c", command], check=True,
+                           env=dict(os.environ, REPOSITORY="Example-Fork/Agentainer", GITHUB_OUTPUT=str(out)))
+            self.assertEqual(out.read_text(), "name=ghcr.io/example-fork/agentainer\n")

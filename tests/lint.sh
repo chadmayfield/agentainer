@@ -8,9 +8,14 @@ IMAGE=${IMAGE:-localhost/agentainer:dev}
 "$RUNTIME" run --rm --pull=never -v "$PWD:/src:ro" -w /src --entrypoint bash "$IMAGE" -c '
 set -euo pipefail
 files=()
+# A missing directory fails here; inside the process substitution below, find errors would not.
+roots=(bin build scripts tests deploy rootfs/usr/local/bin)
+for root in "${roots[@]}"; do
+	[ -d "$root" ] || { echo "lint: $root is missing" >&2; exit 1; }
+done
 while IFS= read -r f; do
 	if head -n1 "$f" | grep -Eq "^#!.*[/ ](ba)?sh([[:space:]]|$)"; then files+=("$f"); fi
-done < <(find bin build scripts tests deploy rootfs/usr/local/bin -type d -name node_modules -prune -o -type f -print 2>/dev/null)
+done < <(find "${roots[@]}" -type d -name node_modules -prune -o -type f -print)
 shellcheck -x "${files[@]}"
 shfmt -d "${files[@]}"
 steps=rootfs/usr/local/lib/agentainer/entrypoint.d

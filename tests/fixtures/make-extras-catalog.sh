@@ -20,6 +20,8 @@ port=48731
 registry="http://127.0.0.1:$port/"
 d=${1:-$(mktemp -d)}
 mkdir -p "$d"
+# Absolute, because later paths ($d/cache, the cleanup trap) are used after the cd.
+d=$(cd "$d" && pwd)
 cd "$d"
 mkdir -p registry/good registry/bad src
 

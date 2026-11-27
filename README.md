@@ -4,8 +4,8 @@ Agentainer is one container image with four AI coding agents and a shared set of
 
 - Agents: [Claude Code](https://code.claude.com/docs/en/setup), [Codex CLI](https://github.com/openai/codex), [Antigravity CLI](https://antigravity.google/docs/overview?tab=cli) (`agy`) and [OpenCode v2](https://opencode.ai/v2/docs).
 - Base: Ubuntu 26.04 LTS, pinned by digest, with apt packages from the [Ubuntu snapshot service](https://documentation.ubuntu.com/server/how-to/software/snapshot-service/) at a pinned date.
-- Tools: git, gh, Go, Rust, Python with uv and pipx, Node.js, GCC/G++, CMake, Ninja, pkg-config, psql, kubectl, Helm, AWS CLI v2, abtop, ripgrep, jq, yq, shellcheck, trivy, gosec, gitleaks, poppler-utils (pdftotext, pdftoppm), ImageMagick, the Chromium libraries Playwright needs, the OpenSSH SFTP server and more. `/etc/agentainer/versions.json` in the image lists every version.
-- Platforms: `linux/amd64` and `linux/arm64`. On amd64 the agents also start on CPUs without AVX2; CI checks this on every build.
+- Tools: git, gh, Go, Rust, Python with uv and pipx, Node.js, GCC/G++, CMake, Ninja, pkg-config, psql, kubectl, Helm, AWS CLI v2, abtop, ripgrep, jq, yq, shellcheck, trivy, gosec, gitleaks, syft, grype, tea, fj (forgejo-cli), crane, kyverno, actionlint, zizmor, hadolint, ast-grep, difftastic, delta, scc, hyperfine, lazygit, glow, yamllint, moreutils, pv, socat, jo, colordiff, dos2unix, poppler-utils (pdftotext, pdftoppm), ImageMagick, the Chromium libraries Playwright needs, the OpenSSH SFTP server and more. `/etc/agentainer/versions.json` in the image lists every version.
+- Platforms: `linux/amd64` and `linux/arm64`. On amd64 the agents also start on CPUs without AVX2. The CI `image` job checks this on every pull request and push; the release `publish` job rebuilds the image without repeating the check.
 
 Agents can modify mounted files, use supplied credentials and reach network services. See the [security limits](docs/security.md).
 
@@ -21,13 +21,12 @@ These docs describe the current source. Features merged after the newest release
 
 You need Podman or Docker. The launcher [`bin/agentainer`](bin/agentainer) is a POSIX shell script.
 
-Set `AGENTAINER_IMAGE` to a published version tag; no `latest` tag exists before the first stable release ([release versions](docs/versions.md#releases)). Or build locally with `scripts/build.sh` (`RUNTIME=docker sh scripts/build.sh` on a Docker host) and use `localhost/agentainer:dev`.
+The launcher defaults to the published release `ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1`. The scheduled pin update moves this default to each new release. To run another version, set `AGENTAINER_IMAGE` to its tag ([release versions](docs/versions.md#releases)). Or build locally with `scripts/build.sh` (`RUNTIME=docker sh scripts/build.sh` on a Docker host) and set `AGENTAINER_IMAGE=localhost/agentainer:dev`.
 
 ```sh
 mkdir -p ~/.config/agentainer
 cp env.example ~/.config/agentainer/env
 chmod 600 ~/.config/agentainer/env      # then fill in the keys you use
-export AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261024.1
 bin/agentainer up ~/code                 # ~/code becomes /workspace
 bin/agentainer attach                    # tmux session "main"
 ```

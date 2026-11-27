@@ -14,7 +14,7 @@ if [ -f /etc/agentainer/seed/AGENTS.md ]; then
 fi
 seed_file /etc/agentainer/AGENTS.md "$canon" 2>/dev/null ||
 	warn "could not seed $canon (something else is in the way); skipping"
-for target in "$HOME/.codex/AGENTS.md" "$HOME/.gemini/AGENTS.md" "$HOME/.config/opencode/AGENTS.md"; do
+for target in "$(home_path .codex/AGENTS.md)" "$HOME/.gemini/AGENTS.md" "$(home_path .config/opencode/AGENTS.md)"; do
 	if [ -L "$target" ]; then
 		if [ ! -e "$target" ]; then
 			warn "$target points to a missing file; that agent gets no AGENTS.md"

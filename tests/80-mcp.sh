@@ -33,8 +33,11 @@ assert_absent "removed server is gone from every agent" "$out" LISTED everything
 
 # The unit tests again, on the image's Python, where the real TOML parser checks Codex output.
 repo=$(cd "$(dirname "$0")/.." && pwd)
-assert_contains "MCP unit tests pass on the image's Python (tomllib)" "OK" \
-	"$("$RUNTIME" run --rm --pull=never --network none -v "$repo:/src:ro" -w /src --entrypoint python3 "$IMAGE" -m unittest tests.unit.test_mcp_sync 2>&1 | grep -E '^(OK|FAILED)')"
+# Every test must run: the TOML tests skip when agentainer-mcp cannot import tomllib.
+units=$(run_in --network none -v "$repo:/src:ro" -w /src --entrypoint python3 -- -m unittest tests.unit.test_mcp_sync 2>&1)
+rc=$?
+assert_eq "MCP unit tests pass on the image's Python (tomllib)" 0 "$rc"
+assert_absent "no MCP unit test skips on the image's Python" "$units" "Ran " "skipped=" "FAILED"
 
 # A user's own Codex settings after agentainer's block survive a re-sync, and Codex still loads the file.
 run_in $H --entrypoint sh -- -c 'printf "\n[profiles.mine] # mine\nmodel = \"keepme\"\n" >> ~/.codex/config.toml' >/dev/null

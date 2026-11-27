@@ -1,8 +1,11 @@
-# Secret files a user may create inside a checkout (the SSH host key, the env file).
+# Secret files a user may create inside a checkout (the SSH host key, env files). The
+# build-context ignore files exclude the same .env names.
 host.key
 env
+.env
+.env.*
 .DS_Store
-# The maintainer's private design notes; never commit them.
+# Local notes; never commit them.
 docs/private/
 
 # Local visual-review dependencies and intermediate output.

@@ -50,11 +50,32 @@ assert_eq() {
 	if [ "$2" = "$3" ]; then pass "$1"; else fail "$1" "expected [$2] got [$3]"; fi
 }
 
+# assert_contains NAME NEEDLE OUTPUT: an empty NEEDLE fails, because it matches any OUTPUT.
 assert_contains() {
+	if [ -z "$2" ]; then
+		fail "$1" "empty needle, which matches anything: [$3]"
+		return 0
+	fi
 	case "$3" in
 	*"$2"*) pass "$1" ;;
 	*) fail "$1" "[$2] not found in [$3]" ;;
 	esac
+}
+
+# require_pins NAME...: fails once for each variable that is unset or empty, so a renamed or
+# removed versions.env key cannot shrink a version check to a match on nothing. It prints
+# nothing when every pin is set, so a run without an image still prints no ok line.
+require_pins() {
+	for _pin; do
+		case "$_pin" in
+		"" | [0-9]* | *[!A-Za-z0-9_]*)
+			fail "versions.env sets $_pin" "not a variable name"
+			continue
+			;;
+		esac
+		eval "_value=\${$_pin:-}"
+		[ -n "$_value" ] || fail "versions.env sets $_pin" "$_pin is unset or empty"
+	done
 }
 
 # assert_absent NAME OUTPUT MARKER NEEDLE...: passes only when OUTPUT contains MARKER

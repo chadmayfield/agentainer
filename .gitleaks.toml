@@ -1,0 +1,27 @@
+# gitleaks settings for this repository. CI's lint-unit job runs the pinned gitleaks
+# (GITLEAKS_VERSION in versions.env) over the tracked files with this file.
+# Each allowlist below names one false positive of the default rules: a public key or
+# fingerprint, or a made-up token in a test. Config format:
+# https://github.com/gitleaks/gitleaks/blob/v8.30.1/README.md#configuration
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "npm's public registry signing keys, which the scheduled update checks signatures against"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)scripts/keys/npm-registry-keys\.json$''']
+
+[[allowlists]]
+description = "OpenPGP fingerprints of the public release signing keys"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)scripts/bump_versions\.py$''']
+regexTarget = "line"
+regexes = ['''[A-Z0-9_]+_KEY_FINGERPRINT = "[0-9A-F]{40}"''']
+
+[[allowlists]]
+description = "a made-up MCP token in the Kelos image test"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)tests/kelos/test_image\.sh$''']
+regexes = ['''^t0k-abcdefghijklm$''']

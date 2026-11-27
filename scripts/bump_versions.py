@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Resolve the latest upstream pins and rewrite versions.env.
 
-Every value comes from the upstream source named in its resolver. Any failure
-stops the run and leaves the file unchanged. The extras resolver is the one
-exception: a failed check for one extra keeps that extra's pin and catalog files,
-the run continues, and --failures FILE lists the failed checks. Uses the Python
+Every value comes from the upstream source named in its resolver. r_kelos keeps the
+Kelos variant's pins in Containerfile.kelos instead of versions.env. A resolver that
+fails keeps every pin it owns, and the other resolvers still run and write theirs.
+The extras resolver does the same for each extra and its catalog files. --failures
+FILE lists every failed resolver and extra, one per line; without --failures, a
+failed resolver makes the exit status 1 after the other pins are written. A refused
+value or a downgrade still stops the run and leaves the file unchanged. No resolver
+pins a release younger than MIN_RELEASE_AGE_HOURS; skipped releases are printed with
+the pin changes and never fail the run. Uses the Python
 standard library, the publisher verification CLIs documented in docs/versions.md,
 npm to generate extras lockfiles, and openssl to verify npm registry signatures.
 """
@@ -53,7 +58,7 @@ VALUE_PATTERNS = [
     (r"(BASE_IMAGE|[A-Z0-9_]+_IMAGE)", IMAGE_REF),
     (r"APT_SNAPSHOT", r"[0-9]{8}T[0-9]{6}Z"),
     (r"SOURCE_DATE_EPOCH", r"[0-9]{1,12}"),
-    (r"UNSLOP_COMMIT", r"[0-9a-f]{40}"),
+    (r"(UNSLOP|KELOS_FORK)_COMMIT", r"[0-9a-f]{40}"),
     (r"[A-Z0-9_]+_VERSION", r"v?[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.-]+)?"),
     (r"[A-Z0-9_]+_SHA256(_[A-Z0-9]+)?", r"[0-9a-f]{64}"),
     (r"[A-Z0-9_]+_SHA512(_[A-Z0-9]+)?", r"[0-9a-f]{128}"),
@@ -228,7 +233,7 @@ def asset_sha256(release, name, fetch_text=None):
     files = [asset for asset in assets if asset["name"] == name + ".sha256"]
     if not files:
         files = [asset for asset in assets if asset["name"].endswith(("checksums.txt", "SHA256SUMS"))
-                 or asset["name"] in ("sha256.sum", "checksums-bsd")]
+                 or asset["name"] in ("sha256.sum", "checksums-bsd", "checksums.sha256")]
     published = set()
     for asset in files:
         text = (fetch_text or fetch)(asset["browser_download_url"])
@@ -274,13 +279,106 @@ def gh_latest(repo):
     return fetch_json("https://api.github.com/repos/%s/releases/latest" % repo)
 
 
+# ---- release age ------------------------------------------------------------
+# No resolver pins a release published less than MIN_RELEASE_AGE_HOURS before the run.
+# When the newest release is younger, the resolver pins the newest release that is old
+# enough; when none is, the pin stays. Each skipped release goes to YOUNG_RELEASES, which
+# bump prints with the pin changes, so it reaches the pull request text without failing
+# the run. Resolvers whose source gives no publish time say so in a comment and are not
+# held back (docs/versions.md, "Minimum release age"). The extras keep their own, longer
+# EXTRA_MIN_AGE_DAYS.
+MIN_RELEASE_AGE_HOURS = 72
+YOUNG_RELEASES = []
+# A resolver that picked an older release because of its age records it here. bump then
+# keeps the current pin when that older release sorts below it, instead of stopping the run
+# as a downgrade.
+AGE_FALLBACK = []
+
+
+def release_cutoff(now):
+    return now - datetime.timedelta(hours=MIN_RELEASE_AGE_HOURS)
+
+
+def parse_time(value, what):
+    """An ISO 8601 time with a UTC offset (GitHub, Gitea and Forgejo published_at) in UTC."""
+    when = None
+    if isinstance(value, str):
+        try:
+            when = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            when = None
+    if when is None or when.tzinfo is None:
+        raise LookupFailed("%s: no valid publish time %r" % (what, value))
+    return when.astimezone(datetime.timezone.utc)
+
+
+def too_young(what, version, published, now, note=""):
+    """True when published is less than MIN_RELEASE_AGE_HOURS before now; records the skip."""
+    if published <= release_cutoff(now):
+        return False
+    hours = int((now - published).total_seconds() // 3600)
+    YOUNG_RELEASES.append("newer release %s %s skipped, published %d hours ago%s (minimum %d hours)"
+                          % (what, version, hours, note, MIN_RELEASE_AGE_HOURS))
+    return True
+
+
+def gh_release(repo):
+    """The GitHub release to pin for repo, or None when no stable release is old enough.
+
+    That is the latest release, or, when it is too young, the stable release with the
+    newest published_at that is at least MIN_RELEASE_AGE_HOURS old.
+    """
+    now = utcnow()
+    latest = gh_latest(repo)
+    if not too_young(repo, latest.get("tag_name"), parse_time(latest.get("published_at"), repo), now):
+        return latest
+    AGE_FALLBACK.append(repo)
+    older = []
+    for rel in fetch_json("https://api.github.com/repos/%s/releases?per_page=30" % repo):
+        if not isinstance(rel, dict) or rel.get("draft") or rel.get("prerelease"):
+            continue
+        published = parse_time(rel.get("published_at"), repo)
+        if published <= release_cutoff(now):
+            older.append((published, rel))
+    return max(older, key=lambda pair: pair[0])[1] if older else None
+
+
+def forge_release(latest_url, what):
+    """The release to pin from a Gitea or Forgejo releases/latest URL, as gh_release does for GitHub.
+
+    The list endpoint takes a limit parameter (Gitea API, "List a repo's releases").
+    """
+    now = utcnow()
+    latest = fetch_json(latest_url)
+    if not too_young(what, latest.get("tag_name"), parse_time(latest.get("published_at"), what), now):
+        return latest
+    AGE_FALLBACK.append(what)
+    older = []
+    for rel in fetch_json(latest_url.rsplit("/latest", 1)[0] + "?limit=20"):
+        if not isinstance(rel, dict) or rel.get("draft") or rel.get("prerelease"):
+            continue
+        published = parse_time(rel.get("published_at"), what)
+        if published <= release_cutoff(now):
+            older.append((published, rel))
+    return max(older, key=lambda pair: pair[0])[1] if older else None
+
+
+def keep_pin(what):
+    print("%s: no release is %d hours old yet; keeping the current pin" % (what, MIN_RELEASE_AGE_HOURS),
+          file=sys.stderr)
+    return {}
+
+
 def r_base():
+    # Unchanged by the release age rule: the tag moves with each Ubuntu image rebuild, and
+    # the apt snapshot is always the previous day.
     tag = fetch_json("https://hub.docker.com/v2/repositories/library/ubuntu/tags/26.04")
     snap = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).strftime("%Y%m%dT000000Z")
     return {"BASE_IMAGE": "docker.io/library/ubuntu:26.04@" + tag["digest"], "APT_SNAPSHOT": snap}
 
 
 def r_go():
+    # go.dev/dl/?mode=json gives no release time, so the release age rule does not apply.
     return parse_go(fetch_json("https://go.dev/dl/?mode=json"))
 
 
@@ -288,12 +386,27 @@ def rust_manifest_url(version):
     return "https://static.rust-lang.org/dist/channel-rust-%s.toml" % version
 
 
+def parse_rust_date(text):
+    """The end of the day in the channel manifest's date line, the latest time it can mean."""
+    m = re.search(r'^date = "([0-9]{4}-[0-9]{2}-[0-9]{2})"$', text, re.M)
+    if not m:
+        raise LookupFailed("rust: no date in the channel manifest")
+    day = datetime.datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+    return day + datetime.timedelta(days=1)
+
+
 def r_rust():
+    # rustup's release-stable.toml gives no release time, so the age rule covers only Rust.
+    # The channel manifest gives only a day. No list of earlier releases is fetched, so a
+    # Rust release that is too young keeps the current Rust pins.
     rustup = parse_rustup_release(fetch("https://static.rust-lang.org/rustup/release-stable.toml"))
-    rust = parse_rust_channel(fetch("https://static.rust-lang.org/dist/channel-rust-stable.toml"))
-    out = {"RUSTUP_VERSION": rustup, "RUST_VERSION": rust,
-           # rustup checks every component against this versioned manifest; the build checks the manifest.
-           "RUST_MANIFEST_SHA256": parse_checksum_file(fetch(rust_manifest_url(rust) + ".sha256"))}
+    channel = fetch("https://static.rust-lang.org/dist/channel-rust-stable.toml")
+    rust = parse_rust_channel(channel)
+    out = {"RUSTUP_VERSION": rustup}
+    if not too_young("rust", rust, parse_rust_date(channel), utcnow(), note=" (the manifest gives only the day)"):
+        out["RUST_VERSION"] = rust
+        # rustup checks every component against this versioned manifest; the build checks the manifest.
+        out["RUST_MANIFEST_SHA256"] = parse_checksum_file(fetch(rust_manifest_url(rust) + ".sha256"))
     for up, triple in (("AMD64", "x86_64-unknown-linux-gnu"), ("ARM64", "aarch64-unknown-linux-gnu")):
         url = "https://static.rust-lang.org/rustup/archive/%s/%s/rustup-init.sha256" % (rustup, triple)
         out["RUSTUP_SHA256_" + up] = parse_checksum_file(fetch(url))
@@ -303,9 +416,12 @@ def r_rust():
 def github_tool(prefix, repo, names, rel=None, checksums=None):
     """names maps AMD64/ARM64 to a function of the bare version returning the asset name.
 
-    rel is the release to pin; the default is the repository's latest release.
+    rel is the release to pin; the default is gh_release, which applies the release age rule.
     """
-    rel = rel or gh_latest(repo)
+    if rel is None:
+        rel = gh_release(repo)
+        if rel is None:
+            return keep_pin(repo)
     ver = strip_v(rel["tag_name"])
     if checksums:
         # Only the named checksum list may supply the hashes; an asset digest alone is not enough.
@@ -393,11 +509,21 @@ def r_containerssh_agent():
         return {}
     wanted = re.compile(r"v?%s\.([0-9]+)" % re.escape(series))
     found = []
+    young = False
+    now = utcnow()
     for rel in fetch_json("https://api.github.com/repos/containerssh/agent/releases?per_page=50"):
         m = wanted.fullmatch(rel.get("tag_name", ""))
         if m and not rel.get("prerelease") and not rel.get("draft"):
+            if too_young("containerssh/agent", rel["tag_name"],
+                         parse_time(rel.get("published_at"), "containerssh/agent"), now):
+                young = True
+                continue
             found.append((int(m.group(1)), rel))
+    if young:
+        AGE_FALLBACK.append("containerssh/agent")
     if not found:
+        if young:
+            return keep_pin("containerssh/agent")
         raise LookupFailed("containerssh/agent: no stable %s.x release found" % series)
     return github_tool("CONTAINERSSH_AGENT", "containerssh/agent", {
         "AMD64": lambda v: "agent_%s_linux_amd64.tar.gz" % v,
@@ -409,6 +535,8 @@ def r_trivy():
     out = github_tool("TRIVY", "aquasecurity/trivy", {
         "AMD64": lambda v: "trivy_%s_Linux-64bit.tar.gz" % v,
         "ARM64": lambda v: "trivy_%s_Linux-ARM64.tar.gz" % v})
+    if not out:
+        return out
     tag = out["TRIVY_VERSION"]
     out["TRIVY_SCANNER_IMAGE"] = hub_ref("aquasec/trivy", tag, fetch_json(
         "https://hub.docker.com/v2/repositories/aquasec/trivy/tags/" + tag))
@@ -426,9 +554,21 @@ def r_unslop():
     # The pstack directory includes the skill and its license. Source files have no
     # published checksums, so compute both from the same immutable upstream commit.
     # https://github.com/cursor/plugins/tree/main/pstack
-    commits = fetch_json('https://api.github.com/repos/cursor/plugins/commits?path=pstack&per_page=1')
+    # The age rule uses the commit's committer date, which the committer sets. The commits
+    # API's until parameter returns only commits from before that time.
+    url = 'https://api.github.com/repos/cursor/plugins/commits?path=pstack&per_page=1'
+    commits = fetch_json(url)
     if not commits or not isinstance(commits[0], dict):
         raise LookupFailed('unslop: no upstream commit')
+    now = utcnow()
+    when = parse_time(((commits[0].get('commit') or {}).get('committer') or {}).get('date'), 'unslop')
+    if too_young('unslop commit', str(commits[0].get('sha', ''))[:12], when, now):
+        AGE_FALLBACK.append('unslop')
+        commits = fetch_json(url + '&until=' + release_cutoff(now).strftime('%Y-%m-%dT%H:%M:%SZ'))
+        if not commits:
+            return keep_pin('unslop')
+        if not isinstance(commits[0], dict):
+            raise LookupFailed('unslop: no upstream commit')
     commit = commits[0].get('sha', '')
     if not isinstance(commit, str) or not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise LookupFailed('unslop: expected a full lowercase commit SHA')
@@ -446,6 +586,7 @@ def r_golangci():
 
 def r_kubectl():
     # https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
+    # stable.txt and dl.k8s.io give no release time, so the release age rule does not apply.
     tag = fetch("https://dl.k8s.io/release/stable.txt").strip()
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
         raise LookupFailed("kubectl: stable release must be a version tag")
@@ -458,7 +599,9 @@ def r_kubectl():
 
 def r_helm():
     # https://helm.sh/docs/intro/install/#from-the-binary-releases
-    release = gh_latest("helm/helm")
+    release = gh_release("helm/helm")
+    if release is None:
+        return keep_pin("helm/helm")
     tag = release["tag_name"]
     if release.get("prerelease") or release.get("draft") or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
         raise LookupFailed("helm: latest release must be a stable version tag")
@@ -485,8 +628,13 @@ def r_codex():
         "ARM64": lambda v: codex_asset("aarch64")})
 
 
+TEA_RELEASES = "https://gitea.com/api/v1/repos/gitea/tea/releases/latest"
+
+
 def r_tea():
-    rel = fetch_json("https://gitea.com/api/v1/repos/gitea/tea/releases/latest")
+    rel = forge_release(TEA_RELEASES, "gitea/tea")
+    if rel is None:
+        return keep_pin("gitea/tea")
     ver = strip_v(rel["tag_name"])
     out = {"TEA_VERSION": ver}
     for up, arch in ARCHES.items():
@@ -496,6 +644,138 @@ def r_tea():
             raise LookupFailed("tea: %s not found" % name)
         out["TEA_SHA256_" + up] = parse_checksum_file(fetch(assets[0]["browser_download_url"]))
     return out
+
+
+# forgejo-cli (fj) releases on Codeberg, a Forgejo instance:
+# https://codeberg.org/forgejo-contrib/forgejo-cli/releases
+FJ_RELEASES = "https://codeberg.org/api/v1/repos/forgejo-contrib/forgejo-cli/releases/latest"
+FJ_TRIPLES = (("AMD64", "x86_64"), ("ARM64", "aarch64"))
+
+
+def r_fj():
+    # forgejo-cli publishes no checksums and the Forgejo release API returns no asset digest,
+    # so the pins are SHA-256 values computed here from the downloaded archives.
+    rel = forge_release(FJ_RELEASES, "forgejo-cli")
+    if rel is None:
+        return keep_pin("forgejo-cli")
+    ver = strip_v(rel["tag_name"])
+    out = {"FJ_VERSION": ver}
+    for up, triple in FJ_TRIPLES:
+        name = "forgejo-cli-%s-linux.tar.gz" % triple
+        assets = [a for a in rel.get("assets", []) if a["name"] == name]
+        if len(assets) != 1:
+            raise LookupFailed("fj: %s missing or ambiguous in %s" % (name, rel["tag_name"]))
+        out["FJ_SHA256_" + up] = hashlib.sha256(fetch_bytes(assets[0]["browser_download_url"])).hexdigest()
+    return out
+
+
+def r_crane():
+    # Release archives and checksums.txt: https://github.com/google/go-containerregistry/releases
+    return github_tool("CRANE", "google/go-containerregistry", {
+        "AMD64": lambda v: "go-containerregistry_Linux_x86_64.tar.gz",
+        "ARM64": lambda v: "go-containerregistry_Linux_arm64.tar.gz"},
+        checksums=lambda v: "checksums.txt")
+
+
+def r_kyverno():
+    # The CLI archives keep the v in their names: https://github.com/kyverno/kyverno/releases
+    return github_tool("KYVERNO", "kyverno/kyverno", {
+        "AMD64": lambda v: "kyverno-cli_v%s_linux_x86_64.tar.gz" % v,
+        "ARM64": lambda v: "kyverno-cli_v%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "checksums.txt")
+
+
+def r_actionlint():
+    # Release archives and actionlint_<version>_checksums.txt: https://github.com/rhysd/actionlint/releases
+    return github_tool("ACTIONLINT", "rhysd/actionlint", {
+        "AMD64": lambda v: "actionlint_%s_linux_amd64.tar.gz" % v,
+        "ARM64": lambda v: "actionlint_%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "actionlint_%s_checksums.txt" % v)
+
+
+def r_zizmor():
+    # No checksum list; github_tool falls back to GitHub's asset digest.
+    # https://github.com/zizmorcore/zizmor/releases
+    return github_tool("ZIZMOR", "zizmorcore/zizmor", {
+        "AMD64": lambda v: "zizmor-x86_64-unknown-linux-gnu.tar.gz",
+        "ARM64": lambda v: "zizmor-aarch64-unknown-linux-gnu.tar.gz"})
+
+
+def r_hadolint():
+    # Bare binaries and checksums.sha256: https://github.com/hadolint/hadolint/releases
+    return github_tool("HADOLINT", "hadolint/hadolint", {
+        "AMD64": lambda v: "hadolint-linux-x86_64",
+        "ARM64": lambda v: "hadolint-linux-arm64"},
+        checksums=lambda v: "checksums.sha256")
+
+
+def r_ast_grep():
+    # Zip archives without a checksum list; GitHub's asset digest is the fallback.
+    # https://github.com/ast-grep/ast-grep/releases
+    return github_tool("AST_GREP", "ast-grep/ast-grep", {
+        "AMD64": lambda v: "app-x86_64-unknown-linux-gnu.zip",
+        "ARM64": lambda v: "app-aarch64-unknown-linux-gnu.zip"})
+
+
+def r_difftastic():
+    # No checksum list; GitHub's asset digest is the fallback. https://github.com/Wilfred/difftastic/releases
+    return github_tool("DIFFTASTIC", "Wilfred/difftastic", {
+        "AMD64": lambda v: "difft-%s-x86_64-unknown-linux-gnu.tar.gz" % v,
+        "ARM64": lambda v: "difft-%s-aarch64-unknown-linux-gnu.tar.gz" % v})
+
+
+def r_delta():
+    # No checksum list; GitHub's asset digest is the fallback. https://github.com/dandavison/delta/releases
+    return github_tool("DELTA", "dandavison/delta", {
+        "AMD64": lambda v: "delta-%s-x86_64-unknown-linux-gnu.tar.gz" % v,
+        "ARM64": lambda v: "delta-%s-aarch64-unknown-linux-gnu.tar.gz" % v})
+
+
+def r_scc():
+    # Release archives and checksums.txt: https://github.com/boyter/scc/releases
+    return github_tool("SCC", "boyter/scc", {
+        "AMD64": lambda v: "scc_Linux_x86_64.tar.gz",
+        "ARM64": lambda v: "scc_Linux_arm64.tar.gz"},
+        checksums=lambda v: "checksums.txt")
+
+
+def r_hyperfine():
+    # No checksum list; GitHub's asset digest is the fallback. https://github.com/sharkdp/hyperfine/releases
+    return github_tool("HYPERFINE", "sharkdp/hyperfine", {
+        "AMD64": lambda v: "hyperfine-v%s-x86_64-unknown-linux-gnu.tar.gz" % v,
+        "ARM64": lambda v: "hyperfine-v%s-aarch64-unknown-linux-gnu.tar.gz" % v})
+
+
+def r_lazygit():
+    # Release archives and checksums.txt: https://github.com/jesseduffield/lazygit/releases
+    return github_tool("LAZYGIT", "jesseduffield/lazygit", {
+        "AMD64": lambda v: "lazygit_%s_linux_x86_64.tar.gz" % v,
+        "ARM64": lambda v: "lazygit_%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "checksums.txt")
+
+
+def r_glow():
+    # Release archives and checksums.txt: https://github.com/charmbracelet/glow/releases
+    return github_tool("GLOW", "charmbracelet/glow", {
+        "AMD64": lambda v: "glow_%s_Linux_x86_64.tar.gz" % v,
+        "ARM64": lambda v: "glow_%s_Linux_arm64.tar.gz" % v},
+        checksums=lambda v: "checksums.txt")
+
+
+def r_syft():
+    # Release archives and syft_<version>_checksums.txt: https://github.com/anchore/syft/releases
+    return github_tool("SYFT", "anchore/syft", {
+        "AMD64": lambda v: "syft_%s_linux_amd64.tar.gz" % v,
+        "ARM64": lambda v: "syft_%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "syft_%s_checksums.txt" % v)
+
+
+def r_grype():
+    # Release archives and grype_<version>_checksums.txt: https://github.com/anchore/grype/releases
+    return github_tool("GRYPE", "anchore/grype", {
+        "AMD64": lambda v: "grype_%s_linux_amd64.tar.gz" % v,
+        "ARM64": lambda v: "grype_%s_linux_arm64.tar.gz" % v},
+        checksums=lambda v: "grype_%s_checksums.txt" % v)
 
 
 # Claude Code's native release host, the one https://claude.ai/install.sh downloads from.
@@ -581,6 +861,9 @@ def verify_signature(data, sig, key, fingerprints):
 
 def r_claude():
     # The "stable" channel Anthropic documents for Claude Code (code.claude.com/docs/en/setup).
+    # The release host gives no time a version reached that channel. manifest.json has a
+    # buildDate, but a release is published after it is built, so buildDate cannot show that
+    # a release is old enough. The release age rule does not apply.
     ver = fetch(CLAUDE_RELEASES + "/stable").strip()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", ver):
         raise LookupFailed("claude: unexpected stable version %r" % ver[:40])
@@ -595,16 +878,33 @@ NODE_DIST = "https://nodejs.org/dist"
 NODE_MAJOR = 26
 
 
-def parse_node_index(doc, major):
-    """Newest release of one Node.js major from nodejs.org/dist/index.json, without the v."""
+def node_release_end(entry):
+    """The end of the day in an index.json entry's date, the latest time it can mean."""
+    try:
+        day = datetime.datetime.strptime(str(entry.get("date")), "%Y-%m-%d")
+    except ValueError:
+        raise LookupFailed("node: no valid date for %s in index.json" % entry.get("version"))
+    return day.replace(tzinfo=datetime.timezone.utc) + datetime.timedelta(days=1)
+
+
+def parse_node_index(doc, major, now=None):
+    """Newest release of one Node.js major from nodejs.org/dist/index.json, without the v.
+
+    With now, only releases whose day ended at least MIN_RELEASE_AGE_HOURS before now count,
+    and the result is None when there is none.
+    """
     if not isinstance(doc, list):
         raise LookupFailed("node: unexpected index.json shape")
     pattern = re.compile(r"v(%d\.[0-9]+\.[0-9]+)" % major)
-    found = [m.group(1) for m in (pattern.fullmatch(str(e.get("version", ""))) for e in doc if isinstance(e, dict))
-             if m]
+    found = [(m.group(1), e) for m, e in ((pattern.fullmatch(str(e.get("version", ""))), e)
+                                          for e in doc if isinstance(e, dict)) if m]
     if not found:
         raise LookupFailed("node: no release of major %d in index.json" % major)
-    return max(found, key=version_key)
+    if now is not None:
+        found = [(v, e) for v, e in found if node_release_end(e) <= release_cutoff(now)]
+        if not found:
+            return None
+    return max((v for v, _ in found), key=version_key)
 
 
 def parse_node_shasums(text, ver):
@@ -627,7 +927,17 @@ def parse_node_shasums(text, ver):
 
 def r_node():
     # nodejs.org signs SHASUMS256.txt with the release keys pinned in scripts/keys.
-    ver = parse_node_index(fetch_json(NODE_DIST + "/index.json"), NODE_MAJOR)
+    # index.json gives each release's day, which counts as the end of that day.
+    doc = fetch_json(NODE_DIST + "/index.json")
+    now = utcnow()
+    newest = parse_node_index(doc, NODE_MAJOR)
+    ver = parse_node_index(doc, NODE_MAJOR, now=now)
+    if ver != newest:
+        entry = next(e for e in doc if isinstance(e, dict) and e.get("version") == "v" + newest)
+        too_young("node", newest, node_release_end(entry), now, note=" (index.json gives only the day)")
+        AGE_FALLBACK.append("node")
+    if ver is None:
+        return keep_pin("node")
     base = "%s/v%s/SHASUMS256.txt" % (NODE_DIST, ver)
     shasums = fetch_bytes(base)
     sig = fetch_bytes(base + ".sig")
@@ -668,6 +978,7 @@ def awscli_zip_url(triple, ver):
 
 
 def r_awscli():
+    # The changelog headings give no release time, so the release age rule does not apply.
     ver = parse_awscli_changelog(fetch(AWSCLI_CHANGELOG))
     # The zips are about 75 MB each. When the version is already pinned, its checksums are
     # already pinned too, so nothing is downloaded and the pins stay as they are. main
@@ -686,6 +997,8 @@ def r_awscli():
 
 
 def r_agy():
+    # The manifest has only version, url and sha512, no release time, so the release age
+    # rule does not apply.
     out = {}
     versions = set()
     for up, arch in ARCHES.items():
@@ -700,11 +1013,34 @@ def r_agy():
 
 
 def r_opencode():
-    ver = fetch_json("https://registry.npmjs.org/@opencode/cli/latest")["version"]
+    # The release age rule uses the registry's time for each version of @opencode/cli.
+    packument = fetch_json(NPM_REGISTRY + "@opencode/cli")
+    now = utcnow()
+    latest = packument["dist-tags"]["latest"]
+    try:
+        ver = pick_version(packument, now, datetime.timedelta(hours=MIN_RELEASE_AGE_HOURS))
+    except NothingNewer:
+        ver = None
+    if ver != latest:
+        too_young("@opencode/cli", latest, parse_registry_time(packument["time"].get(latest)), now)
+        AGE_FALLBACK.append("@opencode/cli")
+    if ver is None:
+        return keep_pin("@opencode/cli")
     out = {"OPENCODE_VERSION": ver}
+    keys = load_registry_keys(NPM_KEYS)
     for up, target in (("AMD64", "linux-x64-baseline"), ("ARM64", "linux-arm64")):
-        meta = fetch_json("https://registry.npmjs.org/@opencode/cli-%s/%s" % (target, ver))
-        out["OPENCODE_INTEGRITY_" + up] = meta["dist"]["integrity"]
+        name = "@opencode/cli-%s" % target
+        dist = fetch_json(NPM_REGISTRY + name + "/" + ver)["dist"]
+        integrity = dist["integrity"]
+
+        # The per-version document has no publish time; the packument's time map does.
+        def published(name=name):
+            times = fetch_json(NPM_REGISTRY + name).get("time")
+            return parse_registry_time(times.get(ver) if isinstance(times, dict) else None)
+
+        # The same registry signature check as the extras lockfile entries.
+        verify_registry_signature(name, ver, integrity, dist.get("signatures") or [], keys, published=published)
+        out["OPENCODE_INTEGRITY_" + up] = integrity
     return out
 
 
@@ -764,7 +1100,9 @@ class ExtraFiles:
 
     main calls reset before the resolvers run and writes files only after every
     resolver and check passed. Paths in files are relative to base. failures holds
-    one "extras <name>: <reason>" line per extra whose checks failed.
+    one "extras <name>: <reason>" line per extra whose checks failed. changes holds
+    lines for pins that live outside versions.env (r_kelos), printed with the
+    versions.env changes.
     """
 
     def __init__(self):
@@ -776,9 +1114,12 @@ class ExtraFiles:
         self.files = {}
         self.regenerated = []
         self.failures = []
+        self.changes = []
 
 
 EXTRA_FILES = ExtraFiles()
+# One "<resolver>: <reason>" line per resolver that failed in this run of main.
+RESOLVER_FAILURES = []
 
 
 def utcnow():
@@ -807,15 +1148,20 @@ def npm_version_key(value):
     return tuple(int(n) for n in m.group(1, 2, 3)) + (int(m.group(4) is None),)
 
 
-def pick_version(packument, now):
-    """Newest stable, non-deprecated version up to dist-tags.latest published at least EXTRA_MIN_AGE_DAYS before now."""
+def pick_version(packument, now, min_age=None):
+    """Newest stable, non-deprecated version up to dist-tags.latest published at least min_age before now.
+
+    min_age defaults to EXTRA_MIN_AGE_DAYS.
+    """
+    if min_age is None:
+        min_age = datetime.timedelta(days=EXTRA_MIN_AGE_DAYS)
     if not isinstance(packument, dict) or not isinstance(packument.get("versions"), dict):
         raise LookupFailed("packument is not an object with versions")
     latest = npm_version_key(packument["dist-tags"]["latest"])
     times = packument.get("time")
     if not isinstance(times, dict) or not times:
         raise LookupFailed("packument has no time object")
-    cutoff = now - datetime.timedelta(days=EXTRA_MIN_AGE_DAYS)
+    cutoff = now - min_age
     found = []
     candidates = timed = 0
     for ver, meta in packument["versions"].items():
@@ -834,7 +1180,7 @@ def pick_version(packument, now):
     if candidates and not timed:
         raise LookupFailed("packument time has no valid entry for any stable version")
     if not found:
-        raise NothingNewer("no stable version published at least %d days ago" % EXTRA_MIN_AGE_DAYS)
+        raise NothingNewer("no stable version published at least %d hours ago" % (min_age.total_seconds() // 3600))
     return max(found, key=npm_version_key)
 
 
@@ -1080,6 +1426,8 @@ def rewrite_image_ref(text, ref):
 
 
 def r_k8s_images():
+    # Unchanged by the release age rule: each tag follows a series and moves with every
+    # rebuild, and Docker Hub keeps no earlier digests to fall back to.
     return {key: hub_ref(repo, tag, fetch_json("https://hub.docker.com/v2/repositories/%s/tags/%s" % (repo, tag)))
             for key, repo, tag, _ in K8S_IMAGES}
 
@@ -1094,14 +1442,391 @@ def buildkit_tag(releases):
 
 def r_buildkit():
     # The BuildKit image buildx uses to build the published image (build.yml, publish job).
-    tag = buildkit_tag(fetch_json("https://api.github.com/repos/moby/buildkit/releases?per_page=20"))
+    now = utcnow()
+    releases = []
+    young = False
+    for r in fetch_json("https://api.github.com/repos/moby/buildkit/releases?per_page=20"):
+        if not r.get("prerelease") and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", r.get("tag_name", "")) \
+                and too_young("moby/buildkit", r["tag_name"], parse_time(r.get("published_at"), "moby/buildkit"), now):
+            young = True
+            continue
+        releases.append(r)
+    if young:
+        AGE_FALLBACK.append("moby/buildkit")
+    try:
+        tag = buildkit_tag(releases)
+    except LookupFailed:
+        if young:
+            return keep_pin("moby/buildkit")
+        raise
     return {"BUILDKIT_IMAGE": hub_ref("moby/buildkit", tag,
                                       fetch_json("https://hub.docker.com/v2/repositories/moby/buildkit/tags/%s" % tag))}
 
 
+AGENTAINER_REPO = "chadmayfield/agentainer"
+AGENTAINER_IMAGE = "ghcr.io/" + AGENTAINER_REPO
+# Files that use AGENTAINER_RELEASE_VERSION as their default or example tag, each with the
+# text that comes right before the tag. bump() rewrites them when the pin changes, and
+# tests/unit/test_bump_versions.py checks that every entry holds the current pin.
+RELEASE_REFS = (("bin/agentainer", AGENTAINER_IMAGE + ":"),
+                ("deploy/kubernetes/agentainer/statefulset.yaml", AGENTAINER_IMAGE + ":"),
+                ("deploy/kubernetes/agentainer/kustomization.yaml", "newTag: "),
+                ("README.md", AGENTAINER_IMAGE + ":"),
+                ("docs/running.md", AGENTAINER_IMAGE + ":"),
+                ("docs/versions.md", AGENTAINER_IMAGE + ":"),
+                ("docs/versions.md", "version="))
+
+
+def agentainer_release(releases):
+    """Newest published release by version order, without its leading v.
+
+    Prereleases count, because they are the only published images before the first
+    stable release. Drafts and tags that are not release versions are skipped.
+    """
+    found = []
+    for r in releases:
+        tag = r.get("tag_name") or ""
+        if r.get("draft") or not tag.startswith("v"):
+            continue
+        try:
+            version_key(tag[1:])
+        except ValueError:
+            continue
+        found.append(tag[1:])
+    if not found:
+        raise LookupFailed("%s: no published release found" % AGENTAINER_REPO)
+    return max(found, key=version_key)
+
+
+def r_agentainer_release():
+    # The list endpoint includes prereleases. /releases/latest leaves them out and returns
+    # 404 while every release is a prerelease.
+    releases = fetch_json("https://api.github.com/repos/%s/releases?per_page=100" % AGENTAINER_REPO)
+    return {"AGENTAINER_RELEASE_VERSION": agentainer_release(releases)}
+
+
+def rewrite_release_ref(text, prefix, old, new):
+    """Replace prefix+old with prefix+new where old is the whole version, not the start of a longer one."""
+    pattern = re.escape(prefix + old) + r"(?![0-9A-Za-z-]|\.[0-9A-Za-z])"
+    return re.sub(pattern, lambda _: prefix + new, text)
+
+
+# docs/extras.md names each extra's pinned version after its npm package name: in prose
+# ("kandev 0.102.0"), after a code span ("`rea-agents` 6.9.0") and in npm and unpkg links
+# ("kandev/0.102.0", "@openchamber/web@2.7.2/bin/lib/cli-args.js").
+# scripts/check_bump_refs.py repeats these separators in EXTRA_SEPARATORS.
+EXTRAS_DOC = "docs/extras.md"
+EXTRAS_DOC_SEPARATORS = (" ", "` ", "@", "/")
+
+
+def findings_table_span(text):
+    """The (start, end) offsets of the table under "## Known findings", or (0, 0).
+
+    The table is a dated record of one scan, so the updater leaves its versions alone.
+    """
+    m = re.search(r"(?m)^## Known findings\n(?:(?!^## ).*\n)*?((?:\|.*\n)+)", text)
+    return m.span(1) if m else (0, 0)
+
+
+def rewrite_extras_doc(text, changes):
+    """Rewrite each package's version mentions outside the Known findings table.
+
+    changes maps an npm package name to its (old, new) versions.
+    """
+    start, end = findings_table_span(text)
+
+    def rewrite(part):
+        for package, (old, new) in changes.items():
+            for sep in EXTRAS_DOC_SEPARATORS:
+                # The package name must not be the end of a longer name ("xkandev 1.0.0").
+                pattern = (r"(?<![A-Za-z0-9._-])" + re.escape(package + sep + old)
+                           + r"(?![0-9A-Za-z-]|\.[0-9A-Za-z])")
+                part = re.sub(pattern, lambda _, r=package + sep + new: r, part)
+        return part
+    return rewrite(text[:start]) + text[start:end] + rewrite(text[end:])
+
+
+# ---- Kelos variant (Containerfile.kelos) -------------------------------------
+#
+# The Kelos variant's four pins are ARG lines in Containerfile.kelos, because only
+# that build uses them (docs/kelos.md). r_kelos rewrites them there and returns no
+# versions.env values.
+
+KELOS_CONTAINERFILE = "Containerfile.kelos"
+KELOS_ARGS = ("AGENTAINER_IMAGE", "GOLANG_IMAGE", "KELOS_FORK_COMMIT", "KELOS_CAPTURE_VERSION")
+# The fork's kelos-capture lists pull requests over REST. Its tags are
+# v<upstream version>-rest.<n>: upstream at that release plus that one commit.
+KELOS_FORK = "chadmayfield/kelos"
+KELOS_REST_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rest\.([1-9][0-9]*)")
+KELOS_UPSTREAM = "kelos-dev/kelos"
+# Files in rootfs-kelos that are upstream files copied unchanged, and the upstream
+# file the modified Codex entrypoint starts from, at the release SOURCE.md names.
+KELOS_COPIES = (("rootfs-kelos/kelos_entrypoint_claude.sh", "claude-code/kelos_entrypoint.sh"),
+                ("rootfs-kelos/agent-gh-wrapper.sh", "hack/agent-gh-wrapper.sh"),
+                ("rootfs-kelos/LICENSE.kelos", "LICENSE"))
+KELOS_CODEX_ENTRYPOINT = "codex/kelos_entrypoint.sh"
+KELOS_COPIED_FROM = "v0.62.0"
+# Media types of a multi-platform image index (OCI image-spec, image-index.md; Docker
+# manifest list v2 schema 2).
+INDEX_MEDIA_TYPES = ("application/vnd.oci.image.index.v1+json",
+                     "application/vnd.docker.distribution.manifest.list.v2+json")
+
+
+def kelos_rest_key(tag):
+    """Sort key of a v<version>-rest.<n> tag: the version, then n. None for other tags."""
+    m = KELOS_REST_TAG.fullmatch(tag)
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def kelos_rest_tags(refs):
+    """The v<version>-rest.<n> tags in a git matching-refs listing, highest first.
+
+    Each entry is (tag name, object sha, object type). The object is the commit for
+    a lightweight tag and a tag object for an annotated one.
+    """
+    found = []
+    for ref in refs:
+        name = ref.get("ref", "")
+        if not name.startswith("refs/tags/"):
+            continue
+        tag = name[len("refs/tags/"):]
+        key = kelos_rest_key(tag)
+        if key is None:
+            continue
+        obj = ref.get("object") or {}
+        found.append((key, tag, obj.get("sha", ""), obj.get("type", "")))
+    if not found:
+        raise LookupFailed("%s: no v<version>-rest.<n> tag" % KELOS_FORK)
+    return [entry[1:] for entry in sorted(found, reverse=True)]
+
+
+def peel_tag(repo, sha, kind):
+    """The commit a tag object points to, following annotated tags (at most 5 levels)."""
+    for _ in range(5):
+        if kind == "commit":
+            if not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+                raise LookupFailed("%s: malformed commit sha %r" % (repo, sha))
+            return sha
+        if kind != "tag":
+            raise LookupFailed("%s: tag points to a %s, not a commit" % (repo, kind))
+        if not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+            raise LookupFailed("%s: malformed tag object sha %r" % (repo, sha))
+        obj = fetch_json("https://api.github.com/repos/%s/git/tags/%s" % (repo, sha)).get("object") or {}
+        sha, kind = obj.get("sha", ""), obj.get("type", "")
+    raise LookupFailed("%s: tag chain longer than 5" % repo)
+
+
+def parse_go_mod_go(text):
+    """The Go version a go.mod needs: its toolchain line, else its go line, as a tuple."""
+    found = None
+    for line in text.splitlines():
+        m = re.fullmatch(r"\s*go\s+([0-9]+(?:\.[0-9]+){1,2})\s*", line)
+        if m and found is None:
+            found = m.group(1)
+        t = re.fullmatch(r"\s*toolchain\s+go([0-9]+(?:\.[0-9]+){1,2})\S*\s*", line)
+        if t:
+            return tuple(int(x) for x in t.group(1).split("."))
+    if found is None:
+        raise LookupFailed("go.mod has no go line")
+    return tuple(int(x) for x in found.split("."))
+
+
+def git_blob_sha(data):
+    """The git object name of a blob with these bytes, as the GitHub contents API reports it."""
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def ghcr_index_digest(repo, tag):
+    """Digest of the image index that tag names in ghcr.io, read anonymously.
+
+    The token and manifest endpoints are those of the OCI distribution spec, which
+    ghcr.io serves. The digest is the SHA-256 of the manifest bytes, checked
+    against the Docker-Content-Digest header.
+    """
+    token = fetch_json("https://ghcr.io/token?scope=repository:%s:pull" % repo).get("token") or ""
+    url = "https://ghcr.io/v2/%s/manifests/%s" % (repo, tag)
+    req = urllib.request.Request(url, headers={"User-Agent": "agentainer-bump", "Authorization": "Bearer " + token,
+                                               "Accept": ", ".join(INDEX_MEDIA_TYPES)})
+    try:
+        with open_https(req) as r:
+            body = r.read()
+            media = (r.headers.get("Content-Type") or "").split(";")[0].strip()
+            header = r.headers.get("Docker-Content-Digest") or ""
+    except LookupFailed:
+        raise
+    except Exception as e:  # noqa: BLE001 - report any network error the same way
+        raise LookupFailed("%s: %s" % (url, e))
+    if media not in INDEX_MEDIA_TYPES:
+        raise LookupFailed("%s: not an image index (%s)" % (url, media or "no Content-Type"))
+    digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    if header and header != digest:
+        raise LookupFailed("%s: Docker-Content-Digest %s does not match the manifest bytes" % (url, header))
+    return digest
+
+
+def read_containerfile_args(text, names):
+    """Values of "ARG NAME=value" lines. Each name must have exactly one such line."""
+    out = {}
+    for name in names:
+        found = re.findall(r"(?m)^ARG %s=(\S+)$" % re.escape(name), text)
+        if len(found) != 1:
+            raise LookupFailed("%s: expected one ARG %s= line, found %d" % (KELOS_CONTAINERFILE, name, len(found)))
+        out[name] = found[0]
+    return out
+
+
+def rewrite_containerfile_args(text, values):
+    for name, value in values.items():
+        line = "ARG %s=%s" % (name, value)
+        text, n = re.subn(r"(?m)^ARG %s=\S+$" % re.escape(name), lambda _m, line=line: line, text)
+        if n != 1:
+            raise LookupFailed("%s: expected one ARG %s= line, found %d" % (KELOS_CONTAINERFILE, name, n))
+    return text
+
+
+def image_tag(ref):
+    return ref.split("@")[0].rsplit(":", 1)[1]
+
+
+def kelos_images_not_older(old, new):
+    """Raises LookupFailed when a new image pin would move back from the current one."""
+    for key in ("AGENTAINER_IMAGE", "GOLANG_IMAGE"):
+        old_tag, new_tag = image_tag(old[key]), image_tag(new[key])
+        if version_key(new_tag) < version_key(old_tag):
+            raise LookupFailed("r_kelos would downgrade %s from %s to %s" % (key, old_tag, new_tag))
+
+
+def kelos_capture_older(old, new):
+    """True when the tag new sorts below the pinned KELOS_CAPTURE_VERSION old.
+
+    A pin that is not a rest tag is compared by its upstream version only.
+    """
+    new_key = kelos_rest_key(new)
+    old_key = kelos_rest_key(old)
+    if old_key is not None:
+        return new_key < old_key
+    m = re.match(r"v([0-9]+)\.([0-9]+)\.([0-9]+)", old)
+    return bool(m) and tuple(int(x) for x in m.groups()) > new_key[:3]
+
+
+def kelos_tag_published(tag, commit):
+    """When a fork tag's content was published: the later of the upstream release's
+    published_at and the committer date of the fork commit."""
+    version = tag.split("-rest.", 1)[0]
+    rel = fetch_json("https://api.github.com/repos/%s/releases/tags/%s" % (KELOS_UPSTREAM, version))
+    upstream = parse_time(rel.get("published_at"), "%s %s" % (KELOS_UPSTREAM, version))
+    data = fetch_json("https://api.github.com/repos/%s/commits/%s" % (KELOS_FORK, commit))
+    fork = parse_time(((data.get("commit") or {}).get("committer") or {}).get("date"), "%s %s" % (KELOS_FORK, tag))
+    return max(upstream, fork)
+
+
+def pick_kelos_fork_tag(now):
+    """(tag, commit, skipped) for the highest rest tag that is old enough, or None for the
+    tag when none is. skipped is True when a newer tag was too young."""
+    skipped = False
+    for tag, sha, kind in kelos_rest_tags(
+            fetch_json("https://api.github.com/repos/%s/git/matching-refs/tags/v" % KELOS_FORK)):
+        commit = peel_tag(KELOS_FORK, sha, kind)
+        if too_young(KELOS_FORK, tag, kelos_tag_published(tag, commit), now):
+            skipped = True
+            continue
+        return tag, commit, skipped
+    return None, None, skipped
+
+
+def check_kelos_copies(base, tag, commit):
+    """Raises LookupFailed unless the Kelos files copied into rootfs-kelos still match the tag."""
+    for local, upstream in KELOS_COPIES:
+        try:
+            with open(os.path.join(base, local), "rb") as f:
+                want = git_blob_sha(f.read())
+        except OSError as e:
+            raise LookupFailed("%s: %s" % (local, e))
+        if contents_sha(KELOS_FORK, upstream, commit) != want:
+            raise LookupFailed("%s %s: %s differs from %s; update the copy first (rootfs-kelos/SOURCE.md)"
+                               % (KELOS_FORK, tag, upstream, local))
+    codex_at_tag = contents_sha(KELOS_FORK, KELOS_CODEX_ENTRYPOINT, commit)
+    if codex_at_tag != contents_sha(KELOS_UPSTREAM, KELOS_CODEX_ENTRYPOINT, KELOS_COPIED_FROM):
+        raise LookupFailed("%s %s: %s changed since %s; update rootfs-kelos/kelos_entrypoint_codex.sh first"
+                           % (KELOS_FORK, tag, KELOS_CODEX_ENTRYPOINT, KELOS_COPIED_FROM))
+
+
+def contents_sha(repo, path, ref):
+    return fetch_json("https://api.github.com/repos/%s/contents/%s?ref=%s" % (repo, path, ref)).get("sha", "")
+
+
+def r_kelos():
+    """Pins of the Kelos variant, written to Containerfile.kelos through EXTRA_FILES.
+
+    The fork tag follows the release age rule: its publish time is the later of the
+    upstream release's published_at and the fork commit's committer date. When the
+    newest tag is too young, the highest tag that is old enough is pinned, unless it
+    sorts below the current pin; then, or when no tag is old enough, the fork pins
+    stay. GOLANG_IMAGE is not held back: go.dev gives no publish time (as for r_go),
+    and the Docker Hub tag moves with each image rebuild (as for r_k8s_images).
+    AGENTAINER_IMAGE uses the release r_agentainer_release picks, so the variant
+    follows AGENTAINER_RELEASE_VERSION.
+    """
+    base = EXTRA_FILES.base or REPO_ROOT
+    path = os.path.join(base, KELOS_CONTAINERFILE)
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError as e:
+        raise LookupFailed("%s: %s" % (KELOS_CONTAINERFILE, e))
+    old = read_containerfile_args(text, KELOS_ARGS)
+    new = dict(old)
+
+    tag, commit, skipped = pick_kelos_fork_tag(utcnow())
+    if tag is None:
+        keep_pin(KELOS_FORK)
+    elif kelos_capture_older(old["KELOS_CAPTURE_VERSION"], tag):
+        if not skipped:
+            raise LookupFailed("r_kelos would downgrade KELOS_CAPTURE_VERSION from %s to %s"
+                               % (old["KELOS_CAPTURE_VERSION"], tag))
+        print("bump_versions: r_kelos: the newest %s tag old enough (%s) sorts below the %s pin; keeping it"
+              % (KELOS_FORK, tag, old["KELOS_CAPTURE_VERSION"]), file=sys.stderr)
+    else:
+        check_kelos_copies(base, tag, commit)
+        new["KELOS_FORK_COMMIT"], new["KELOS_CAPTURE_VERSION"] = commit, tag
+
+    # The official golang image sets GOTOOLCHAIN=local, so its Go must satisfy go.mod.
+    go = parse_go(fetch_json("https://go.dev/dl/?mode=json"))["GO_VERSION"]
+    mod = fetch_json("https://api.github.com/repos/%s/contents/go.mod?ref=%s" % (KELOS_FORK, new["KELOS_FORK_COMMIT"]))
+    try:
+        need = parse_go_mod_go(base64.b64decode(mod.get("content", "")).decode())
+    except (binascii.Error, UnicodeDecodeError) as e:
+        raise LookupFailed("%s %s: go.mod: %s" % (KELOS_FORK, new["KELOS_CAPTURE_VERSION"], e))
+    have = tuple(int(x) for x in go.split("."))
+    if have < need:
+        raise LookupFailed("%s %s needs Go %s, newer than Go %s"
+                           % (KELOS_FORK, new["KELOS_CAPTURE_VERSION"], ".".join(map(str, need)), go))
+    new["GOLANG_IMAGE"] = hub_ref("library/golang", go,
+                                  fetch_json("https://hub.docker.com/v2/repositories/library/golang/tags/%s" % go))
+
+    release = agentainer_release(fetch_json("https://api.github.com/repos/%s/releases?per_page=100" % AGENTAINER_REPO))
+    new["AGENTAINER_IMAGE"] = "%s:%s@%s" % (AGENTAINER_IMAGE, release, ghcr_index_digest(AGENTAINER_REPO, release))
+
+    bad = [why for why in (invalid(k, v) for k, v in sorted(new.items())) if why]
+    if bad:
+        raise LookupFailed("r_kelos refuses to write %s" % "; ".join(bad))
+    kelos_images_not_older(old, new)
+    changed = {k: v for k, v in new.items() if old[k] != v}
+    if changed:
+        EXTRA_FILES.files[KELOS_CONTAINERFILE] = rewrite_containerfile_args(text, changed)
+        for k in KELOS_ARGS:
+            if k in changed:
+                EXTRA_FILES.changes.append("%s %s: %s -> %s" % (KELOS_CONTAINERFILE, k, old[k], new[k]))
+    return {}
+
+
+
+
 RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_gosec, r_gitleaks, r_containerssh_agent,
-             r_abtop, r_unslop, r_golangci, r_kubectl, r_helm, r_awscli, r_tea, r_claude, r_node, r_codex, r_agy,
-             r_opencode, r_k8s_images, r_buildkit, r_extras]
+             r_abtop, r_unslop, r_golangci, r_kubectl, r_helm, r_awscli, r_tea, r_fj, r_crane, r_kyverno,
+             r_actionlint, r_zizmor, r_hadolint, r_ast_grep, r_difftastic, r_delta, r_scc, r_hyperfine,
+             r_lazygit, r_glow, r_syft, r_grype, r_claude, r_node, r_codex, r_agy,
+             r_opencode, r_k8s_images, r_buildkit, r_agentainer_release, r_extras, r_kelos]
 
 
 def write_atomic(path, text):
@@ -1133,9 +1858,11 @@ def main(argv=None, resolvers=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--file", default="versions.env")
     ap.add_argument("--only", nargs="*", help="resolver names such as r_go r_agy")
-    ap.add_argument("--failures", help="file to list failed extras checks in, one per line (empty when none)")
+    ap.add_argument("--failures", help="file to list failed resolvers and extras checks in, one per line (empty when none)")
     args = ap.parse_args(argv)
     EXTRA_FILES.reset(None, {})
+    del RESOLVER_FAILURES[:]
+    del YOUNG_RELEASES[:]
     if args.failures:
         # A later workflow step reads this file, so it exists even when the run fails.
         try:
@@ -1156,14 +1883,14 @@ def main(argv=None, resolvers=None):
 
 
 def report_failures(path):
-    """Write the failed extras checks to path and print them, on every exit from main.
+    """Write the failed resolvers and extras checks to path and print them, on every exit from main.
 
     Failed checks keep their pins while the other pins still go out. The lines
     go to path, which a later workflow step fails on when it is not empty, then
     to stdout (and a GitHub Actions warning). Never raises. Returns False when
     failures exist but path could not be written, True otherwise.
     """
-    failures = list(EXTRA_FILES.failures)
+    failures = RESOLVER_FAILURES + list(EXTRA_FILES.failures)
     ok = True
     if path:
         try:
@@ -1188,6 +1915,19 @@ def report_failures(path):
     return ok
 
 
+def older_than_pin(result, old, npm_keys):
+    """The first _VERSION key in result whose value sorts below its current pin, or None."""
+    for key, value in result.items():
+        if key.endswith("_VERSION") and key in old and old[key] != value:
+            order = npm_version_key if key in npm_keys else version_key
+            try:
+                if order(strip_v(value)) < order(strip_v(old[key])):
+                    return key
+            except ValueError:
+                continue
+    return None
+
+
 def bump(args, resolvers):
     known = {r.__name__ for r in RESOLVERS}
     unknown = sorted(set(args.only or []) - known)
@@ -1202,23 +1942,48 @@ def bump(args, resolvers):
     base = os.path.dirname(os.path.abspath(args.file))
     EXTRA_FILES.reset(base, values(lines))
     updates = {}
-    try:
-        for r in chosen:
-            updates.update(r())
-    except LookupFailed as e:
-        print("bump_versions: %s" % e, file=sys.stderr)
-        return 1
-    except (KeyError, IndexError, TypeError, ValueError) as e:
-        # Upstream returned something with an unexpected shape.
-        print("bump_versions: unexpected upstream data in %s: %r" % (getattr(r, "__name__", r), e), file=sys.stderr)
-        return 1
+    old = values(lines)
+    npm_keys = {key for key, _, _ in EXTRAS}
+    # A failed resolver keeps its pins; one failed publisher check, such as an expired
+    # signing key, must not hold back every other tool.
+    for r in chosen:
+        name = getattr(r, "__name__", repr(r))
+        del AGE_FALLBACK[:]
+        try:
+            result = r()
+            below = AGE_FALLBACK and older_than_pin(result, old, npm_keys)
+            if below:
+                # The release old enough to pin is older than the current pin, which an
+                # earlier run took before it was old enough. Keep the current pin.
+                print("bump_versions: %s: the newest release old enough sorts below the %s pin; keeping it"
+                      % (name, below), file=sys.stderr)
+                result = {}
+            updates.update(result)
+        except LookupFailed as e:
+            reason = str(e)
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            # Upstream returned something with an unexpected shape.
+            reason = "unexpected upstream data: %r" % (e,)
+        else:
+            continue
+        line = "%s: %s" % (name, " ".join(reason.split()))
+        print("bump_versions: %s; its pins are unchanged" % line, file=sys.stderr)
+        RESOLVER_FAILURES.append(line)
+    # Releases skipped for their age go to stdout with the pin changes, which the scheduled
+    # workflow puts in the pull request text. They never fail the run.
+    for line in YOUNG_RELEASES:
+        print("release age: %s" % line)
     bad = [why for why in (invalid(k, v) for k, v in sorted(updates.items())) if why]
     if bad:
         for why in bad:
             print("bump_versions: refusing to write %s" % why, file=sys.stderr)
         return 1
-    old = values(lines)
-    npm_keys = {key for key, _, _ in EXTRAS}
+    # A manifest that repeats a pin must exist, or versions.env and the manifest drift apart.
+    missing = [rel for key, _, _, rel in K8S_IMAGES if key in updates and not os.path.isfile(os.path.join(base, rel))]
+    if missing:
+        for rel in missing:
+            print("bump_versions: %s is missing; pins unchanged" % rel, file=sys.stderr)
+        return 1
     for key, value in updates.items():
         if key.endswith("_VERSION") and key in old and old[key] != value:
             order = npm_version_key if key in npm_keys else version_key
@@ -1231,6 +1996,8 @@ def bump(args, resolvers):
     for k in sorted(updates):
         if old.get(k) != updates[k]:
             print("%s: %s -> %s" % (k, old.get(k, "(new)"), updates[k]))
+    for line in EXTRA_FILES.changes:
+        print(line)
     for extra in EXTRA_FILES.regenerated:
         print("extras %s: lockfile regenerated" % extra)
     # versions.env goes last, so an interrupted run never pins a version whose catalog files are missing.
@@ -1239,12 +2006,34 @@ def bump(args, resolvers):
     # The Kubernetes example must use the same image references as versions.env.
     for key, _, _, rel in K8S_IMAGES:
         path = os.path.join(base, rel)
-        if key in updates and os.path.exists(path):
+        if key in updates:
             with open(path) as f:
                 text = f.read()
             write_atomic(path, rewrite_image_ref(text, updates[key]))
+    # The launcher, the Kubernetes example and the docs default to the pinned release.
+    release_old = old.get("AGENTAINER_RELEASE_VERSION")
+    release_new = updates.get("AGENTAINER_RELEASE_VERSION")
+    if release_old and release_new and release_old != release_new:
+        for rel in sorted({rel for rel, _ in RELEASE_REFS}):
+            path = os.path.join(base, rel)
+            if not os.path.exists(path):
+                continue
+            with open(path) as f:
+                text = f.read()
+            for prefix in (p for r, p in RELEASE_REFS if r == rel):
+                text = rewrite_release_ref(text, prefix, release_old, release_new)
+            write_atomic(path, text)
+    # docs/extras.md names each extra's pin.
+    doc_changes = {package: (old[key], updates[key]) for key, package, _ in EXTRAS
+                   if old.get(key) and updates.get(key) and old[key] != updates[key]}
+    doc = os.path.join(base, EXTRAS_DOC)
+    if doc_changes and os.path.exists(doc):
+        with open(doc) as f:
+            text = f.read()
+        write_atomic(doc, rewrite_extras_doc(text, doc_changes))
     write_atomic(args.file, render_env(lines, updates))
-    return 0
+    # With --failures, the workflow fails the run on that file after the pull request opens.
+    return 1 if RESOLVER_FAILURES and not args.failures else 0
 
 
 if __name__ == "__main__":

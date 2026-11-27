@@ -32,7 +32,7 @@ for var in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_USE_BEDROCK \
 	CLAUDE_CODE_USE_ANTHROPIC_AWS AWS_BEARER_TOKEN_BEDROCK ANTHROPIC_BASE_URL; do
 	out=$(kr -e KELOS_AGENT_TYPE=claude-code -e KELOS_SESSION_SETUP_ONLY=1 -e "$var=x" -- /kelos_entrypoint.sh 2>&1)
 	rc=$?
-	if [ "$rc" -ne 0 ]; then pass "guard exits non-zero for $var"; else fail "guard exits non-zero for $var" "exit $rc"; fi
+	if [ "$rc" -eq 78 ]; then pass "guard exits 78 for $var"; else fail "guard exits 78 for $var" "exit $rc"; fi
 	assert_contains "guard names $var" "$var" "$out"
 done
 
@@ -43,7 +43,7 @@ for key in apiKeyHelper awsAuthRefresh awsCredentialExport gcpAuthRefresh; do
 		mkdir -p ~/.claude && printf "{\"'"$key"'\": \"/bin/true\"}" > ~/.claude/settings.json
 		/kelos_entrypoint.sh' 2>&1)
 	rc=$?
-	if [ "$rc" -ne 0 ]; then pass "guard exits non-zero for user settings $key"; else fail "guard exits non-zero for user settings $key" "exit $rc"; fi
+	if [ "$rc" -eq 78 ]; then pass "guard exits 78 for user settings $key"; else fail "guard exits 78 for user settings $key" "exit $rc"; fi
 	assert_contains "guard names $key" "$key" "$out"
 done
 # shellcheck disable=SC2016 # expands in the container
@@ -52,7 +52,7 @@ out=$(kr -e KELOS_AGENT_TYPE=claude-code -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c 
 	&& printf "{\"apiKeyHelper\": \"x\"}" > .claude/settings.local.json
 	/kelos_entrypoint.sh' 2>&1)
 rc=$?
-if [ "$rc" -ne 0 ]; then pass "guard exits non-zero for project local settings"; else fail "guard exits non-zero for project local settings" "exit $rc"; fi
+if [ "$rc" -eq 78 ]; then pass "guard exits 78 for project local settings"; else fail "guard exits 78 for project local settings" "exit $rc"; fi
 assert_contains "guard names apiKeyHelper in project local file" "apiKeyHelper" "$out"
 
 # A clean Claude pod gets through the guard.
@@ -125,10 +125,12 @@ assert_contains "guard names KELOS_SETUP_COMMAND" "KELOS_SETUP_COMMAND" "$out"
 kr -e KELOS_AGENT_TYPE=claude-code -e KELOS_SESSION_SETUP_ONLY=1 -e anthropic_api_key=x -- /kelos_entrypoint.sh >/dev/null 2>&1
 assert_eq "guard refuses a lowercase anthropic_api_key" "78" "$?"
 
-# Codex: a second start on the same home keeps one setting and the first auth.json.
-# No prompt is given, so each start stops right after writing its files.
+# Codex: the Kelos entrypoint appends cli_auth_credentials_store to config.toml on
+# every start, and the home reset gives each start a new config.toml, so a second
+# start on the same home still has one line. No prompt is given, so each start
+# stops right after writing its files.
 # shellcheck disable=SC2016 # expands in the container
-assert_eq "second codex start leaves one cli_auth_credentials_store line" "1" "$(kr -e KELOS_AGENT_TYPE=codex -e 'CODEX_AUTH_JSON={"new":1}' -- sh -c '
+assert_eq "the home reset keeps one cli_auth_credentials_store line across two starts" "1" "$(kr -e KELOS_AGENT_TYPE=codex -e 'CODEX_AUTH_JSON={"new":1}' -- sh -c '
 	rm -rf ~/.codex; mkdir -p ~/.codex
 	/kelos_entrypoint.sh >/dev/null 2>&1
 	/kelos_entrypoint.sh >/dev/null 2>&1
@@ -158,7 +160,7 @@ out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e 'CODEX_AUTH_
 	echo "config=$(cat $h/config.toml)"
 	echo "agents=$(cat $h/AGENTS.md)"' 2>&1)
 assert_contains "reset: the start succeeds" "rc=0" "$out"
-assert_contains "reset: only AGENTS.md, auth.json and config.toml remain" "entries=AGENTS.md,auth.json,config.toml,end" "$out"
+assert_contains "reset: only the lock file, AGENTS.md, auth.json and config.toml remain" "entries=.agentainer-codex.lock,AGENTS.md,auth.json,config.toml,end" "$out"
 assert_contains "reset: auth.json is byte-identical" "auth=same" "$out"
 assert_contains "reset: auth.json keeps mode 600" "mode=600" "$out"
 assert_contains "reset: config.toml is written fresh" 'config=cli_auth_credentials_store = "file"
@@ -182,7 +184,7 @@ out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e 'CODEX_AUTH_
 	echo "inner=$(cat /tmp/out/dir/inner)"
 	echo "outside=$(LC_ALL=C ls -A /tmp/out | tr "\n" ",")end"' 2>&1)
 assert_contains "reset with symlinks: the start succeeds" "rc=0" "$out"
-assert_contains "reset with symlinks: the links are gone" "entries=auth.json,config.toml,end" "$out"
+assert_contains "reset with symlinks: the links are gone" "entries=.agentainer-codex.lock,auth.json,config.toml,end" "$out"
 assert_contains "reset with symlinks: config.toml is a new regular file" "config=notlink" "$out"
 assert_contains "reset with symlinks: the file target is untouched" "target=keep" "$out"
 assert_contains "reset with symlinks: the directory target is untouched" "inner=keep" "$out"
@@ -228,7 +230,7 @@ out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c '
 	echo "outside=$(stat -c %a /tmp/out2) $(cat /tmp/out2/k)"' 2>&1)
 assert_contains "locked directories: the start succeeds" "rc=0" "$out"
 assert_contains "locked directories: the next start succeeds" "rc2=0" "$out"
-assert_contains "locked directories: both trees are gone" "entries=config.toml,end" "$out"
+assert_contains "locked directories: both trees are gone" "entries=.agentainer-codex.lock,config.toml,end" "$out"
 assert_contains "locked directories: the symlink target keeps its mode and content" "outside=500 keep" "$out"
 
 # auth.json is checked against CODEX_AUTH_JSON. The JSON below is fake and holds no
@@ -238,8 +240,9 @@ assert_contains "locked directories: the symlink target keeps its mode and conte
 # reason and never a token value.
 secret='{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"id-from-secret","access_token":"at-from-secret","refresh_token":"rt-from-secret","account_id":"acct-a"}}'
 # shellcheck disable=SC2016 # expands in the container
+# auth_case FILE [SECRET]: SECRET defaults to $secret.
 auth_case() {
-	kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e "CODEX_AUTH_JSON=$secret" -e "OLD_AUTH=$1" -- sh -c '
+	kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e "CODEX_AUTH_JSON=${2:-$secret}" -e "OLD_AUTH=$1" -- sh -c '
 		f=/home/kelos/.codex/auth.json
 		printf "%s" "$OLD_AUTH" > $f && chmod 644 $f
 		before=$(sha256sum < $f)
@@ -256,13 +259,13 @@ assert_contains "auth same account: the start succeeds" "rc=0" "$out"
 assert_contains "auth same account: refreshed tokens are kept byte for byte" "auth=kept" "$out"
 assert_absent "auth same account: no reseed is logged" "$out" "rc=0" "reseeded auth.json"
 assert_contains "auth same account: a kept file at mode 644 comes out 600" "mode=600" "$out"
-assert_contains "auth same account: codex login status leaves nothing in the home" "entries=auth.json,config.toml,end" "$out"
+assert_contains "auth same account: codex login status leaves nothing in the home" "entries=.agentainer-codex.lock,auth.json,config.toml,end" "$out"
 assert_contains "auth same account: the check directory is removed" "checkdirs=0" "$out"
 out=$(auth_case '{"tokens": {"id_token": "id-x", "access_token"')
 assert_contains "auth invalid JSON: reseeded from CODEX_AUTH_JSON" "auth=reseeded" "$out"
 assert_contains "auth invalid JSON: the log says why" "reseeded auth.json from CODEX_AUTH_JSON because it is not a single JSON object" "$out"
 assert_contains "auth invalid JSON: the new file has mode 600" "mode=600" "$out"
-assert_contains "auth invalid JSON: no temp file is left" "entries=auth.json,config.toml,end" "$out"
+assert_contains "auth invalid JSON: no temp file is left" "entries=.agentainer-codex.lock,auth.json,config.toml,end" "$out"
 out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"id-other","access_token":"at-other","refresh_token":"rt-other","account_id":"acct-b"}}')
 assert_contains "auth other account: reseeded from CODEX_AUTH_JSON" "auth=reseeded" "$out"
 assert_contains "auth other account: the log says why" "because its tokens.account_id differs from CODEX_AUTH_JSON" "$out"
@@ -274,12 +277,36 @@ out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":"sk-fake","tokens":{"id
 assert_contains "auth with an added API key: reseeded from CODEX_AUTH_JSON" "auth=reseeded" "$out"
 assert_contains "auth with an added API key: the log names the field" "because its OPENAI_API_KEY differs from CODEX_AUTH_JSON" "$out"
 assert_absent "auth with an added API key: the key is not printed" "$out" "auth=reseeded" "sk-fake"
+# The account in the id_token counts too. jwt builds a fake unsigned JWT with the
+# given payload; Codex does not check the signature of a stored id_token.
+jwt() { printf 'eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.%s.sig' "$(printf '%s' "$1" | base64 | tr '+/' '-_' | tr -d '=\n')"; }
+jwt_b=$(jwt '{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-b"}}')
+out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"'"$jwt_b"'","access_token":"at-rotated","refresh_token":"rt-rotated","account_id":"acct-a"}}')
+assert_contains "auth id_token for another account: reseeded from CODEX_AUTH_JSON" "auth=reseeded" "$out"
+assert_contains "auth id_token for another account: the log says why" "because its tokens.account_id and its id_token name different accounts" "$out"
+out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"'"$jwt_b"'","access_token":"at-rotated","refresh_token":"rt-rotated"}}')
+assert_contains "auth with only an id_token account, another one: reseeded" "auth=reseeded" "$out"
+assert_contains "auth with only an id_token account, another one: the log says why" "because its account differs from CODEX_AUTH_JSON" "$out"
+assert_absent "auth with only an id_token account: no account is printed" "$out" "auth=reseeded" "acct-b"
+# No account on either side cannot be compared, so the file is replaced.
+out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"id-rotated","access_token":"at-rotated","refresh_token":"rt-rotated"}}' \
+	'{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"id-from-secret","access_token":"at-from-secret","refresh_token":"rt-from-secret"}}')
+assert_contains "auth with no account anywhere: reseeded" "auth=reseeded" "$out"
+assert_contains "auth with no account anywhere: the log says why" "because CODEX_AUTH_JSON names no account" "$out"
+# Same account, another user.
+jwt_u1=$(jwt '{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-a","chatgpt_user_id":"user-1"}}')
+jwt_u2=$(jwt '{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-a","chatgpt_user_id":"user-2"}}')
+out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"'"$jwt_u2"'","access_token":"at-rotated","refresh_token":"rt-rotated","account_id":"acct-a"}}' \
+	'{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"'"$jwt_u1"'","access_token":"at-from-secret","refresh_token":"rt-from-secret","account_id":"acct-a"}}')
+assert_contains "auth for another user of the account: reseeded" "auth=reseeded" "$out"
+assert_contains "auth for another user of the account: the log says why" "because its id_token names another user than CODEX_AUTH_JSON" "$out"
+assert_absent "auth for another user: no user is printed" "$out" "auth=reseeded" "user-1" "user-2"
 # Files that pass the field checks but that Codex refuses to load: an id_token that
 # is not a JWT, and a duplicate key (jq keeps the last value, Codex rejects the file).
 out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"id-not-a-jwt","access_token":"at-rotated","refresh_token":"rt-rotated","account_id":"acct-a"}}')
 assert_contains "auth id_token not a JWT: reseeded from CODEX_AUTH_JSON" "auth=reseeded" "$out"
 assert_contains "auth id_token not a JWT: the log says why" "because codex login status rejects it (exit 1)" "$out"
-assert_contains "auth id_token not a JWT: no check directory or tmp is left in the home" "entries=auth.json,config.toml,end" "$out"
+assert_contains "auth id_token not a JWT: no check directory or tmp is left in the home" "entries=.agentainer-codex.lock,auth.json,config.toml,end" "$out"
 assert_absent "auth id_token not a JWT: no token value is printed" "$out" "auth=reseeded" "id-not-a-jwt" "rt-rotated"
 out=$(auth_case '{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"OPENAI_API_KEY":null,"tokens":{"id_token":"'"$fake_jwt"'","access_token":"at-rotated","refresh_token":"rt-rotated","account_id":"acct-a"}}')
 assert_contains "auth duplicate OPENAI_API_KEY: reseeded from CODEX_AUTH_JSON" "auth=reseeded" "$out"
@@ -343,8 +370,146 @@ out=$(kr --user 0 -e KELOS_AGENT_TYPE=codex -e HOME=/home/kelos -e 'KELOS_AGENTS
 	printf "model = \"planted\"\n" > $h/config.toml && printf "planted\n" > $h/EXTRA.md && chown -R 61100:61100 $h
 	setpriv --reuid 61100 --regid 61100 --clear-groups /kelos_entrypoint.sh hi; echo "rc=$?"' 2>&1)
 assert_contains "real start: the entrypoint exits 0" "rc=0" "$out"
-assert_contains "real start: codex sees only AGENTS.md" "stub-entries=AGENTS.md,end" "$out"
+assert_contains "real start: codex sees only the lock file and AGENTS.md" "stub-entries=.agentainer-codex.lock,AGENTS.md,end" "$out"
 assert_absent "real start: codex sees no planted config.toml" "$out" "stub-entries=" "planted"
+
+# A Codex home left at mode 500 does not stop later starts.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c '
+	h=/home/kelos/.codex
+	printf "x\n" > $h/EXTRA.md && chmod 500 $h
+	/kelos_entrypoint.sh; echo "rc=$?"
+	echo "mode=$(stat -c %a $h)"
+	echo "entries=$(LC_ALL=C ls -A $h | tr "\n" ",")end"' 2>&1)
+assert_contains "home at mode 500: the start succeeds" "rc=0" "$out"
+assert_contains "home at mode 500: the owner gets rwx back" "mode=700" "$out"
+assert_contains "home at mode 500: the planted file is gone" "entries=.agentainer-codex.lock,config.toml,end" "$out"
+
+# Two starts on one Codex home: the second waits until the first run ends, so it
+# never removes a file the running codex uses. Run A's stub codex writes a file,
+# waits 4 s, and reports whether the file is still there. Run B starts 1 s after A.
+# shellcheck disable=SC2016 # expands in the stub
+lock_stub='#!/bin/sh
+touch "$CODEX_HOME/a-running"
+sleep 4
+if [ -e "$CODEX_HOME/a-running" ]; then echo "a-file=present" >&2; else echo "a-file=gone" >&2; fi
+'
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr --user 0 -e KELOS_AGENT_TYPE=codex -e HOME=/home/kelos -e "STUB=$lock_stub" -- sh -c '
+	printf "%s" "$STUB" > /usr/local/bin/codex && chmod 755 /usr/local/bin/codex
+	as_kelos() { setpriv --reuid 61100 --regid 61100 --clear-groups "$@"; }
+	as_kelos /kelos_entrypoint.sh hi >/tmp/a.out 2>&1 &
+	a=$!
+	sleep 1
+	as_kelos env KELOS_SESSION_SETUP_ONLY=1 /kelos_entrypoint.sh >/tmp/b.out 2>&1; echo "b-rc=$?"
+	wait $a; echo "a-rc=$?"
+	echo "after=$(LC_ALL=C ls -A /home/kelos/.codex | tr "\n" ",")end"
+	cat /tmp/a.out /tmp/b.out' 2>&1)
+assert_contains "shared home: run A keeps its files while it runs" "a-file=present" "$out"
+assert_contains "shared home: run B says it waits" "another Codex run holds /home/kelos/.codex/.agentainer-codex.lock" "$out"
+assert_contains "shared home: run B succeeds after A" "b-rc=0" "$out"
+assert_contains "shared home: run B's reset ran after A ended" "after=.agentainer-codex.lock,config.toml,end" "$out"
+
+# The auth.json checks run again once the lock is held. Run A's stub codex marks
+# that it runs, waits 2 s, then puts a symlink in place of auth.json. Run B starts
+# after the mark, passes the first check, waits for the lock and must refuse after
+# A ends, without changing the mode of the link target.
+# shellcheck disable=SC2016 # expands in the stub
+relink_stub='#!/bin/sh
+touch /tmp/a-started
+sleep 2
+rm -f "$CODEX_HOME/auth.json" && ln -s /tmp/auth-target.json "$CODEX_HOME/auth.json"
+sleep 2
+'
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr --user 0 -e KELOS_AGENT_TYPE=codex -e HOME=/home/kelos -e "STUB=$relink_stub" -- sh -c '
+	printf "%s" "$STUB" > /usr/local/bin/codex && chmod 755 /usr/local/bin/codex
+	as_kelos() { setpriv --reuid 61100 --regid 61100 --clear-groups "$@"; }
+	as_kelos sh -c "printf x > /home/kelos/.codex/auth.json && printf outside > /tmp/auth-target.json && chmod 644 /tmp/auth-target.json"
+	as_kelos /kelos_entrypoint.sh hi >/tmp/a.out 2>&1 &
+	a=$!
+	for i in $(seq 1 50); do [ -e /tmp/a-started ] && break; sleep 0.2; done
+	as_kelos env KELOS_SESSION_SETUP_ONLY=1 /kelos_entrypoint.sh >/tmp/b.out 2>&1; echo "b-rc=$?"
+	wait $a
+	echo "target=$(stat -c %a /tmp/auth-target.json) $(cat /tmp/auth-target.json)"
+	cat /tmp/b.out' 2>&1)
+assert_contains "auth.json replaced while waiting: run B waited for the lock" "another Codex run holds" "$out"
+assert_contains "auth.json replaced while waiting: run B is refused with exit 78" "b-rc=78" "$out"
+assert_contains "auth.json replaced while waiting: the refusal names the symlink" "auth.json is a symlink" "$out"
+assert_contains "auth.json replaced while waiting: the link target keeps its mode" "target=644 outside" "$out"
+
+# A lock file left at mode 000 does not stop the next start; it gets owner read and write.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c '
+	l=/home/kelos/.codex/.agentainer-codex.lock
+	: > $l && chmod 000 $l
+	/kelos_entrypoint.sh; echo "rc=$?"
+	echo "lock-mode=$(stat -c %a $l)"' 2>&1)
+assert_contains "lock file at mode 000: the start succeeds" "rc=0" "$out"
+assert_contains "lock file at mode 000: the owner gets read and write" "lock-mode=600" "$out"
+
+# Only codex keeps the lock's file descriptor; the setup command (under node), codex
+# login status and kelos-capture run without it. CODEX_AUTH_JSON is gone from the
+# environment of the setup command, codex and a command codex runs. Each stub writes
+# what it sees to a file. The existing auth.json holds the same account as
+# CODEX_AUTH_JSON, so codex login status runs too. The stub texts are unset before
+# the start, because the codex stub's own text holds the token value it looks for.
+# shellcheck disable=SC2016 # expands in the stub
+fd_codex_stub='#!/bin/sh
+if [ "$1" = login ]; then ls -l /proc/$$/fd >/tmp/fd-login 2>&1; exit 0; fi
+{
+	echo "codex-auth=${CODEX_AUTH_JSON:-unset}"
+	sh -c "echo cmd-auth=\${CODEX_AUTH_JSON:-unset}"
+	echo "codex-env-token=$(env | grep -c rt-from-secret)"
+	ls -l /proc/$$/fd
+} >/tmp/fd-codex 2>&1
+exit 0
+'
+# shellcheck disable=SC2016 # expands in the stub
+fd_capture_stub='#!/bin/sh
+ls -l /proc/$$/fd >/tmp/fd-capture 2>&1
+cat >/dev/null
+'
+same_auth='{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"'"$fake_jwt"'","access_token":"at-rotated","refresh_token":"rt-rotated","account_id":"acct-a"}}'
+# shellcheck disable=SC2016 # expands in the container and the setup command
+out=$(kr --user 0 -e KELOS_AGENT_TYPE=codex -e HOME=/home/kelos -e "CODEX_AUTH_JSON=$secret" -e "OLD_AUTH=$same_auth" \
+	-e "CSTUB=$fd_codex_stub" -e "KSTUB=$fd_capture_stub" \
+	-e 'KELOS_SETUP_COMMAND=["sh","-c","{ echo setup-auth=${CODEX_AUTH_JSON:-unset}; ls -l /proc/$$/fd; } >/tmp/fd-setup 2>&1"]' -- sh -c '
+	printf "%s" "$CSTUB" > /usr/local/bin/codex && chmod 755 /usr/local/bin/codex
+	printf "%s" "$KSTUB" > /kelos/kelos-capture && chmod 755 /kelos/kelos-capture
+	printf "%s" "$OLD_AUTH" > /home/kelos/.codex/auth.json && chown 61100:61100 /home/kelos/.codex/auth.json
+	unset CSTUB KSTUB OLD_AUTH
+	setpriv --reuid 61100 --regid 61100 --clear-groups /kelos_entrypoint.sh hi; echo "rc=$?"
+	for f in setup login codex capture; do
+		[ -e /tmp/fd-$f ] && echo "$f-ran"
+		echo "$f-lock=$(grep -c agentainer-codex.lock /tmp/fd-$f 2>/dev/null)"
+	done
+	grep -h -e "-auth=" -e "codex-env-token=" /tmp/fd-setup /tmp/fd-codex' 2>&1)
+assert_contains "lock fd: the start exits 0" "rc=0" "$out"
+for f in setup login codex capture; do
+	assert_contains "lock fd: the $f stub ran" "$f-ran" "$out"
+done
+assert_contains "lock fd: codex keeps the lock descriptor" "codex-lock=1" "$out"
+for f in setup login capture; do
+	assert_contains "lock fd: $f runs without the lock descriptor" "$f-lock=0" "$out"
+done
+assert_contains "CODEX_AUTH_JSON: the setup command does not get it" "setup-auth=unset" "$out"
+assert_contains "CODEX_AUTH_JSON: codex does not get it" "codex-auth=unset" "$out"
+assert_contains "CODEX_AUTH_JSON: a command codex runs does not get it" "cmd-auth=unset" "$out"
+assert_contains "CODEX_AUTH_JSON: no token value is in the codex environment" "codex-env-token=0" "$out"
+
+# The Codex entrypoint exits with codex's status, or with kelos-capture's status
+# when codex succeeded. Stubs replace both binaries.
+for case in "0 5 5" "3 5 3" "0 0 0"; do
+	# shellcheck disable=SC2086 # the case splits into its three numbers on purpose
+	set -- $case
+	# shellcheck disable=SC2016 # expands in the container
+	out=$(kr --user 0 -e KELOS_AGENT_TYPE=codex -e HOME=/home/kelos -e "AGENT_RC=$1" -e "CAPTURE_RC=$2" -- sh -c '
+		printf "#!/bin/sh\nexit %s\n" "$AGENT_RC" > /usr/local/bin/codex && chmod 755 /usr/local/bin/codex
+		printf "#!/bin/sh\ncat >/dev/null\nexit %s\n" "$CAPTURE_RC" > /kelos/kelos-capture
+		setpriv --reuid 61100 --regid 61100 --clear-groups /kelos_entrypoint.sh hi >/dev/null 2>&1; echo "rc=$?"' 2>&1)
+	assert_eq "codex exit $1 and kelos-capture exit $2: the entrypoint exits $3" "rc=$3" "$out"
+done
 
 # CODEX_HOME must be set, must be /home/kelos/.codex, and must not be a symlink. The
 # dispatcher sets it after its guard; the entrypoint run directly checks it itself.
@@ -379,7 +544,11 @@ out=$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c '
 	export KELOS_SETUP_COMMAND="[\"sh\",\"-c\",\"echo git=\$GIT_SSL_CAINFO; echo ssl=\$SSL_CERT_FILE; echo node=\$NODE_EXTRA_CA_CERTS; echo sys=\$(grep -c BEGIN /etc/ssl/certs/ca-certificates.crt); echo bundle=\$(grep -c BEGIN \$GIT_SSL_CAINFO); grep -c test-proxy-ca-never \$GIT_SSL_CAINFO >/dev/null; cmp /tmp/proxy-ca.crt \$NODE_EXTRA_CA_CERTS && echo nodecmp=same\"]"
 	/kelos_entrypoint.sh' 2>&1)
 git_path=$(printf '%s\n' "$out" | sed -n 's/^git=//p')
-assert_eq "SSL_CERT_FILE equals GIT_SSL_CAINFO" "$git_path" "$(printf '%s\n' "$out" | sed -n 's/^ssl=//p')"
+if [ -n "$git_path" ]; then
+	assert_eq "SSL_CERT_FILE equals GIT_SSL_CAINFO" "$git_path" "$(printf '%s\n' "$out" | sed -n 's/^ssl=//p')"
+else
+	fail "SSL_CERT_FILE equals GIT_SSL_CAINFO" "the setup command printed no GIT_SSL_CAINFO: [$out]"
+fi
 assert_eq "NODE_EXTRA_CA_CERTS is the proxy CA file" "/tmp/proxy-ca.crt" "$(printf '%s\n' "$out" | sed -n 's/^node=//p')"
 sys_count=$(printf '%s\n' "$out" | sed -n 's/^sys=//p')
 bundle_count=$(printf '%s\n' "$out" | sed -n 's/^bundle=//p')
@@ -388,6 +557,27 @@ case "$git_path" in /tmp/kelos-ca.*/ca-bundle.crt) pass "bundle is in a writable
 # A missing proxy CA file is refused.
 kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e PROXY_CA_FILE=/nonexistent -- /kelos_entrypoint.sh >/dev/null 2>&1
 assert_eq "missing PROXY_CA_FILE is refused" "78" "$?"
+# A proxy CA inside /workspace, directly or through a link, or a relative path, is refused.
+for case in "inside|/workspace/repo/ca.crt" "link|/tmp/ca-link.crt" "relative|ca.crt"; do
+	# shellcheck disable=SC2016 # expands in the container
+	out=$(kr --user 0 -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e HOME=/home/kelos -e "CA=${case#*|}" -- sh -c '
+		mkdir -p /workspace/repo && cd /workspace/repo
+		openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -subj /CN=t -keyout /dev/null -out /workspace/repo/ca.crt 2>/dev/null
+		ln -s /workspace/repo/ca.crt /tmp/ca-link.crt
+		chmod 644 /workspace/repo/ca.crt
+		setpriv --reuid 61100 --regid 61100 --clear-groups env PROXY_CA_FILE="$CA" /kelos_entrypoint.sh; echo "rc=$?"' 2>&1)
+	assert_contains "PROXY_CA_FILE ${case%%|*} /workspace is refused" "rc=78" "$out"
+	assert_contains "PROXY_CA_FILE ${case%%|*}: the refusal names PROXY_CA_FILE" "PROXY_CA_FILE" "$out"
+done
+# CA variables the pod sets itself are refused; only the dispatcher sets them.
+for var in GIT_SSL_CAINFO GIT_SSL_CAPATH SSL_CERT_FILE SSL_CERT_DIR NODE_EXTRA_CA_CERTS; do
+	for type in claude-code codex; do
+		out=$(kr -e "KELOS_AGENT_TYPE=$type" -e KELOS_SESSION_SETUP_ONLY=1 -e CLAUDE_CODE_OAUTH_TOKEN=x -e "$var=/tmp/x" -- /kelos_entrypoint.sh 2>&1)
+		rc=$?
+		if [ "$rc" -eq 78 ]; then pass "$type: a pod's own $var is refused"; else fail "$type: a pod's own $var is refused" "exit $rc"; fi
+		assert_contains "$type: the refusal names $var" "$var" "$out"
+	done
+done
 
 # Exported bash functions: bash would import them and replace jq, compgen or claude.
 # shellcheck disable=SC2016 # expands in the container
@@ -444,10 +634,19 @@ out=$(kr -e KELOS_AGENT_TYPE=claude-code -e 'KELOS_AGENTS_MD={"apiKeyHelper":"/b
 assert_contains "settings file was filled by the entrypoint write" '"apiKeyHelper"' "$out"
 assert_contains "wrapper refuses before claude starts" "exit=78" "$out"
 assert_contains "wrapper names the key" "contains apiKeyHelper" "$out"
-# The wrapper is the claude that the entrypoint finds first once the dispatcher has set PATH.
+# The Kelos entrypoint runs "claude" by name, and the dispatcher puts the wrapper
+# first on PATH. A stub in place of the real binary prints its arguments to stderr
+# (stdout goes to kelos-capture). Only the wrapper adds --setting-sources, so the
+# flag shows that the wrapper ran.
+# shellcheck disable=SC2016 # expands in the stub
+path_stub='#!/bin/sh
+for a; do printf "arg=%s\n" "$a" >&2; done
+'
 # shellcheck disable=SC2016 # expands in the container
-assert_eq "wrapper is first on PATH after the dispatcher" "/usr/local/lib/kelos/bin/claude" "$(kr -e KELOS_AGENT_TYPE=claude-code -e KELOS_SESSION_SETUP_ONLY=1 -e 'KELOS_SETUP_COMMAND_UNUSED=1' -- sh -c '
-	PATH=/usr/local/lib/kelos/bin:$PATH command -v claude')"
+out=$(kr --user 0 -e KELOS_AGENT_TYPE=claude-code -e HOME=/home/kelos -e CLAUDE_CODE_OAUTH_TOKEN=x -e "STUB=$path_stub" -- sh -c '
+	printf "%s" "$STUB" >/usr/local/bin/claude && chmod 755 /usr/local/bin/claude
+	cd /tmp && setpriv --reuid 61100 --regid 61100 --clear-groups /kelos_entrypoint.sh hi' 2>&1)
+assert_contains "the dispatcher runs claude through the wrapper" "arg=--setting-sources" "$out"
 
 # Loader and Node option variables, and PATH.
 for var in LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT NODE_OPTIONS; do
@@ -494,6 +693,17 @@ assert_eq "KELOS_MCP_SERVERS is refused for codex" "78" "$?"
 kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e KELOS_MCP_SERVERS= -- /kelos_entrypoint.sh >/dev/null 2>&1
 assert_eq "an empty KELOS_MCP_SERVERS is accepted" "0" "$?"
 
+# A newline in PATH is refused, so no entry hides behind it.
+# shellcheck disable=SC2016 # expands in the container
+assert_eq "PATH with a newline is refused" "78" "$(kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- sh -c 'PATH="$PATH:/ok
+:rel" /kelos_entrypoint.sh >/dev/null 2>&1; echo $?')"
+# A line that starts with BASH_FUNC_ inside a multi-line value is not an exported function.
+assert_eq "BASH_FUNC_ at the start of a line inside KELOS_AGENTS_MD is accepted" "0" "$(
+	kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e 'KELOS_AGENTS_MD=rules
+BASH_FUNC_foo%%=() { :; }' -- /kelos_entrypoint.sh >/dev/null 2>&1
+	echo $?
+)"
+
 # PATH entries: empty, relative and .. components are refused, wherever they sit.
 # shellcheck disable=SC2016 # the PATH values expand in the container
 for bad in '$PATH:' '$PATH::/opt/x' ':$PATH' '$PATH:.' '$PATH:..' '$PATH:rel/dir' '$PATH:/opt/../tmp' '$PATH:/opt/./x'; do
@@ -524,6 +734,7 @@ $v=$(val "$v")
 	*) missing="$missing $v" ;;
 	esac
 done
+[ -n "$allow" ] || missing="(the allowlist could not be read)"
 assert_eq "every allowlisted variable reaches claude" "" "$missing"
 assert_absent "BUN_OPTIONS, an unknown variable and others are dropped" "$seen" "PATH=" BUN_OPTIONS UNKNOWN_VAR OPENAI_API_KEY NODE_PATH
 assert_contains "claude gets the fixed image PATH" "PATH=/home/kelos/.local/bin:/usr/local/go/bin:/opt/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "$seen"
@@ -568,7 +779,7 @@ for v in GIT_AUTHOR_NAME=n GIT_AUTHOR_EMAIL=e@x GIT_COMMITTER_NAME=n GIT_COMMITT
 done
 
 # push-sidecar. Argument and environment checks.
-for case in "PUSH_URL unset|PUSH_BRANCH=task" "PUSH_URL is http|PUSH_URL=http://github.com/o/r.git PUSH_BRANCH=task" "PUSH_URL has credentials|PUSH_URL=https://u:p@github.com/o/r.git PUSH_BRANCH=task" "PUSH_URL is another host|PUSH_URL=https://example.com/o/r.git PUSH_BRANCH=task" "PUSH_URL is a local path without the test switch|PUSH_URL=/tmp/r.git PUSH_BRANCH=task" "PUSH_BRANCH unset|PUSH_URL=https://github.com/o/r.git" "bad branch name|PUSH_URL=https://github.com/o/r.git PUSH_BRANCH=-x" "branch with a tilde|PUSH_URL=https://github.com/o/r.git PUSH_BRANCH=a~b" "missing token file|PUSH_URL=https://github.com/o/r.git PUSH_BRANCH=task KELOS_GITHUB_TOKEN_FILE=/nonexistent" "bad interval|PUSH_URL=https://github.com/o/r.git PUSH_BRANCH=task KELOS_GITHUB_TOKEN_FILE=/etc/hostname PUSH_INTERVAL=abc"; do
+for case in "PUSH_URL unset|PUSH_BRANCH=task" "PUSH_URL is http|PUSH_URL=http://github.com/o/r.git PUSH_BRANCH=task" "PUSH_URL has credentials|PUSH_URL=https://u:p@github.com/o/r.git PUSH_BRANCH=task" "PUSH_URL is another host|PUSH_URL=https://example.com/o/r.git PUSH_BRANCH=task" "PUSH_URL is a local path without the test switch|PUSH_URL=/tmp/r.git PUSH_BRANCH=task" "PUSH_BRANCH unset|PUSH_URL=https://github.com/o/r.git" "bad branch name|PUSH_URL=https://github.com/o/r.git PUSH_BRANCH=-x" "branch with a tilde|PUSH_URL=https://github.com/o/r.git PUSH_BRANCH=a~b" "missing token file|PUSH_URL=https://github.com/o/r.git PUSH_BRANCH=task KELOS_GITHUB_TOKEN_FILE=/nonexistent" "bad interval|PUSH_URL=https://github.com/o/r.git PUSH_BRANCH=task KELOS_GITHUB_TOKEN_FILE=/etc/hostname PUSH_INTERVAL=abc" "no author email|PUSH_URL=https://github.com/o/r.git PUSH_BRANCH=task KELOS_GITHUB_TOKEN_FILE=/etc/hostname GIT_AUTHOR_NAME=Bot"; do
 	name=${case%%|*}
 	vars=${case#*|}
 	# shellcheck disable=SC2086 # the variable list is split on purpose
@@ -602,12 +813,12 @@ kill -TERM $pid
 wait $pid
 echo "rc=$?"
 cat /tmp/ps/out
-git -C remote.git log task -1 --format="log=%an <%ae>|%cn <%ce>|%s"
-echo "file=$(git -C remote.git show task:f.txt)"' 2>&1)
+git -C remote.git log task-wip -1 --format="log=%an <%ae>|%cn <%ce>|%s"
+echo "file=$(git -C remote.git show task-wip:f.txt)"' 2>&1)
 assert_contains "push-sidecar exits 0 after SIGTERM" "rc=0" "$out"
 assert_contains "push-sidecar prints push-ok" "push-ok" "$out"
 assert_contains "WIP commit has the Task identity as author and committer" "log=Bot <bot@example.com>|Bot <bot@example.com>|agent WIP" "$out"
-assert_contains "the pushed branch holds the new file" "file=hello" "$out"
+assert_contains "the WIP branch holds the new file" "file=hello" "$out"
 # Nothing to commit is a success.
 # shellcheck disable=SC2016 # expands in the container
 out=$(kr -- bash -c "$ps_setup"'
@@ -629,12 +840,12 @@ PUSH_INTERVAL=1 /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
 pid=$!
 sleep 2
 echo periodic > work/p.txt
-for i in $(seq 1 40); do git -C remote.git show task:p.txt >/dev/null 2>&1 && break; sleep 1; done
-echo "before-term=$(git -C remote.git show task:p.txt 2>&1)"
+for i in $(seq 1 40); do git -C remote.git show task-wip:p.txt >/dev/null 2>&1 && break; sleep 1; done
+echo "before-term=$(git -C remote.git show task-wip:p.txt 2>&1)"
 kill -TERM $pid
 wait $pid
 echo "rc=$?"' 2>&1)
-assert_contains "periodic push lands before SIGTERM" "before-term=periodic" "$out"
+assert_contains "periodic WIP push lands before SIGTERM" "before-term=periodic" "$out"
 # A refused push is push-failed, exit 1, and the token is not printed.
 # shellcheck disable=SC2016 # expands in the container
 out=$(kr -- bash -c "$ps_setup"'
@@ -671,7 +882,7 @@ assert_contains "the pre-commit hook does not run" "hook-skipped" "$out"
 # shellcheck disable=SC2016 # expands in the container
 out=$(kr -- bash -c '
 printf secret-token > /tmp/tok
-PUSH_URL=https://github.com/o/r.git PUSH_REPO=/tmp/none PUSH_BRANCH=task KELOS_GITHUB_TOKEN_FILE=/tmp/tok /usr/local/bin/push-sidecar >/tmp/out 2>&1 &
+PUSH_URL=https://github.com/o/r.git PUSH_REPO=/tmp/none PUSH_BRANCH=task KELOS_GITHUB_TOKEN_FILE=/tmp/tok GIT_AUTHOR_NAME=Bot GIT_AUTHOR_EMAIL=bot@example.com /usr/local/bin/push-sidecar >/tmp/out 2>&1 &
 pid=$!
 sleep 3
 kill -TERM $pid
@@ -689,7 +900,7 @@ assert_eq "DISABLE_TELEMETRY is in the claude allowlist" "DISABLE_TELEMETRY" "$(
 
 # Repository config that could start a command or move the token is refused, and
 # nothing runs. Each case is "key|value".
-for case in "include.path|/tmp/ps/extra" "includeIf.gitdir:/tmp/.path|/tmp/ps/extra" "filter.x.clean|touch /tmp/ps/ran" "core.fsmonitor|touch /tmp/ps/ran" "core.sshCommand|touch /tmp/ps/ran" "core.hooksPath|/tmp/ps/hooks" "core.askPass|/tmp/ps/ask" "gpg.program|/tmp/ps/gpg" "url./tmp/other.insteadOf|/tmp/ps/remote.git" "credential.https://github.com.helper|touch /tmp/ps/ran" "http.proxy|http://127.0.0.1:1" "http.sslVerify|false" "protocol.ext.allow|always" "diff.x.textconv|touch /tmp/ps/ran" "diff.external|touch /tmp/ps/ran" "remote.https://github.com/o/r.pushurl|/tmp/ps/other.git" "remote.origin.pushurl|/tmp/ps/other.git" "remote.origin.proxy|http://127.0.0.1:1" "remote.upstream.url|/tmp/ps/other.git" "push.recurseSubmodules|on-demand" "submodule.recurse|true" "submodule.sub.url|/tmp/ps/other.git"; do
+for case in "include.path|/tmp/ps/extra" "includeIf.gitdir:/tmp/.path|/tmp/ps/extra" "filter.x.clean|touch /tmp/ps/ran" "core.fsmonitor|touch /tmp/ps/ran" "core.sshCommand|touch /tmp/ps/ran" "core.hooksPath|/tmp/ps/hooks" "core.askPass|/tmp/ps/ask" "gpg.program|/tmp/ps/gpg" "url./tmp/other.insteadOf|/tmp/ps/remote.git" "credential.https://github.com.helper|touch /tmp/ps/ran" "http.proxy|http://127.0.0.1:1" "http.sslVerify|false" "protocol.ext.allow|always" "diff.x.textconv|touch /tmp/ps/ran" "diff.external|touch /tmp/ps/ran" "remote.https://github.com/o/r.pushurl|/tmp/ps/other.git" "remote.origin.pushurl|/tmp/ps/other.git" "remote.origin.proxy|http://127.0.0.1:1" "remote.upstream.url|/tmp/ps/other.git" "push.recurseSubmodules|on-demand" "submodule.recurse|true" "submodule.sub.url|/tmp/ps/other.git" "hook.x.command|touch /tmp/ps/ran" "hook.x.event|pre-commit"; do
 	key=${case%%|*}
 	value=${case#*|}
 	# shellcheck disable=SC2016 # expands in the container
@@ -730,11 +941,14 @@ out=$(kr -e KELOS_GITHUB_TOKEN_FILE=/tmp/ps/token -- bash -c "$ps_setup"'
 git -C work config credential.helper "!touch /tmp/ps/helper-ran; true"
 git -C work config "credential.https://github.com.helper" "!touch /tmp/ps/helper-ran; true"
 helper='"'"'!f() { echo username=x-access-token; echo "password=$(cat "$KELOS_GITHUB_TOKEN_FILE")"; }; f'"'"'
-printf "protocol=https\nhost=github.com\n\n" | git -C work -c credential.helper= -c "credential.https://github.com.helper=$helper" credential fill 2>&1 | grep -c "password=secret-token"
+echo "count=$(printf "protocol=https\nhost=github.com\n\n" | git -C work -c credential.helper= -c "credential.https://github.com.helper=$helper" credential fill 2>&1 | grep -c "password=secret-token")"
 test -e /tmp/ps/helper-ran && echo helper-ran || echo helper-not-run' 2>&1)
 assert_contains "the flags clear a generic helper from the repo config" "helper-not-run" "$out"
+assert_contains "the sidecar's helper returns the token" "count=1" "$out"
 
-# A stale index.lock does not stop the push of commits the agent already made.
+# The sidecar never writes the agent's index, so a stale index.lock changes nothing:
+# the agent's own commit goes to the branch, the uncommitted file to the WIP branch,
+# and the lock file stays where it is.
 # shellcheck disable=SC2016 # expands in the container
 out=$(kr -- bash -c "$ps_setup"'
 git -C work -c user.name=a -c user.email=a@x commit -q --allow-empty -m "agent own commit"
@@ -743,20 +957,95 @@ echo uncommitted > work/b.txt
 /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
 pid=$!
 sleep 3
-start=$(date +%s)
 kill -TERM $pid
 wait $pid
 echo "rc=$?"
-echo "elapsed=$(($(date +%s) - start))"
 cat /tmp/ps/out
 echo "subject=$(git -C remote.git log task -1 --format=%s)"
-git -C remote.git show task:b.txt >/dev/null 2>&1 && echo b-pushed || echo b-not-pushed' 2>&1)
+echo "wip-b=$(git -C remote.git show task-wip:b.txt 2>&1)"
+test -e work/.git/index.lock && echo lock-kept || echo lock-gone' 2>&1)
 assert_contains "lock: the agent's own commit is pushed" "subject=agent own commit" "$out"
-assert_contains "lock: the commit failure is reported" "index.lock exists" "$out"
-assert_contains "lock: the result is push-failed with exit 1" "rc=1" "$out"
-assert_contains "lock: the report says HEAD was pushed" "HEAD was pushed" "$out"
-assert_contains "lock: the uncommitted file was not pushed" "b-not-pushed" "$out"
-case "$out" in *"elapsed=0"* | *"elapsed=1"* | *"elapsed=2"* | *"elapsed=3"*) pass "lock: the final push is quick" ;; *) fail "lock: the final push is quick" "$out" ;; esac
+assert_contains "lock: the uncommitted file reaches the WIP branch" "wip-b=uncommitted" "$out"
+assert_contains "lock: the result is push-ok with exit 0" "rc=0" "$out"
+assert_contains "lock: the agent's index.lock is left alone" "lock-kept" "$out"
+
+# A periodic WIP push changes nothing in the agent's repository: HEAD, the branch,
+# the index file and what git status shows stay the same, and no index.lock is left.
+# The WIP commit's parent is HEAD. The test's own git status runs with
+# GIT_OPTIONAL_LOCKS=0, so it does not rewrite the index either. The agent then
+# commits and pushes the branch itself, which fast-forwards, and the sidecar's
+# later pushes carry that commit.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -- bash -c "$ps_setup"'
+cd work
+echo tracked > t.txt && git add t.txt && git -c user.name=a -c user.email=a@x commit -q -m base
+echo changed > t.txt; echo new > n.txt; echo staged > s.txt; git add s.txt
+export GIT_OPTIONAL_LOCKS=0
+st0=$(git status --porcelain | tr "\n" ",")
+head0=$(git rev-parse HEAD); ref0=$(git rev-parse refs/heads/task); idx0=$(sha256sum < .git/index)
+cd /tmp/ps
+PUSH_INTERVAL=1 /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
+pid=$!
+for i in $(seq 1 40); do git -C remote.git show task-wip:n.txt >/dev/null 2>&1 && break; sleep 1; done
+sleep 1
+cd work
+[ "$(git rev-parse HEAD)" = "$head0" ] && echo head-same || echo head-moved
+[ "$(git rev-parse refs/heads/task)" = "$ref0" ] && echo branch-same || echo branch-moved
+[ "$(sha256sum < .git/index)" = "$idx0" ] && echo index-same || echo index-changed
+[ "$(git status --porcelain | tr "\n" ",")" = "$st0" ] && echo status-same || echo status-changed
+test -e .git/index.lock && echo lock-left || echo no-lock
+[ "$(git -C /tmp/ps/remote.git rev-parse task-wip^)" = "$head0" ] && echo wip-parent-is-head || echo wip-parent-other
+echo "wip-tree=$(git -C /tmp/ps/remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"
+echo "wip-t=$(git -C /tmp/ps/remote.git show task-wip:t.txt)"
+git add -A && git -c user.name=a -c user.email=a@x commit -q -m "agent own commit"
+git push -q /tmp/ps/remote.git task 2>&1; echo "agent-push-rc=$?"
+[ "$(git -C /tmp/ps/remote.git rev-parse task)" = "$(git rev-parse HEAD)" ] && echo remote-has-agent-commit || echo remote-other
+echo later > l.txt
+cd /tmp/ps
+for i in $(seq 1 40); do git -C remote.git show task-wip:l.txt >/dev/null 2>&1 && break; sleep 1; done
+kill -TERM $pid
+wait $pid
+echo "rc=$?"
+echo "wip-log=$(git -C remote.git log task-wip --format=%s | tr "\n" ",")"
+echo "task-subject=$(git -C remote.git log task -1 --format=%s)"' 2>&1)
+assert_contains "WIP push: the agent's HEAD does not move" "head-same" "$out"
+assert_contains "WIP push: the agent's branch does not move" "branch-same" "$out"
+assert_contains "WIP push: the agent's index file is unchanged" "index-same" "$out"
+assert_contains "WIP push: git status in the agent's repository is unchanged" "status-same" "$out"
+assert_contains "WIP push: no index.lock is left" "no-lock" "$out"
+assert_contains "WIP push: the WIP commit's parent is HEAD" "wip-parent-is-head" "$out"
+assert_contains "WIP push: the WIP tree has the changed, new and staged files" "wip-tree=n.txt,s.txt,t.txt," "$out"
+assert_contains "WIP push: the WIP tree has the work tree content" "wip-t=changed" "$out"
+assert_contains "WIP push: the agent's own push still fast-forwards" "agent-push-rc=0" "$out"
+assert_contains "WIP push: the agent's own commit reaches the remote branch" "remote-has-agent-commit" "$out"
+assert_contains "WIP push: the next WIP commit sits on the agent's commit" "wip-log=agent WIP,agent own commit,base,init," "$out"
+assert_contains "WIP push: the branch ends at the agent's own commit" "task-subject=agent own commit" "$out"
+assert_contains "WIP push: exit 0" "rc=0" "$out"
+
+# A clean work tree moves the WIP branch to HEAD, and PUSH_WIP_BRANCH names the branch.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -- bash -c "$ps_setup"'
+git -C work -c user.name=a -c user.email=a@x commit -q --allow-empty -m "agent own commit"
+PUSH_WIP_BRANCH=snap /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
+pid=$!
+sleep 3
+kill -TERM $pid
+wait $pid
+echo "rc=$?"
+[ "$(git -C remote.git rev-parse snap)" = "$(git -C work rev-parse HEAD)" ] && echo snap-is-head || echo snap-other
+git -C remote.git rev-parse -q --verify task-wip >/dev/null && echo default-wip-exists || echo no-default-wip' 2>&1)
+assert_contains "clean tree: PUSH_WIP_BRANCH gets HEAD" "snap-is-head" "$out"
+assert_contains "clean tree: the default WIP branch is not used when PUSH_WIP_BRANCH is set" "no-default-wip" "$out"
+assert_contains "clean tree: exit 0" "rc=0" "$out"
+# PUSH_WIP_BRANCH must be a valid branch name other than PUSH_BRANCH.
+for case in "same as PUSH_BRANCH|task|PUSH_WIP_BRANCH must differ from PUSH_BRANCH" "with a tilde|a~b|PUSH_WIP_BRANCH is not a valid branch name"; do
+	name=${case%%|*}
+	rest=${case#*|}
+	out=$(kr -- env PUSH_URL=https://github.com/o/r.git PUSH_BRANCH=task "PUSH_WIP_BRANCH=${rest%%|*}" KELOS_GITHUB_TOKEN_FILE=/etc/hostname GIT_AUTHOR_NAME=Bot GIT_AUTHOR_EMAIL=bot@example.com /usr/local/bin/push-sidecar 2>&1)
+	rc=$?
+	if [ "$rc" -eq 1 ]; then pass "PUSH_WIP_BRANCH $name: exit 1"; else fail "PUSH_WIP_BRANCH $name: exit 1" "exit $rc"; fi
+	assert_contains "PUSH_WIP_BRANCH $name: the reason is printed" "push-failed: ${rest#*|}" "$out"
+done
 
 # A merge, rebase, cherry-pick or revert in progress is pushed as HEAD, uncommitted.
 # shellcheck disable=SC2016 # expands in the container
@@ -804,8 +1093,9 @@ out=$(kr -- bash -c "$ps_setup"'
 cd work
 printf "ignored.txt\n" > .gitignore
 echo x > ignored.txt; echo x > normal.txt
-for f in .env .env.local key.pem server.key id_rsa id_ed25519 my-credentials.json .npmrc .pypirc .netrc auth.json; do echo secret > "$f"; done
-mkdir -p .claude && echo secret > .claude/.credentials.json
+for f in .env .env.local key.pem server.key id_rsa id_ed25519 my-credentials.json .npmrc .pypirc .netrc auth.json \
+	.envrc kubeconfig prod.kubeconfig dev.tfvars dev.tfvars.json terraform.tfstate terraform.tfstate.backup; do echo secret > "$f"; done
+mkdir -p .claude .kube && echo secret > .claude/.credentials.json && echo secret > .kube/config
 head -c 11534336 /dev/zero > big.bin
 cd /tmp/ps
 /usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
@@ -815,11 +1105,31 @@ kill -TERM $pid
 wait $pid
 echo "rc=$?"
 cat /tmp/ps/out
-echo "tree=$(git -C remote.git ls-tree -r --name-only task | tr "\n" ",")"' 2>&1)
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
 assert_contains "excludes: only the plain files are pushed" "tree=.gitignore,normal.txt," "$out"
 assert_contains "excludes: the large file is named" "skipped 1 file(s) over 10 MB: big.bin" "$out"
 assert_contains "excludes: the push still succeeds" "rc=0" "$out"
 assert_contains "the excludes file is in the image" "id_rsa*" "$(kr -- cat /usr/local/share/push-sidecar/excludes)"
+# The patterns match in any letter case, for files and for directories.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -- bash -c "$ps_setup"'
+cd work
+echo x > normal.txt
+for f in Credentials.json SERVER.KEY .ENV Id_RSA Prod.TFVARS KubeConfig; do echo secret > "$f"; done
+mkdir -p Secrets/CREDENTIALS && echo secret > Secrets/CREDENTIALS/inner.txt
+cd /tmp/ps
+/usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
+pid=$!
+sleep 3
+kill -TERM $pid
+wait $pid
+echo "rc=$?"
+cat /tmp/ps/out
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
+assert_contains "mixed case: only the plain file is pushed" "tree=normal.txt," "$out"
+assert_contains "mixed case: the kept files are named" "push-note: kept 7 new file(s) with secret-like names out of the commit:" "$out"
+assert_contains "mixed case: Credentials.json is named" "Credentials.json" "$out"
+assert_contains "mixed case: the push succeeds" "rc=0" "$out"
 
 # A diff driver with a .gitattributes line is refused, and the sidecar's own diff does
 # not run the driver. Without the flags git would run it.
@@ -878,7 +1188,7 @@ sleep 3
 kill -TERM $pid
 wait $pid
 echo "rc=$?"
-echo "tree=$(git -C remote.git ls-tree -r --name-only task | tr "\n" ",")"' 2>&1)
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
 assert_contains "negations: only the plain files are pushed" "tree=.gitignore,normal.txt," "$out"
 assert_contains "negations: the push succeeds" "rc=0" "$out"
 
@@ -901,7 +1211,7 @@ cat /tmp/ps/out' 2>&1)
 assert_contains "slow periodic push: the stop is announced" "stopped by SIGTERM during a periodic push" "$out"
 assert_contains "slow periodic push: the final push succeeds" "rc=0" "$out"
 case "$out" in *"elapsed=0"* | *"elapsed=1"* | *"elapsed=2"* | *"elapsed=3"* | *"elapsed=4"* | *"elapsed=5"*) pass "slow periodic push: the exit comes within 5 s of SIGTERM" ;; *) fail "slow periodic push: the exit comes within 5 s of SIGTERM" "$out" ;; esac
-assert_contains "the script header states the known limit" "Known limit: the sidecar pushes HEAD" "$(kr -- head -n 40 /usr/local/bin/push-sidecar)"
+assert_contains "the script header states the known limit" "Known limits: the sidecar pushes HEAD" "$(kr -- head -n 60 /usr/local/bin/push-sidecar)"
 
 # A negated directory pattern does not bring back what is inside the directory.
 # shellcheck disable=SC2016 # expands in the container
@@ -918,13 +1228,113 @@ sleep 3
 kill -TERM $pid
 wait $pid
 echo "rc=$?"
-echo "tree=$(git -C remote.git ls-tree -r --name-only task | tr "\n" ",")"' 2>&1)
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
 assert_contains "folder negations: files under secret-named directories stay out" "tree=.gitignore,normal.txt,sub/ok.txt," "$out"
 assert_contains "folder negations: the push succeeds" "rc=0" "$out"
+
+# Changes to files HEAD has are committed whatever their name. The excludes apply
+# to new files only; a new file in a secret-named directory stays out.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -- bash -c "$ps_setup"'
+cd work
+mkdir -p certs internal/credentials
+echo old > .env.example; echo old > certs/test.pem; echo old > internal/credentials/store.go
+git add -A && git -c user.name=a -c user.email=a@x commit -q -m base
+echo new > .env.example; echo new > certs/test.pem; echo new > internal/credentials/store.go
+echo s > internal/credentials/new.go
+cd /tmp/ps
+/usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
+pid=$!
+sleep 3
+kill -TERM $pid
+wait $pid
+echo "rc=$?"
+cat /tmp/ps/out
+for f in .env.example certs/test.pem internal/credentials/store.go; do echo "$f=$(git -C remote.git show "task-wip:$f")"; done
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
+assert_contains "tracked secret-like names: the push succeeds" "rc=0" "$out"
+assert_contains "tracked .env.example: the edit is pushed" ".env.example=new" "$out"
+assert_contains "tracked certs/test.pem: the edit is pushed" "certs/test.pem=new" "$out"
+assert_contains "tracked file in a credentials directory: the edit is pushed" "internal/credentials/store.go=new" "$out"
+assert_contains "tracked secret-like names: no new file is added" "tree=.env.example,certs/test.pem,internal/credentials/store.go," "$out"
+assert_contains "tracked secret-like names: the new file is named in a note" "push-note: kept 1 new file(s) with secret-like names out of the commit: internal/credentials/new.go" "$out"
+
+# A secret file the agent staged but did not commit stays out of the WIP commit and
+# stays in the work tree.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -- bash -c "$ps_setup"'
+cd work
+echo s > .env; mkdir keys; echo s > keys/id_rsa; echo x > normal.txt
+git add -f .env keys/id_rsa normal.txt
+cd /tmp/ps
+/usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
+pid=$!
+sleep 3
+kill -TERM $pid
+wait $pid
+echo "rc=$?"
+cat /tmp/ps/out
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"
+echo "disk=$(cat work/.env)"' 2>&1)
+assert_contains "staged secrets: only the plain file is pushed" "tree=normal.txt," "$out"
+assert_contains "staged secrets: the files are named" "push-note: kept 2 new file(s) with secret-like names out of the commit: .env keys/id_rsa" "$out"
+assert_contains "staged secrets: the push succeeds" "rc=0" "$out"
+assert_contains "staged secrets: .env stays on disk" "disk=s" "$out"
+
+# A git status that fails is reported, even though HEAD was pushed.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -- bash -c "$ps_setup"'
+git -C work -c user.name=a -c user.email=a@x commit -q --allow-empty -m "agent own commit"
+/usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
+pid=$!
+sleep 3
+echo x > work/f.txt
+printf garbage > work/.git/index
+kill -TERM $pid
+wait $pid
+echo "rc=$?"
+cat /tmp/ps/out
+echo "subject=$(git -C remote.git log task -1 --format=%s)"' 2>&1)
+assert_contains "failed status: HEAD is pushed" "subject=agent own commit" "$out"
+assert_contains "failed status: the result is push-failed" "push-failed: status failed:" "$out"
+assert_contains "failed status: the report says HEAD was pushed" "HEAD was pushed, the working tree changes were not" "$out"
+assert_contains "failed status: exit 1" "rc=1" "$out"
+
+# A submodule's own config does not run: git status and git add would run "git
+# status" inside the submodule, where its clean filter applies. The control step
+# shows that a plain git status runs the filter.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -- bash -c "$ps_setup"'
+cd work
+git init -q sub && echo a > sub/f && echo "* filter=x" > sub/.gitattributes
+git -C sub add f .gitattributes && git -C sub -c user.name=a -c user.email=a@x commit -q -m s
+git -C sub config filter.x.clean "touch /tmp/ps/ran; cat"
+git add sub 2>/dev/null && git -c user.name=a -c user.email=a@x commit -q -m sub
+sleep 1.1 && touch sub/f
+git status --porcelain >/dev/null
+test -e /tmp/ps/ran && echo control-ran || echo control-not-run
+rm -f /tmp/ps/ran
+sleep 1.1 && touch sub/f && echo x > normal.txt
+cd /tmp/ps
+/usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
+pid=$!
+sleep 3
+kill -TERM $pid
+wait $pid
+echo "rc=$?"
+cat /tmp/ps/out
+test -e /tmp/ps/ran && echo filter-ran || echo filter-not-run
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
+assert_contains "submodule filter: a plain git status runs it (control)" "control-ran" "$out"
+assert_contains "submodule filter: the sidecar does not run it" "filter-not-run" "$out"
+assert_contains "submodule filter: the push succeeds" "rc=0" "$out"
+assert_contains "submodule filter: the new file is pushed" "tree=normal.txt,sub," "$out"
 
 # push is told not to recurse into submodules.
 assert_contains "git push supports --no-recurse-submodules" "recurse-submodules" "$(kr -- git push -h 2>&1)"
 assert_contains "the sidecar passes --no-recurse-submodules" "push --no-recurse-submodules" "$(kr -- cat /usr/local/bin/push-sidecar)"
+assert_contains "git push supports --no-verify" "--no-verify" "$(kr -- git push -h 2>&1)"
+assert_contains "the sidecar pushes with --no-verify" "push --no-recurse-submodules --no-verify" "$(kr -- cat /usr/local/bin/push-sidecar)"
 
 # A file name that looks like pathspec magic does not escape the size cap.
 # shellcheck disable=SC2016 # expands in the container
@@ -940,7 +1350,7 @@ kill -TERM $pid
 wait $pid
 echo "rc=$?"
 cat /tmp/ps/out
-echo "tree=$(git -C remote.git ls-tree -r --name-only task | tr "\n" ",")"' 2>&1)
+echo "tree=$(git -C remote.git ls-tree -r --name-only task-wip | tr "\n" ",")"' 2>&1)
 assert_contains "pathspec-like name: the large file is named as skipped" "skipped 1 file(s) over 10 MB: :(glob)z.bin" "$out"
 assert_contains "pathspec-like name: only the small file is pushed" "tree=normal.txt," "$out"
 
@@ -985,6 +1395,23 @@ echo "elapsed=$(($(date +%s) - start))"
 cat /tmp/ps/out' 2>&1)
 assert_contains "final budget: a stuck HEAD push is reported" "push-note: pushing HEAD failed: timed out after 10s" "$out"
 case "$out" in *"elapsed=19"* | *"elapsed=20"* | *"elapsed=21"* | *"elapsed=22"*) pass "final budget: the final path with two stuck pushes ends in about 20 s" ;; *) fail "final budget: the final path with two stuck pushes ends in about 20 s" "$out" ;; esac
+# A second SIGTERM during the final path does not cut a running push short.
+# shellcheck disable=SC2016 # expands in the container
+out=$(kr -- bash -c "$ps_setup"'
+printf "#!/bin/sh\nsleep 60\n" > remote.git/hooks/pre-receive
+chmod +x remote.git/hooks/pre-receive
+git -C work -c user.name=a -c user.email=a@x commit -q --allow-empty -m "agent own commit"
+/usr/local/bin/push-sidecar >/tmp/ps/out 2>&1 &
+pid=$!
+sleep 3
+kill -TERM $pid
+sleep 2
+kill -TERM $pid
+wait $pid
+echo "rc=$?"
+cat /tmp/ps/out' 2>&1)
+assert_contains "second SIGTERM: the HEAD push still runs to its 10 s limit" "push-note: pushing HEAD failed: timed out after 10s" "$out"
+assert_contains "second SIGTERM: exit 1" "rc=1" "$out"
 
 # The dispatcher stops the whole container fast. Kelos starts a custom image with the
 # command /kelos_entrypoint.sh and no tini, so the dispatcher is PID 1 (mode pid1); the
@@ -1005,17 +1432,26 @@ exec setpriv --reuid 61100 --regid 61100 --clear-groups $_init /kelos_entrypoint
 for mode in pid1 tini; do
 	for type in claude-code codex; do
 		name=ks-$$-$type-$mode
-		fast_stop_run "$type" '#!/bin/sh\nsetsid sleep 600 &\nsleep 600 &\nwait\n' "$mode"
-		sleep 5
-		# shellcheck disable=SC2016 # expands in the container
-		count=$("$RUNTIME" exec "$name" sh -c 'n=0; for f in /proc/[0-9]*/comm; do [ "$(cat $f 2>/dev/null)" = sleep ] && n=$((n + 1)); done; echo $n')
+		# A container that never started stops at once, so the stop time counts only
+		# when the start worked and the fake agent's sleeps were running.
+		count=0
+		if fast_stop_run "$type" '#!/bin/sh\nsetsid sleep 600 &\nsleep 600 &\nwait\n' "$mode"; then
+			sleep 5
+			# shellcheck disable=SC2016 # expands in the container
+			count=$("$RUNTIME" exec "$name" sh -c 'n=0; for f in /proc/[0-9]*/comm; do [ "$(cat $f 2>/dev/null)" = sleep ] && n=$((n + 1)); done; echo $n')
+		fi
 		start=$(date +%s)
 		"$RUNTIME" stop -t 30 "$name" >/dev/null 2>&1
 		elapsed=$(($(date +%s) - start))
-		code=$("$RUNTIME" inspect "$name" --format '{{.State.ExitCode}}')
+		code=$("$RUNTIME" inspect "$name" --format '{{.State.ExitCode}}' 2>/dev/null)
 		"$RUNTIME" rm -f "$name" >/dev/null 2>&1
-		if [ "${count:-0}" -ge 2 ]; then pass "$mode $type: the fake agent's two sleeps were running"; else fail "$mode $type: the fake agent's two sleeps were running" "count=$count"; fi
-		if [ "$elapsed" -le 5 ]; then pass "$mode $type: podman stop finishes within 5 s ($elapsed s)"; else fail "$mode $type: podman stop finishes within 5 s" "took $elapsed s"; fi
+		if [ "${count:-0}" -ge 2 ]; then
+			pass "$mode $type: the fake agent's two sleeps were running"
+			if [ "$elapsed" -le 5 ]; then pass "$mode $type: podman stop finishes within 5 s ($elapsed s)"; else fail "$mode $type: podman stop finishes within 5 s" "took $elapsed s"; fi
+		else
+			fail "$mode $type: the fake agent's two sleeps were running" "count=$count"
+			fail "$mode $type: podman stop finishes within 5 s" "the fake agent was not running"
+		fi
 		assert_eq "$mode $type: exit code 143 after SIGTERM" "143" "$code"
 	done
 done
@@ -1027,7 +1463,7 @@ code=$("$RUNTIME" wait "$name" 2>/dev/null)
 elapsed=$(($(date +%s) - start))
 "$RUNTIME" rm -f "$name" >/dev/null 2>&1
 assert_eq "the agent's exit status 3 passes through" "3" "$code"
-if [ "$elapsed" -le 10 ]; then pass "the container ends when the agent ends ($elapsed s)"; else fail "the container ends when the agent ends" "took $elapsed s"; fi
+if [ "$code" = 3 ] && [ "$elapsed" -le 10 ]; then pass "the container ends when the agent ends ($elapsed s)"; else fail "the container ends when the agent ends" "exit [$code] after $elapsed s"; fi
 # When PID 1 is neither the dispatcher nor tini (a shared PID namespace), the dispatcher
 # stops only its own descendants. A same-user sleep started by PID 1 must survive.
 name=ks-$$-shared
@@ -1098,7 +1534,7 @@ assert_contains "the dispatcher header explains why it supervises" "Kelos starts
 # means no file. The URL and token are made up.
 b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
 b64nl() { printf '%s\n' "$1" | base64 | tr -d '\n'; }
-mcp_url=https://gw.example.test/mcp
+mcp_url=https://gw.example.com/mcp
 mcp_token=t0k-abcdefghijklm
 # shellcheck disable=SC2016 # expands in the container
 mcp_write='mkdir -p /etc/agentainer/mcp
@@ -1188,7 +1624,7 @@ out=$(mcp_kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -e 'CODEX_A
 	echo done' 2>&1)
 assert_contains "codex mcp get shows the gateway URL and bearer variable" "get-ok" "$out"
 assert_contains "cli_auth_credentials_store stays at top level" "auth-top-level" "$out"
-assert_contains "the shell policy excludes AGENTAINER_MCP_*" "filter-ok" "$out"
+assert_contains "config.toml has the filter that excludes AGENTAINER_MCP_*" "filter-ok" "$out"
 assert_absent "the token is not in config.toml" "$out" "done" "token-in-config" "setup failed"
 # shellcheck disable=SC2016 # expands in the container
 out=$(mcp_kr -e KELOS_AGENT_TYPE=codex -e KELOS_SESSION_SETUP_ONLY=1 -- '
@@ -1219,7 +1655,7 @@ done
 
 # A URL that is not https, or that holds a quote, backslash, space, newline or
 # query, is refused and the url file is named. So is one over 512 bytes.
-long_url=https://gw.example.test/$(head -c 500 /dev/zero | tr '\0' a)
+long_url=https://gw.example.com/$(head -c 500 /dev/zero | tr '\0' a)
 mcp_url_case() {
 	for agent in claude-code codex; do
 		out=$(mcp_kr -e KELOS_AGENT_TYPE="$agent" -e KELOS_SESSION_SETUP_ONLY=1 -e "MCP_U=$(b64 "$2")" -e "MCP_T=$(b64 "$mcp_token")" -- \
@@ -1228,12 +1664,12 @@ mcp_url_case() {
 		assert_contains "$agent: url $1 refusal names the file" "/etc/agentainer/mcp/url" "$out"
 	done
 }
-mcp_url_case "http" "http://gw.example.test/mcp"
-mcp_url_case "with a quote" 'https://gw.example.test/m"cp'
-mcp_url_case "with a backslash" 'https://gw.example.test/m\cp'
-mcp_url_case "with a space" 'https://gw.example.test/m cp'
-mcp_url_case "with a newline" "$(printf 'https://gw.example.test/mcp\nhttps://other.example.test/')"
-mcp_url_case "with a query" 'https://gw.example.test/mcp?x=1'
+mcp_url_case "http" "http://gw.example.com/mcp"
+mcp_url_case "with a quote" 'https://gw.example.com/m"cp'
+mcp_url_case "with a backslash" 'https://gw.example.com/m\cp'
+mcp_url_case "with a space" 'https://gw.example.com/m cp'
+mcp_url_case "with a newline" "$(printf 'https://gw.example.com/mcp\nhttps://other.example.com/')"
+mcp_url_case "with a query" 'https://gw.example.com/mcp?x=1'
 mcp_url_case "over 512 bytes" "$long_url"
 
 # A token that is empty, under 16 characters, holds a quote, backslash or space,

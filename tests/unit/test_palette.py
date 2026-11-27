@@ -6,13 +6,10 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from palette import ALLOWED, colors_in  # noqa: E402
+from palette import ALLOWED, colors_in, other_color_forms  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 SEEDED = "rootfs/etc/agentainer/home"
-
-# Paths excluded from the Ayu wording check.
-AYU_PENDING = ()
 
 
 def git_ls_files(prefix):
@@ -41,11 +38,23 @@ class PaletteTests(unittest.TestCase):
         }
         self.assertEqual({k: v for k, v in bad.items() if v}, {})
 
-    def test_no_ayu_wording_outside_history(self):
+    def test_other_color_forms_are_detected(self):
+        for text in ("fg=#f0f", "#f0f8", "#12345680", "38;5;196", "48;5;12", "38:2::255:0:0",
+                     "38:2:255:0:0", "48:5:12", "colour196", "color8", "fg=red", "ctermbg=grey"):
+            with self.subTest(text=text):
+                self.assertTrue(other_color_forms(text))
+        self.assertEqual(other_color_forms("fg=#58a6ff di=01;38;2;1;4;9 guifg=NONE issue #12"), set())
+
+    def test_seeded_files_use_only_checked_color_forms(self):
+        files = git_ls_files(SEEDED)
+        self.assertTrue(files)
+        found = {f: sorted(other_color_forms((ROOT / f).read_text(errors="replace"))) for f in files}
+        self.assertEqual({k: v for k, v in found.items() if v}, {})
+
+    def test_no_ayu_wording(self):
         result = subprocess.run(
             ["git", "grep", "-niw", "ayu", "--", ".",
-             ":!tests/unit/test_palette.py"]
-            + [":!" + p for p in AYU_PENDING],
+             ":!tests/unit/test_palette.py"],
             cwd=ROOT,
             capture_output=True,
             text=True,

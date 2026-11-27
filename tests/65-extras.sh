@@ -89,7 +89,8 @@ assert_contains "ephemeral install lands in the image tools root" "/var/lib/agen
 assert_absent "install writes nothing to the npm cache in the home" \
 	"$(ex "$c1" 'find /home/agent/.npm -newer /tmp/before-install 2>/dev/null; echo END')" END /home/agent/.npm
 assert_eq "list shows the installed version" "fixture 1.0.0 1.0.0" "$(row "$c1")"
-assert_eq "the install directory has the tools root's mode" "755" "$(ex "$c1" "stat -c %a $A/npm/extras/\$(readlink $A/npm/extras/fixture)")"
+assert_eq "the install directory has the tools root's mode" "755" \
+	"$(ex "$c1" "t=\$(readlink $A/npm/extras/fixture) && [ -n \"\$t\" ] && stat -c %a $A/npm/extras/\$t")"
 
 # Upgrade keeps the previous directory and removes it at the next install.
 first=$(ex "$c1" "readlink $A/npm/extras/fixture")
@@ -101,9 +102,11 @@ assert_contains "upgrade exits 0" "[rc=0]" "$(ex "$c1" 'agentainer-extras instal
 assert_eq "upgrade runs the new version" "fixture-extra ok 2.0.0" "$(ex "$c1" 'fixture-extra 2>&1')"
 assert_eq "upgrade keeps the previous directory" "kept" "$(ex "$c1" "test -d $A/npm/extras/$first && echo kept")"
 second=$(ex "$c1" "readlink $A/npm/extras/fixture")
+assert_contains "the upgrade is linked" "fixture@2.0.0." "$second"
 assert_contains "reinstall exits 0" "[rc=0]" "$(ex "$c1" 'agentainer-extras install fixture 2>&1; echo "[rc=$?]"')"
 assert_absent "the next install removes the kept directory" "$(ex "$c1" "$names; echo END")" END "[$first]"
-assert_eq "the next install keeps the version it replaced" "kept" "$(ex "$c1" "test -d $A/npm/extras/$second && echo kept")"
+assert_eq "the next install keeps the version it replaced" "kept" \
+	"$(if [ -n "$second" ]; then ex "$c1" "test -d $A/npm/extras/$second && echo kept"; fi)"
 
 # Failed upgrades leave the previous version linked and running, and leave no new directory.
 current=$(ex "$c1" "readlink $A/npm/extras/fixture")
@@ -138,7 +141,7 @@ ex "$c1" 'rm -f ~/.npmrc'
 swap "$c1" fixture
 ex "$c1" 'touch /tmp/hold; rm -f /tmp/wait.out'
 "$RUNTIME" exec -d "$c1" flock "$A/npm/.extras.lock" sh -c 'while [ -e /tmp/hold ]; do sleep 0.2; done'
-if wait_for 10 "$RUNTIME" exec "$c1" sh -c "! flock -n $A/npm/.extras.lock true"; then pass "extras lock held"; else fail "extras lock held"; fi
+if wait_for 10 "$RUNTIME" exec "$c1" sh -c "flock -E 99 -n $A/npm/.extras.lock true; [ \$? -eq 99 ]"; then pass "extras lock held"; else fail "extras lock held"; fi
 ex "$c1" 'agentainer-extras install fixture >/tmp/wait.out 2>&1; echo "[rc=$?]" >>/tmp/wait.out' &
 if wait_for 60 "$RUNTIME" exec "$c1" grep -q "waiting for" /tmp/wait.out; then pass "install prints a waiting line"; else fail "install prints a waiting line"; fi
 ex "$c1" 'rm -f /tmp/hold'
@@ -266,7 +269,7 @@ assert_contains "persist install lands in the home tools root" "/home/agent/.age
 	"$(ex "$c2" 'readlink -f "$(command -v fixture-extra)"')"
 "$RUNTIME" rm -f "$c2" >/dev/null
 assert_eq "persist install survives a new container" "fixture-extra ok 1.0.0" \
-	"$(run_in -v "$VOL:/home/agent" --network none -e AGENTAINER_TOOLS=persist -- fixture-extra 2>&1)"
+	"$(run_in -v "$VOL:/home/agent" --network none -e AGENTAINER_TOOLS=persist -- sh -c 'fixture-extra 2>&1')"
 
 # Extras are left out of the image-change warning; other persisted npm tools still trigger it.
 run_in -v "$VOL:/home/agent" --network none --entrypoint sh -- -c 'echo old >/home/agent/.agentainer/tools-image-version'
@@ -295,7 +298,7 @@ assert_eq "concurrent installs both exit 0" "0 0" "$(cat "$OUT/$c3.rc") $(cat "$
 assert_eq "concurrent installs: the bin runs in both containers" "fixture-extra ok 1.0.0 fixture-extra ok 1.0.0" \
 	"$(ex "$c3" 'fixture-extra') $(ex "$c4" 'fixture-extra')"
 assert_eq "concurrent installs: two versioned directories, one linked" "2 yes" \
-	"$(ex "$c3" "ls -d $A/npm/extras/fixture@* | wc -l | tr -d ' '; test -d $A/npm/extras/\$(readlink $A/npm/extras/fixture) && echo yes" | tr '\n' ' ' | sed 's/ $//')"
+	"$(ex "$c3" "ls -d $A/npm/extras/fixture@* | wc -l | tr -d ' '; t=\$(readlink $A/npm/extras/fixture) && [ -n \"\$t\" ] && test -d $A/npm/extras/\$t && echo yes" | tr '\n' ' ' | sed 's/ $//')"
 
 # Reset moves the root, links inside the backup still resolve, and a fresh install works.
 out=$(ex "$c3" 'agentainer-tools reset 2>&1')
@@ -310,7 +313,7 @@ assert_eq "install after reset runs" "fixture-extra ok 1.0.0" "$(ex "$c4" 'fixtu
 # In persist mode the reset lock is the one next to the tools root, whatever HOME says.
 ex "$c3" 'touch /tmp/hold'
 "$RUNTIME" exec -d "$c3" flock /home/agent/.agentainer/.tools-reset.lock sh -c 'while [ -e /tmp/hold ]; do sleep 0.2; done'
-if wait_for 10 "$RUNTIME" exec "$c4" sh -c '! flock -n /home/agent/.agentainer/.tools-reset.lock true'; then pass "reset lock held for the HOME test"; else fail "reset lock held for the HOME test"; fi
+if wait_for 10 "$RUNTIME" exec "$c4" sh -c 'flock -E 99 -n /home/agent/.agentainer/.tools-reset.lock true; [ $? -eq 99 ]'; then pass "reset lock held for the HOME test"; else fail "reset lock held for the HOME test"; fi
 ex "$c4" 'mkdir -p /tmp/h; rm -f /tmp/wait.out; HOME=/tmp/h agentainer-extras install fixture >/tmp/wait.out 2>&1; echo "[rc=$?]" >>/tmp/wait.out' &
 if wait_for 60 "$RUNTIME" exec "$c4" grep -q "waiting for" /tmp/wait.out; then pass "install with another HOME waits for the reset lock"; else fail "install with another HOME waits for the reset lock"; fi
 ex "$c3" 'rm -f /tmp/hold'
@@ -321,7 +324,7 @@ assert_contains "install with another HOME finishes" "[rc=0]" "$out"
 
 # Reset reports a reset lock that another container holds.
 "$RUNTIME" exec -d "$c3" flock /home/agent/.agentainer/.tools-reset.lock sleep 45
-if wait_for 10 "$RUNTIME" exec "$c4" sh -c '! flock -n /home/agent/.agentainer/.tools-reset.lock true'; then pass "reset lock held"; else fail "reset lock held"; fi
+if wait_for 10 "$RUNTIME" exec "$c4" sh -c 'flock -E 99 -n /home/agent/.agentainer/.tools-reset.lock true; [ $? -eq 99 ]'; then pass "reset lock held"; else fail "reset lock held"; fi
 out=$(ex "$c4" 'agentainer-tools reset 2>&1; echo "[rc=$?]"')
 assert_contains "reset with a held lock: exit 1" "[rc=1]" "$out"
 assert_contains "reset with a held lock: names the lock" "/home/agent/.agentainer/.tools-reset.lock" "$out"

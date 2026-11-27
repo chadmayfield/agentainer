@@ -17,7 +17,7 @@ Agentainer is one public container image that bundles four AI coding agents (Cla
 | `tests/` | Container tests (`NN-*.sh`), host tests (`host/`), unit tests (`unit/`), fixtures |
 | `docs/` | User documentation |
 | `.github/workflows/` | CI, release and the scheduled update |
-| `Containerfile.kelos`, `rootfs-kelos/`, `tests/kelos/` | The Kelos variant image, its files and its tests ([docs/kelos.md](docs/kelos.md)). Its pins live in `Containerfile.kelos`, not `versions.env`. CI does not build or test it. |
+| `Containerfile.kelos`, `rootfs-kelos/`, `tests/kelos/` | The Kelos variant image, its files and its tests ([docs/kelos.md](docs/kelos.md)). Its pins live in `Containerfile.kelos`, not `versions.env`, and `bump_versions.py` (`r_kelos`) updates them. CI does not build or test it. |
 
 `docs/private/` holds the maintainer's design notes, may be stale, and is ignored by git. Never commit anything under it.
 
@@ -33,7 +33,10 @@ sh tests/host/test-launcher.sh
 sh tests/host/test-build-script.sh
 sh tests/host/test-fetch.sh
 sh tests/host/test-manifests.sh
+sh tests/host/test-apt-install.sh           # offline, stub apt commands
+sh tests/host/test-extras-catalog.sh        # offline, extras pins match versions.env
 sh tests/host/test-launcher-integration.sh  # real engine, existing local image
+IMAGE=localhost/agentainer:dev sh tests/host/test-extras-live.sh  # network, after a catalog change
 sh tests/host/test-build-uid.sh             # slow: full build with --uid 1001 --gid 20
 python3 tests/host/test-layer-repro.py      # slow: two clean tool builds, configured Buildx
 python3 tests/host/test-healthcheck.py      # also invoked by tests/58-healthcheck.sh
@@ -41,7 +44,7 @@ python3 tests/host/test-language-tooling.py --image localhost/agentainer:dev  # 
 python3 tests/host/test-playwright-setup.py --image localhost/agentainer:dev  # slow, network
 scripts/build.sh --variant kelos [--from IMAGE]                 # build localhost/agentainer-kelos:dev; network
 IMAGE=localhost/agentainer-kelos:dev sh tests/kelos/test_image.sh
-# Release verification arguments: docs/versions.md#verifying-a-release-before-use
+python3 tests/host/test-published-image.py ...  # release only, network; arguments: docs/versions.md#verifying-a-release-before-use
 # Optional terminal screenshots: tests/visual/README.md
 ```
 
@@ -62,7 +65,7 @@ Check each command's exit code directly. Piping into `tail` or `grep` hides a fa
 
 ## Pins and downloads
 
-- Every pinned version, digest and checksum for the image lives in `versions.env`. Do not hardcode versions in the `Containerfile` or scripts. Exceptions: GitHub Actions and the actionlint image are pinned by SHA or digest in the workflow files, and the deploy image references (`CONTAINERSSH_IMAGE` and `WEBHOOK_PYTHON_IMAGE` in `deploy/kubernetes/*/deployment.yaml`, `FILEBROWSER_IMAGE` in `deploy/kubernetes/agentainer/statefulset.yaml`) repeat their `versions.env` pins (`bump_versions.py` rewrites them and `tests/host/test-manifests.sh` checks they match). The optional extras keep their dependency hashes in `rootfs/usr/local/share/agentainer/extras/<name>/package-lock.json`, and each `package.json` there repeats its `versions.env` pin (`bump_versions.py` rewrites both and `tests/host/test-extras-catalog.sh` checks they match).
+- Every pinned version, digest and checksum for the image lives in `versions.env`. Do not hardcode versions in the `Containerfile` or scripts. Exceptions: GitHub Actions and the actionlint image are pinned by SHA or digest in the workflow files, and the deploy image references (`CONTAINERSSH_IMAGE` and `WEBHOOK_PYTHON_IMAGE` in `deploy/kubernetes/*/deployment.yaml`, `FILEBROWSER_IMAGE` in `deploy/kubernetes/agentainer/statefulset.yaml`) repeat their `versions.env` pins (`bump_versions.py` rewrites them and `tests/host/test-manifests.sh` checks they match). The default image tag in `bin/agentainer`, `deploy/kubernetes/agentainer/statefulset.yaml` and `kustomization.yaml`, and the example commands in `README.md`, `docs/running.md` and `docs/versions.md`, repeat `AGENTAINER_RELEASE_VERSION` (`RELEASE_REFS` in `bump_versions.py` lists them, and `tests/unit/test_bump_versions.py` checks they match). The optional extras keep their dependency hashes in `rootfs/usr/local/share/agentainer/extras/<name>/package-lock.json`, and each `package.json` there repeats its `versions.env` pin (`bump_versions.py` rewrites both and `tests/host/test-extras-catalog.sh` checks they match). `docs/extras.md` names the same versions outside its dated Known findings table (`bump_versions.py` rewrites them and `tests/host/test-extras-catalog.sh` checks they match).
 - A new pin needs a resolver in `scripts/bump_versions.py`, unless the scheduled update must never change it (`SOURCE_DATE_EPOCH`). Its key must match a pattern in `VALUE_PATTERNS` (most keys match by suffix, such as `_VERSION` or `_SHA256_ARM64`). The scheduled update refuses to write a value that matches no pattern.
 - Check every download against the checksum the project publishes. When a project publishes none, record the SHA-256 you computed and say so in a comment.
 - Install upstream release binaries. Do not build a tool from source to pick up a newer Go, Rust or library version.

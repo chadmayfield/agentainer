@@ -59,13 +59,13 @@ Any failure before the `npm/extras/<name>` link switches removes the new directo
 
 ## Upgrades and removal
 
-An upgrade keeps the directory it replaced, because another container on the same home may still run it, and deletes it at the next install of that extra. Older directories are deleted at that point too. An upgrade also removes the bin links of commands the new version does not list.
+An upgrade keeps the directory it replaced, because another container on the same home may still run it, and deletes it at the next install of that extra. Older directories are deleted at that point too. Only one previous version is kept. After two installs, a container that still runs the version from before both loses its files. An upgrade also removes the bin links of commands the new version does not list.
 
 `remove` deletes the `npm/extras/<name>` link, every `npm/extras/<name>@*` directory and the bin links into them. Files the tool created outside `npm/extras`, such as its data directory or settings in your home, stay. The command says so when it finishes.
 
 ## Kandev
 
-[Kandev](https://github.com/kdlbs/kandev) is a web task board that runs coding agents and reviews their changes. npm package `kandev`, command `kandev`. License: AGPL-3.0-only ([npm metadata for kandev 0.98.0](https://registry.npmjs.org/kandev/0.98.0)).
+[Kandev](https://github.com/kdlbs/kandev) is a web task board that runs coding agents and reviews their changes. npm package `kandev`, command `kandev`. License: AGPL-3.0-only ([npm metadata for kandev 0.102.0](https://registry.npmjs.org/kandev/0.102.0)).
 
 Start it in a container started with a published port:
 
@@ -77,7 +77,7 @@ kandev --port 38429 --headless
 
 Then open `http://localhost:38429` on the host. The Kandev launcher runs a native runtime from an optional platform package, so this extra keeps optional dependencies. The install check is `kandev --version`, which fails when that runtime is missing.
 
-Kandev's backend listens on `0.0.0.0` by default, and Kandev's documentation says its local mode "is not an authenticated multi-user boundary" ([Kandev CLI, Ports and network exposure](https://kandev.ai/docs/cli)). The same page says this "can expose Kandev to other machines on the network". The launcher publishes to `127.0.0.1` on the host unless the mapping names another address ([Development server ports](running.md#development-server-ports)).
+Kandev's backend listens on `0.0.0.0` by default, and Kandev's documentation says its local mode "is not an authenticated multi-user boundary" ([Kandev CLI, Ports and network exposure](https://kandev.ai/docs/cli)). The same page says this "can expose Kandev to other machines on the network". The launcher publishes to `127.0.0.1` on the host unless the mapping names another address ([Development server ports](running.md#development-server-ports)). That limits only the host side: other containers on the same engine network, such as Docker's default `bridge` network, reach Kandev at the container's address without logging in. [Development server ports](running.md#development-server-ports) shows how to start the container on a user-defined network of its own.
 
 In a Kubernetes pod, do not expose Kandev through a Service. Start it bound to loopback, as Kandev's documentation shows, and reach it with `kubectl port-forward` ([Kubernetes port forwarding](https://kubernetes.io/docs/tasks/access-application-cluster/port-forward-access-application-cluster/)):
 
@@ -92,21 +92,24 @@ Not verified: this has not been run in a cluster.
 
 ## OpenChamber
 
-[OpenChamber](https://registry.npmjs.org/@openchamber/web) is a web interface for the OpenCode agent. npm package `@openchamber/web`, command `openchamber`. License: MIT, as its [README](https://unpkg.com/@openchamber/web@2.5.1/README.md) states. Its npm metadata has no license field ([npm metadata for @openchamber/web 2.5.1](https://registry.npmjs.org/@openchamber/web/2.5.1)).
+[OpenChamber](https://registry.npmjs.org/@openchamber/web) is a web interface for the OpenCode agent. npm package `@openchamber/web`, command `openchamber`. License: MIT, as its [README](https://unpkg.com/@openchamber/web@2.7.2/README.md) states. Its npm metadata has no license field ([npm metadata for @openchamber/web 2.7.2](https://registry.npmjs.org/@openchamber/web/2.7.2)).
 
-OpenChamber starts on port 3000. `--lan` makes it listen on `0.0.0.0`, and `--ui-password` protects browser access ([README](https://unpkg.com/@openchamber/web@2.5.1/README.md)). To reach it from the host, use both:
+OpenChamber starts on port 3000. `--lan` makes it listen on `0.0.0.0`, and `--ui-password` protects browser access ([README](https://unpkg.com/@openchamber/web@2.7.2/README.md)). To reach it from the host, use both:
 
 ```sh
 bin/agentainer up --publish 3000:3000 "$HOME/code"
-# inside the container
-openchamber --lan --port 3000 --ui-password '<password>'
+# inside the container: type the password, which bash does not echo
+read -rs OPENCHAMBER_UI_PASSWORD && export OPENCHAMBER_UI_PASSWORD
+openchamber --lan --port 3000
 ```
+
+OpenChamber reads `OPENCHAMBER_UI_PASSWORD` as the alternative to `--ui-password` (`bin/lib/cli-args.js` in [`@openchamber/web` 2.7.2](https://unpkg.com/@openchamber/web@2.7.2/bin/lib/cli-args.js)). A password given with `--ui-password` stays in `~/.bash_history` on the home volume, and any process in the container can read it from `/proc/<pid>/cmdline`. The variable keeps it out of both, but processes that run as the same user, the agents included, can still read it from `/proc/<pid>/environ`.
 
 Then open `http://localhost:3000` on the host. Its terminal uses `node-pty`. The install check runs `openchamber --version` and loads `node-pty`'s prebuilt binding, since its install script never runs.
 
 ## REA
 
-[REA](https://github.com/morluto/rea) is a reverse engineering CLI and MCP server. npm package `rea-agents`, commands `rea` and `rea-agents`. License: MIT ([npm metadata for rea-agents 6.8.0](https://registry.npmjs.org/rea-agents/6.8.0)).
+[REA](https://github.com/morluto/rea) is a reverse engineering CLI and MCP server. npm package `rea-agents`, commands `rea` and `rea-agents`. License: MIT ([npm metadata for rea-agents 6.9.0](https://registry.npmjs.org/rea-agents/6.9.0)).
 
 Install does not add REA to any agent. Run `rea-agents setup --client <agent>`, for example with `claude_code`, `codex`, `opencode` or `antigravity`.
 
@@ -116,22 +119,16 @@ The REA Frida tools do not work in this install. The optional `frida` package in
 
 ## Known findings
 
-A Trivy scan of the extras lockfiles at the pins in `versions.env`, run with the same command as CI's `lint-unit` job, and the repository's Dependabot alerts list these findings. Kandev has none.
+This is a dated record. On 2026-11-26, a Trivy 0.76.2 scan of the extras lockfiles at the pins of that day (`trivy fs --scanners vuln`, as in CI's `lint-unit` job) and the repository's Dependabot alerts listed this finding. Kandev and OpenChamber had none. The versions in the table are the ones checked that day; the scheduled update does not change them.
 
 | Extra | Severity | ID | Package and installed version | Fixed in |
 |---|---|---|---|---|
-| OpenChamber (`@openchamber/web` 2.5.1) | Critical | CVE-2026-102828 ([GHSA-x6jw-m9v5-85vh](https://github.com/advisories/GHSA-x6jw-m9v5-85vh)) | `simple-git` 3.36.0 | 4.0.1 |
-| OpenChamber (`@openchamber/web` 2.5.1) | Critical | CVE-2026-102829 ([GHSA-v5rq-49vh-5v5c](https://github.com/advisories/GHSA-v5rq-49vh-5v5c)) | `@simple-git/argv-parser` 1.1.1 | 2.0.1 |
-| OpenChamber (`@openchamber/web` 2.5.1) | High | CVE-2026-102826 ([GHSA-g4wm-2vf7-vfgr](https://github.com/advisories/GHSA-g4wm-2vf7-vfgr)) | `simple-git` 3.36.0 | 4.0.0 |
-| OpenChamber (`@openchamber/web` 2.5.1) | High | CVE-2026-102827 ([GHSA-858h-whjf-mvg5](https://github.com/advisories/GHSA-858h-whjf-mvg5)) | `simple-git` 3.36.0 | 4.0.0 |
-| REA (`rea-agents` 6.8.0) | High | CVE-2023-54404 ([GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5)) | `zod` 4.4.3 | 4.6.6 |
-| REA (`rea-agents` 6.8.0) | Medium | CVE-2026-118773 ([GHSA-3g3m-2fjr-6pw4](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4)) | `glob` 13.0.6 | 14.0.2 |
-| REA (`rea-agents` 6.8.0) | Medium | CVE-2026-118764 ([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)) | `minimatch` 10.2.6 | 11.0.1 |
+| REA (`rea-agents` 6.9.0) | Medium | CVE-2026-118764 ([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)) | `minimatch` 10.2.5 | 11.0.1 |
 
-OpenChamber 2.5.1 declares `simple-git` `^3.36.0`, which excludes 4.x, so the `simple-git` fixes need a newer OpenChamber release. REA 6.8.0 pins `zod` at exactly 4.4.3, so the `zod` fix needs a newer REA release. The scheduled update picks up newer releases once they pass the 7-day rule ([How the pins update](#how-the-pins-update)).
+On that day REA's optional `frida` dependency, 17.23.2 in the lockfile, declared `minimatch` `^10.0.1`, which excludes 11.x, so the fix needed a newer `frida` release in REA's lockfile. The scheduled update picks up newer releases once they pass the 7-day rule ([How the pins update](#how-the-pins-update)).
 
-The list changes with each pin update. The step summary of the `lint-unit` job in CI ([`build.yml`](../.github/workflows/build.yml)) has the current list.
+The findings change with each pin update. The step summary of the `lint-unit` job in CI ([`build.yml`](../.github/workflows/build.yml)) has the current list, and a pull request that moves an extras pin asks the reviewer to check this table against the new lockfile.
 
 ## How the pins update
 
-`versions.env` pins `KANDEV_VERSION`, `OPENCHAMBER_VERSION` and `REA_VERSION`. Each extra's dependency tree, with an `integrity` hash for every package, is in `rootfs/usr/local/share/agentainer/extras/<name>/package-lock.json`. The scheduled update proposes a newer version only when it was published at least 7 days earlier, applies the same age limit to every dependency, and checks every lockfile entry against npm's registry signatures. [Versions: optional extras](versions.md#optional-extras) describes the checks.
+`versions.env` pins `KANDEV_VERSION`, `OPENCHAMBER_VERSION` and `REA_VERSION`. Each extra's dependency tree, with an `integrity` hash for every package, is in `rootfs/usr/local/share/agentainer/extras/<name>/package-lock.json`. When a pin moves, the scheduled update also rewrites the versions this page names, except in the Known findings table. The scheduled update proposes a newer version only when it was published at least 7 days earlier, applies the same age limit to every dependency, and checks every lockfile entry against npm's registry signatures. [Versions: optional extras](versions.md#optional-extras) describes the checks.

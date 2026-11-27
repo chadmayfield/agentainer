@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,9 @@ from unittest.mock import call, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"))
 import bump_versions as bv  # noqa: E402
 
+# A publish time older than MIN_RELEASE_AGE_HOURS for any run of these tests.
+OLD = "2026-01-01T00:00:00Z"
+
 
 class EnvFileTests(unittest.TestCase):
     def test_failed_publisher_verification_preserves_pins(self):
@@ -23,7 +27,7 @@ class EnvFileTests(unittest.TestCase):
             original = "UV_VERSION=0.13.0\n"
             with open(path, "w") as file:
                 file.write(original)
-            release = {"tag_name": "0.13.1", "assets": [
+            release = {"tag_name": "0.13.1", "published_at": OLD, "assets": [
                 {"name": "uv-test.tar.gz", "digest": "sha256:" + "a" * 64}]}
             with patch.object(bv, "gh_latest", return_value=release), \
                     patch.object(bv, "verify_asset", side_effect=bv.VerificationFailed("wrong signer")):
@@ -62,7 +66,7 @@ class ParserTests(unittest.TestCase):
             assets.extend([{"name": name, "digest": "sha256:" + letter * 64},
                            {"name": name + ".sha256", "browser_download_url": "https://example.com/" + name}])
             responses["https://example.com/" + name] = letter * 64 + " *" + name + "\n"
-        release = {"tag_name": "v0.5.5", "assets": assets}
+        release = {"tag_name": "v0.5.5", "published_at": OLD, "assets": assets}
         with patch.object(bv, "gh_latest", return_value=release) as latest, \
                 patch.object(bv, "fetch", side_effect=responses.__getitem__) as fetched, \
                 patch.object(bv, "verify_asset", return_value=False):
@@ -75,7 +79,7 @@ class ParserTests(unittest.TestCase):
 
     def test_ruff_resolver_selects_both_official_archives_and_verifies_publisher(self):
         names = ["ruff-x86_64-unknown-linux-gnu.tar.gz", "ruff-aarch64-unknown-linux-gnu.tar.gz"]
-        release = {"tag_name": "0.17.1", "assets": [
+        release = {"tag_name": "0.17.1", "published_at": OLD, "assets": [
             {"name": name, "digest": "sha256:" + letter * 64}
             for name, letter in zip(names, "ab")]}
         with patch.object(bv, "gh_latest", return_value=release), \
@@ -93,7 +97,7 @@ class ParserTests(unittest.TestCase):
         text = "".join("%s  %s\n" % (l * 64, n) for n, l in zip(names, letters))
         if with_sums:
             assets.append({"name": sums_name, "digest": None, "browser_download_url": "https://example.com/" + sums_name})
-        return {"tag_name": "v" + version, "prerelease": False, "assets": assets}, text
+        return {"tag_name": "v" + version, "prerelease": False, "published_at": OLD, "assets": assets}, text
 
     def _resolve(self, resolver, release, text, **extra):
         with patch.object(bv, "gh_latest", return_value=release), \
@@ -126,6 +130,84 @@ class ParserTests(unittest.TestCase):
         release, text = self._release("8.30.1", names, "gitleaks_8.30.1_checksums.txt", with_sums=False)
         with self.assertRaises(bv.LookupFailed):
             self._resolve(bv.r_gitleaks, release, text)
+
+    # Asset and checksum-list names copied from each project's latest release on 2026-11-26.
+    PUBLISHED_LIST_RESOLVERS = (
+        ("r_crane", "CRANE", "0.22.1", ["go-containerregistry_Linux_x86_64.tar.gz",
+                                         "go-containerregistry_Linux_arm64.tar.gz"], "checksums.txt"),
+        ("r_kyverno", "KYVERNO", "1.20.0", ["kyverno-cli_v1.20.0_linux_x86_64.tar.gz",
+                                             "kyverno-cli_v1.20.0_linux_arm64.tar.gz"], "checksums.txt"),
+        ("r_actionlint", "ACTIONLINT", "1.7.12", ["actionlint_1.7.12_linux_amd64.tar.gz",
+                                                  "actionlint_1.7.12_linux_arm64.tar.gz"],
+         "actionlint_1.7.12_checksums.txt"),
+        ("r_hadolint", "HADOLINT", "2.15.1", ["hadolint-linux-x86_64", "hadolint-linux-arm64"], "checksums.sha256"),
+        ("r_scc", "SCC", "4.1.0", ["scc_Linux_x86_64.tar.gz", "scc_Linux_arm64.tar.gz"], "checksums.txt"),
+        ("r_lazygit", "LAZYGIT", "0.66.3", ["lazygit_0.66.3_linux_x86_64.tar.gz",
+                                             "lazygit_0.66.3_linux_arm64.tar.gz"], "checksums.txt"),
+        ("r_glow", "GLOW", "3.0.0", ["glow_3.0.0_Linux_x86_64.tar.gz", "glow_3.0.0_Linux_arm64.tar.gz"],
+         "checksums.txt"),
+        ("r_syft", "SYFT", "1.57.2", ["syft_1.57.2_linux_amd64.tar.gz", "syft_1.57.2_linux_arm64.tar.gz"],
+         "syft_1.57.2_checksums.txt"),
+        ("r_grype", "GRYPE", "0.122.1", ["grype_0.122.1_linux_amd64.tar.gz", "grype_0.122.1_linux_arm64.tar.gz"],
+         "grype_0.122.1_checksums.txt"),
+    )
+
+    def test_cli_tool_resolvers_require_their_published_checksum_list(self):
+        for name, prefix, version, names, sums in self.PUBLISHED_LIST_RESOLVERS:
+            with self.subTest(resolver=name):
+                resolver = getattr(bv, name)
+                release, text = self._release(version, names, sums)
+                pins, _, verify = self._resolve(resolver, release, text)
+                self.assertEqual(pins, {prefix + "_VERSION": version, prefix + "_SHA256_AMD64": "a" * 64,
+                                        prefix + "_SHA256_ARM64": "b" * 64})
+                self.assertEqual([c.args[2] for c in verify.call_args_list], names)
+                self.assertIn(resolver, bv.RESOLVERS)
+                release, text = self._release(version, names, sums, with_sums=False)
+                with self.assertRaises(bv.LookupFailed):
+                    self._resolve(resolver, release, text)
+
+    # These projects publish no checksum list, so github_tool uses GitHub's asset digest.
+    DIGEST_ONLY_RESOLVERS = (
+        ("r_zizmor", "ZIZMOR", "1.33.1", ["zizmor-x86_64-unknown-linux-gnu.tar.gz",
+                                           "zizmor-aarch64-unknown-linux-gnu.tar.gz"]),
+        ("r_ast_grep", "AST_GREP", "0.51.3", ["app-x86_64-unknown-linux-gnu.zip", "app-aarch64-unknown-linux-gnu.zip"]),
+        ("r_difftastic", "DIFFTASTIC", "0.72.0", ["difft-0.72.0-x86_64-unknown-linux-gnu.tar.gz",
+                                                   "difft-0.72.0-aarch64-unknown-linux-gnu.tar.gz"]),
+        ("r_delta", "DELTA", "0.22.0", ["delta-0.22.0-x86_64-unknown-linux-gnu.tar.gz",
+                                         "delta-0.22.0-aarch64-unknown-linux-gnu.tar.gz"]),
+        ("r_hyperfine", "HYPERFINE", "2.0.0", ["hyperfine-v2.0.0-x86_64-unknown-linux-gnu.tar.gz",
+                                                "hyperfine-v2.0.0-aarch64-unknown-linux-gnu.tar.gz"]),
+    )
+
+    def test_cli_tool_resolvers_without_a_list_use_the_asset_digest(self):
+        for name, prefix, version, names in self.DIGEST_ONLY_RESOLVERS:
+            with self.subTest(resolver=name):
+                resolver = getattr(bv, name)
+                release, text = self._release(version, names, "unused", with_sums=False)
+                pins, fetched, _ = self._resolve(resolver, release, text)
+                self.assertEqual(pins, {prefix + "_VERSION": version, prefix + "_SHA256_AMD64": "a" * 64,
+                                        prefix + "_SHA256_ARM64": "b" * 64})
+                self.assertEqual(fetched.call_count, 0)
+                self.assertIn(resolver, bv.RESOLVERS)
+
+    def test_fj_resolver_hashes_the_codeberg_archives(self):
+        release = {"tag_name": "v0.7.0", "published_at": OLD, "assets": [
+            {"name": "forgejo-cli-x86_64-linux.tar.gz", "browser_download_url": "https://example.com/amd64"},
+            {"name": "forgejo-cli-aarch64-linux.tar.gz", "browser_download_url": "https://example.com/arm64"}]}
+        blobs = {"https://example.com/amd64": b"amd64 archive", "https://example.com/arm64": b"arm64 archive"}
+        with patch.object(bv, "fetch_json", return_value=release) as fetched, \
+                patch.object(bv, "fetch_bytes", side_effect=blobs.__getitem__):
+            pins = bv.r_fj()
+        fetched.assert_called_once_with(bv.FJ_RELEASES)
+        self.assertEqual(pins, {"FJ_VERSION": "0.7.0",
+                                "FJ_SHA256_AMD64": hashlib.sha256(b"amd64 archive").hexdigest(),
+                                "FJ_SHA256_ARM64": hashlib.sha256(b"arm64 archive").hexdigest()})
+        self.assertIn(bv.r_fj, bv.RESOLVERS)
+        release["assets"] = release["assets"][:1]
+        with patch.object(bv, "fetch_json", return_value=release), \
+                patch.object(bv, "fetch_bytes", side_effect=blobs.__getitem__):
+            with self.assertRaises(bv.LookupFailed):
+                bv.r_fj()
 
     def test_checksum_list_must_be_the_named_file(self):
         # A different list in the release does not stand in for gosec_<version>_checksums.txt.
@@ -204,7 +286,9 @@ class ParserTests(unittest.TestCase):
         self.assertIn(tags[0], bv.CONTAINERSSH_AGENT_SERIES)
 
     def test_new_tool_pins_match_value_patterns(self):
-        for prefix in ("GOSEC", "GITLEAKS", "CONTAINERSSH_AGENT"):
+        for prefix in ("GOSEC", "GITLEAKS", "CONTAINERSSH_AGENT", "FJ", "CRANE", "KYVERNO", "ACTIONLINT", "ZIZMOR",
+                       "HADOLINT", "AST_GREP", "DIFFTASTIC", "DELTA", "SCC", "HYPERFINE", "LAZYGIT", "GLOW", "SYFT",
+                       "GRYPE"):
             self.assertIsNone(bv.invalid(prefix + "_VERSION", "1.2.3"))
             for arch in ("AMD64", "ARM64"):
                 self.assertIsNone(bv.invalid("%s_SHA256_%s" % (prefix, arch), "a" * 64))
@@ -213,7 +297,8 @@ class ParserTests(unittest.TestCase):
         checksum = "a" * 64
         for filename, contents in (("checksums-bsd", "SHA256 (tool.tar.gz) = " + checksum),
                                    ("tool.tar.gz.sha256", checksum + "  tool.tar.gz"),
-                                   ("codex-package_SHA256SUMS", checksum + "  tool.tar.gz")):
+                                   ("codex-package_SHA256SUMS", checksum + "  tool.tar.gz"),
+                                   ("checksums.sha256", checksum + " *tool.tar.gz")):
             release = {"tag_name": "v1", "assets": [
                 {"name": "tool.tar.gz", "digest": "sha256:" + checksum},
                 {"name": filename, "browser_download_url": "https://example.com/sums"}]}
@@ -511,9 +596,9 @@ class HelperTests(unittest.TestCase):
             env = os.path.join(d, "versions.env")
             with open(env, "w") as f:
                 f.write(env_text)
-            os.makedirs(os.path.join(d, os.path.dirname(rel)))
-            with open(os.path.join(d, rel), "w") as f:
-                f.write(manifest)
+            for _, _, _, path in bv.K8S_IMAGES:
+                os.makedirs(os.path.join(d, os.path.dirname(path)), exist_ok=True)
+                shutil.copyfile(os.path.join(root, path), os.path.join(d, path))
             with patch.object(bv, "fetch_json", return_value={"digest": "sha256:" + "c" * 64}) as fj, \
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(bv.main(["--file", env, "--only", "r_k8s_images"]), 0)
@@ -522,6 +607,116 @@ class HelperTests(unittest.TestCase):
                 self.assertEqual(f.read(), manifest.replace(old, new))
             with open(env) as f:
                 self.assertEqual(bv.values(bv.parse_env(f.read()))["FILEBROWSER_IMAGE"], new)
+
+    def test_agentainer_release_is_the_highest_published_version(self):
+        releases = [{"tag_name": "v0.1.0-dev.20261104.2", "draft": True},
+                    {"tag_name": "v0.1.0-dev.20261104.1", "prerelease": True},
+                    {"tag_name": "v0.1.0-dev.20261024.10", "prerelease": True},
+                    {"tag_name": "v0.1.0-dev.20261024.2", "prerelease": True},
+                    {"tag_name": "kelos-1.0.0"}, {"tag_name": "v0.01.0"}, {"tag_name": "v0.1.0-dev.20260230.1"},
+                    {"tag_name": "0.9.0"}, {}]
+        self.assertEqual(bv.agentainer_release(releases), "0.1.0-dev.20261104.1")
+        self.assertEqual(bv.agentainer_release(releases[2:4]), "0.1.0-dev.20261024.10")
+        stable = [{"tag_name": "v0.1.0"}, {"tag_name": "v0.1.0-dev.20261104.1", "prerelease": True}]
+        self.assertEqual(bv.agentainer_release(stable), "0.1.0")
+
+    def test_agentainer_release_without_a_release_fails(self):
+        for releases in ([], [{"tag_name": "v1.0.0", "draft": True}], [{"tag_name": "nightly"}]):
+            with self.subTest(releases=releases):
+                with self.assertRaises(bv.LookupFailed):
+                    bv.agentainer_release(releases)
+
+    def test_agentainer_release_resolver_lists_releases_with_prereleases(self):
+        with patch.object(bv, "fetch_json", return_value=[{"tag_name": "v0.1.0-dev.20261104.1", "prerelease": True}]) as fj:
+            self.assertEqual(bv.r_agentainer_release(), {"AGENTAINER_RELEASE_VERSION": "0.1.0-dev.20261104.1"})
+        fj.assert_called_once_with("https://api.github.com/repos/chadmayfield/agentainer/releases?per_page=100")
+        self.assertIn(bv.r_agentainer_release, bv.RESOLVERS)
+        self.assertIsNone(bv.invalid("AGENTAINER_RELEASE_VERSION", "0.1.0-dev.20261104.1"))
+
+    def test_release_ref_rewrite_keeps_longer_versions(self):
+        old, new = "0.1.0-dev.20261104.1", "0.1.0-dev.20261201.1"
+        image = bv.AGENTAINER_IMAGE + ":"
+        text = "%s%s\n%s%s0\n%s%s-x\nrun %s%s.\n" % (image, old, image, old, image, old, image, old)
+        self.assertEqual(bv.rewrite_release_ref(text, image, old, new),
+                         "%s%s\n%s%s0\n%s%s-x\nrun %s%s.\n" % (image, new, image, old, image, old, image, new))
+
+    def test_release_refs_hold_the_current_pin(self):
+        # The resolver rewrites only text that holds the current pin, so every entry must.
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+        with open(os.path.join(root, "versions.env")) as f:
+            pin = bv.values(bv.parse_env(f.read()))["AGENTAINER_RELEASE_VERSION"]
+        for rel, prefix in bv.RELEASE_REFS:
+            with self.subTest(rel=rel, prefix=prefix):
+                with open(os.path.join(root, rel)) as f:
+                    text = f.read()
+                self.assertIn(prefix + pin, text)
+                if prefix.startswith(bv.AGENTAINER_IMAGE):
+                    tags = re.findall(re.escape(prefix) + r"([0-9A-Za-z._-]+)", text)
+                    self.assertEqual(sorted(set(tags)), [pin], "every %s tag in %s must be the pin" % (prefix, rel))
+
+    def test_release_pin_bump_rewrites_every_release_ref(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+        with open(os.path.join(root, "versions.env")) as f:
+            env_text = f.read()
+        old = bv.values(bv.parse_env(env_text))["AGENTAINER_RELEASE_VERSION"]
+        new = "0.1.0-dev.20991231.1"
+        with tempfile.TemporaryDirectory() as d:
+            env = os.path.join(d, "versions.env")
+            with open(env, "w") as f:
+                f.write(env_text)
+            originals = {}
+            for rel in {rel for rel, _ in bv.RELEASE_REFS}:
+                os.makedirs(os.path.join(d, os.path.dirname(rel)), exist_ok=True)
+                shutil.copy2(os.path.join(root, rel), os.path.join(d, rel))
+                with open(os.path.join(root, rel)) as f:
+                    originals[rel] = f.read()
+            with patch.object(bv, "fetch_json", return_value=[{"tag_name": "v" + new, "prerelease": True}]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(bv.main(["--file", env, "--only", "r_agentainer_release"]), 0)
+            for rel, prefix in bv.RELEASE_REFS:
+                with self.subTest(rel=rel, prefix=prefix):
+                    with open(os.path.join(d, rel)) as f:
+                        text = f.read()
+                    self.assertNotIn(prefix + old, text)
+                    self.assertIn(prefix + new, text)
+            for rel, original in originals.items():
+                with open(os.path.join(d, rel)) as f:
+                    self.assertEqual(f.read(), original.replace(old, new), rel)
+            self.assertTrue(os.access(os.path.join(d, "bin", "agentainer"), os.X_OK))
+            with open(env) as f:
+                self.assertEqual(bv.values(bv.parse_env(f.read()))["AGENTAINER_RELEASE_VERSION"], new)
+
+    def test_release_pin_is_never_downgraded(self):
+        with tempfile.TemporaryDirectory() as d:
+            env = os.path.join(d, "versions.env")
+            with open(env, "w") as f:
+                f.write("AGENTAINER_RELEASE_VERSION=0.1.0-dev.20261104.1\n")
+            with patch.object(bv, "fetch_json", return_value=[{"tag_name": "v0.1.0-dev.20261024.1"}]), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertNotEqual(bv.main(["--file", env, "--only", "r_agentainer_release"]), 0)
+            with open(env) as f:
+                self.assertEqual(f.read(), "AGENTAINER_RELEASE_VERSION=0.1.0-dev.20261104.1\n")
+
+    def test_missing_k8s_manifest_fails_and_writes_nothing(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+        rel = os.path.join("deploy", "kubernetes", "agentainer", "statefulset.yaml")
+        with open(os.path.join(root, "versions.env")) as f:
+            env_text = f.read()
+        with tempfile.TemporaryDirectory() as d:
+            env = os.path.join(d, "versions.env")
+            with open(env, "w") as f:
+                f.write(env_text)
+            os.makedirs(os.path.join(d, os.path.dirname(rel)))
+            shutil.copyfile(os.path.join(root, rel), os.path.join(d, rel))
+            err = io.StringIO()
+            with patch.object(bv, "fetch_json", return_value={"digest": "sha256:" + "c" * 64}), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                self.assertEqual(bv.main(["--file", env, "--only", "r_k8s_images"]), 1)
+            self.assertIn("is missing; pins unchanged", err.getvalue())
+            with open(env) as f:
+                self.assertEqual(f.read(), env_text)
+            with open(os.path.join(d, rel)) as f, open(os.path.join(root, rel)) as g:
+                self.assertEqual(f.read(), g.read())
 
     def test_strip_v(self):
         self.assertEqual(bv.strip_v("v2.102.0"), "2.102.0")
@@ -603,15 +798,42 @@ class WriteTests(unittest.TestCase):
         self.assertEqual(bv.main(["--file", self.path], resolvers=[boom]), 1)
         self.assertEqual(self.read(), "A=1\n")
 
-    def test_failure_after_a_success_leaves_file_untouched(self):
+    def test_failure_keeps_only_that_resolvers_pins(self):
         def ok():
-            return {"A": "2"}
+            return {"GO_VERSION": "1.27.3"}
 
         def boom():
-            raise bv.LookupFailed("network down")
+            raise bv.LookupFailed("signature check reported EXPKEYSIG")
 
-        self.assertEqual(bv.main(["--file", self.path], resolvers=[ok, boom]), 1)
-        self.assertEqual(self.read(), "A=1\n")
+        def broken():
+            return {}["missing"]
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(bv.main(["--file", self.path], resolvers=[boom, ok, broken]), 1)
+        self.assertEqual(self.read(), "A=1\nGO_VERSION=1.27.3\n")
+        self.assertIn("boom: signature check reported EXPKEYSIG; its pins are unchanged", err.getvalue())
+        self.assertIn("broken: unexpected upstream data", err.getvalue())
+
+    def test_failures_file_lists_every_failed_resolver_and_the_run_exits_0(self):
+        def ok():
+            return {"GO_VERSION": "1.27.3"}
+
+        def boom():
+            raise bv.LookupFailed("network\ndown")
+
+        def boom2():
+            raise bv.LookupFailed("other")
+
+        failures = self.path + ".failures"
+        self.addCleanup(lambda: os.path.exists(failures) and os.unlink(failures))
+        out = io.StringIO()
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(out):
+            self.assertEqual(bv.main(["--file", self.path, "--failures", failures], resolvers=[boom, ok, boom2]), 0)
+        with open(failures) as f:
+            self.assertEqual(f.read(), "boom: network down\nboom2: other\n")
+        self.assertIn("boom2: other\n", out.getvalue())
+        self.assertEqual(self.read(), "A=1\nGO_VERSION=1.27.3\n")
 
     def test_unexpected_error_is_a_clean_failure(self):
         def broken():
@@ -651,7 +873,7 @@ class WriteTests(unittest.TestCase):
         shasums = ("%s  node-v26.99.0-linux-x64.tar.xz\n%s  node-v26.99.0-linux-arm64.tar.xz\n"
                    % ("b" * 64, "a" * 64)).encode()
         err = io.StringIO()
-        with patch.object(bv, "fetch_json", return_value=[{"version": "v26.99.0"}]) as fj, \
+        with patch.object(bv, "fetch_json", return_value=[{"version": "v26.99.0", "date": "2026-01-01"}]) as fj, \
                 patch.object(bv, "fetch_bytes", side_effect=[shasums, b"not a signature"]) as fb, \
                 contextlib.redirect_stderr(err):
             self.assertEqual(bv.main(["--file", self.path, "--only", "r_node"]), 1)
@@ -1233,6 +1455,84 @@ class ExtrasTests(unittest.TestCase):
         self.assertNotEqual(kwargs["cwd"], self.dir)
         self.assertEqual(env.splitlines()[0], "A=1")
 
+    DOC = ("# Extras\n\n"
+           "npm package `kandev`. License ([npm metadata for kandev 1.0.0](https://registry.npmjs.org/kandev/1.0.0)).\n"
+           "README: https://unpkg.com/@openchamber/web@2.0.0/README.md and "
+           "[`@openchamber/web` 2.0.0](https://unpkg.com/@openchamber/web@2.0.0/bin/lib/cli-args.js).\n"
+           "REA ([npm metadata for rea-agents 3.0.0](https://registry.npmjs.org/rea-agents/3.0.0)).\n"
+           "Unrelated: version 1.0.0, frida 3.0.0, kandev 1.0.0.1, xkandev 1.0.0.\n\n"
+           "## Known findings\n\nChecked on one day.\n\n"
+           "| Extra | Package |\n|---|---|\n| REA (`rea-agents` 3.0.0) | `minimatch` 1.0.0 |\n"
+           "| Kandev (kandev 1.0.0) | none |\n\n"
+           "Text after the table: rea-agents 3.0.0.\n\n## How the pins update\n\nkandev 1.0.0\n")
+
+    def test_pin_bump_rewrites_extras_doc_outside_the_findings_table(self):
+        self.write(bv.EXTRAS_DOC, self.DOC)
+        rc, _, err = self.run_main(["--only", "r_extras"])
+        self.assertEqual(rc, 0, err)
+        doc = self.read(bv.EXTRAS_DOC)
+        for mention in ("npm metadata for kandev 1.1.0", "registry.npmjs.org/kandev/1.1.0",
+                        "unpkg.com/@openchamber/web@2.1.0/README.md", "[`@openchamber/web` 2.1.0]",
+                        "unpkg.com/@openchamber/web@2.1.0/bin/lib/cli-args.js",
+                        "npm metadata for rea-agents 3.1.0", "registry.npmjs.org/rea-agents/3.1.0",
+                        "Text after the table: rea-agents 3.1.0.", "## How the pins update\n\nkandev 1.1.0\n"):
+            with self.subTest(mention=mention):
+                self.assertIn(mention, doc)
+        # Equal versions that do not follow the package name, or are part of a longer version or
+        # name, stay as they are.
+        self.assertIn("Unrelated: version 1.0.0, frida 3.0.0, kandev 1.0.0.1, xkandev 1.0.0.\n", doc)
+        start = self.DOC.index("| Extra |")
+        end = self.DOC.index("\n\nText after the table")
+        self.assertEqual(doc[start:end], self.DOC[start:end])
+        # The bump-pr action's content check accepts the rewrite.
+        import check_bump_refs
+        env = check_bump_refs.read_env(self.env)
+        self.assertEqual(check_bump_refs.problems(bv.EXTRAS_DOC, self.DOC, doc, env), [])
+        self.assertNotEqual(check_bump_refs.problems(bv.EXTRAS_DOC, self.DOC, doc,
+                                                     dict(env, KANDEV_VERSION="1.2.0")), [])
+
+    def test_unchanged_pins_leave_extras_doc_alone(self):
+        self.write(bv.EXTRAS_DOC, self.DOC)
+        self.latest = {"kandev": "1.0.0", "@openchamber/web": "2.0.0", "rea-agents": "3.0.0"}
+        rc, _, err = self.run_main(["--only", "r_extras"])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.read(bv.EXTRAS_DOC), self.DOC)
+
+    def test_catalog_test_passes_after_a_simulated_bump(self):
+        """Bump every extra in a copy of the real catalog and docs, then run the catalog test there."""
+        root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        for rel in ("tests/host/test-extras-catalog.sh", "tests/lib.sh", bv.EXTRAS_DOC):
+            os.makedirs(os.path.join(self.dir, os.path.dirname(rel)), exist_ok=True)
+            shutil.copy2(os.path.join(root, rel), os.path.join(self.dir, rel))
+        for rel in ("scripts", "rootfs/usr/local/lib/agentainer", CATALOG):
+            shutil.rmtree(os.path.join(self.dir, rel), ignore_errors=True)
+            shutil.copytree(os.path.join(root, rel), os.path.join(self.dir, rel),
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        with open(os.path.join(root, "versions.env")) as f:
+            pins = bv.values(bv.parse_env(f.read()))
+        self.write("versions.env", "".join("%s=%s\n" % (key, pins[key]) for key, _, _ in bv.EXTRAS))
+        self.latest = {}
+        for key, name, extra in bv.EXTRAS:
+            old = pins[key]
+            new = "%s.%d.0" % (old.split(".")[0], int(old.split(".")[1]) + 1)
+            self.latest[name] = new
+            # The real lockfile with the package moved to the new version.
+            with open(os.path.join(self.dir, CATALOG, extra, "package-lock.json")) as f:
+                lock = json.load(f)
+            lock["packages"][""]["dependencies"] = {name: new}
+            lock["packages"]["node_modules/" + name]["version"] = new
+            self.lock_override[name] = lock
+        before = self.read(bv.EXTRAS_DOC)
+        rc, _, err = self.run_main(["--only", "r_extras"])
+        self.assertEqual(rc, 0, err)
+        self.assertNotEqual(self.read(bv.EXTRAS_DOC), before)
+        result = subprocess.run(["sh", os.path.join(self.dir, "tests/host/test-extras-catalog.sh")],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for _, name, _ in bv.EXTRAS:
+            self.assertRegex(result.stdout, r"(?m)^ok \d+ - docs/extras\.md names %s only at " % re.escape(name))
+        self.assertNotIn("not ok", result.stdout)
+
     def test_failed_check_keeps_only_that_extras_pin_and_files(self):
         def check(lock, **kwargs):
             if "node_modules/rea-agents" in lock["packages"]:
@@ -1424,7 +1724,7 @@ class ExtrasTests(unittest.TestCase):
             self.assertNotIn("extras rea", f.read())
         self.assertIn("extras rea:", err)
 
-    def test_failed_run_still_leaves_an_empty_failures_file(self):
+    def test_failed_resolver_replaces_a_stale_failures_file(self):
         def boom():
             raise bv.LookupFailed("network down")
 
@@ -1432,16 +1732,16 @@ class ExtrasTests(unittest.TestCase):
         with open(failures, "w") as f:
             f.write("stale\n")
         rc, out, err = self.run_main(["--failures", failures], resolvers=[boom])
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 0, err)
         with open(failures) as f:
-            self.assertEqual(f.read(), "")
+            self.assertEqual(f.read(), "boom: network down\n")
         os.unlink(failures)
         rc, out, err = self.run_main(["--failures", failures, "--only", "r_nope"])
         self.assertEqual(rc, 2)
         with open(failures) as f:
             self.assertEqual(f.read(), "")
 
-    def test_failures_found_before_a_failed_run_still_reach_the_file(self):
+    def test_resolver_and_extras_failures_both_reach_the_file(self):
         def check(lock, **kwargs):
             if "node_modules/rea-agents" in lock["packages"]:
                 raise bv.LookupFailed("rea-agents@3.1.0: no registry signature verifies")
@@ -1450,14 +1750,13 @@ class ExtrasTests(unittest.TestCase):
             raise bv.LookupFailed("network down")
 
         failures = os.path.join(self.dir, "failures.txt")
-        before = self.snapshot()
         rc, out, err = self.run_main(["--failures", failures], resolvers=[bv.r_extras, boom], check=check)
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 0, err)
         with open(failures) as f:
-            self.assertEqual(f.read(), "extras rea: rea-agents@3.1.0: no registry signature verifies\n")
-        after = self.snapshot()
-        del after["failures.txt"]
-        self.assertEqual(after, before)
+            self.assertEqual(f.read(), "boom: network down\n"
+                                       "extras rea: rea-agents@3.1.0: no registry signature verifies\n")
+        self.assertIn("KANDEV_VERSION=1.1.0\n", self.read("versions.env"))
+        self.assertIn("REA_VERSION=3.0.0\n", self.read("versions.env"))
 
     def test_unwritable_failures_file_is_a_clean_error(self):
         failures = os.path.join(self.dir, "missing-dir", "failures.txt")
@@ -1509,7 +1808,7 @@ class ExtrasTests(unittest.TestCase):
         failures = os.path.join(self.dir, "failures.txt")
         with self.failing_report_write(failures):
             rc, out, err = self.run_main(["--failures", failures], resolvers=[bv.r_extras, boom], check=check)
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 2)
         self.assertIn("bump_versions: cannot write --failures %s: " % failures, err)
 
     def test_failures_file_write_error_does_not_mask_an_exception(self):
@@ -1592,18 +1891,587 @@ class ExtrasTests(unittest.TestCase):
         bv.write_atomic(target, "A=2\n")
         self.assertEqual(os.stat(target).st_mode & 0o777, 0o644)
 
-    def test_failure_in_another_resolver_writes_nothing(self):
+    def test_failure_in_another_resolver_still_writes_the_extras(self):
         def boom():
             raise bv.LookupFailed("network down")
 
         before = self.snapshot()
         rc, out, err = self.run_main(resolvers=[bv.r_extras, boom])
         self.assertEqual(rc, 1)
-        self.assertEqual(self.snapshot(), before)
-        # Files computed by the failed run are not written by the next one.
+        after = self.snapshot()
+        self.assertNotEqual(after, before)
+        self.assertIn("KANDEV_VERSION=1.1.0\n", self.read("versions.env"))
+        # Files computed by one run are not written again by the next one.
         rc, out, err = self.run_main(resolvers=[lambda: {}])
         self.assertEqual(rc, 0, err)
-        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.snapshot(), after)
+
+
+class OpenCodeResolverTests(unittest.TestCase):
+    INTEGRITY = {"linux-x64-baseline": "sha512-" + "A" * 86 + "==", "linux-arm64": "sha512-" + "B" * 86 + "=="}
+
+    def fetch(self, url):
+        if url == "https://registry.npmjs.org/@opencode/cli":
+            return {"dist-tags": {"latest": "2.5.0"}, "versions": {"2.5.0": {}}, "time": {"2.5.0": OLD}}
+        for target, integrity in self.INTEGRITY.items():
+            if url == "https://registry.npmjs.org/@opencode/cli-%s/2.5.0" % target:
+                return {"dist": {"integrity": integrity, "signatures": [{"keyid": "k", "sig": "s"}]}}
+        raise AssertionError(url)
+
+    def test_each_platform_package_needs_a_registry_signature(self):
+        with patch.object(bv, "fetch_json", side_effect=self.fetch), \
+                patch.object(bv, "load_registry_keys", return_value={"k": {}}), \
+                patch.object(bv, "verify_registry_signature") as verify:
+            out = bv.r_opencode()
+        self.assertEqual(out["OPENCODE_INTEGRITY_AMD64"], self.INTEGRITY["linux-x64-baseline"])
+        self.assertEqual(out["OPENCODE_INTEGRITY_ARM64"], self.INTEGRITY["linux-arm64"])
+        self.assertEqual([c.args[:4] for c in verify.call_args_list],
+                         [("@opencode/cli-linux-x64-baseline", "2.5.0", self.INTEGRITY["linux-x64-baseline"],
+                           [{"keyid": "k", "sig": "s"}]),
+                          ("@opencode/cli-linux-arm64", "2.5.0", self.INTEGRITY["linux-arm64"],
+                           [{"keyid": "k", "sig": "s"}])])
+
+    def test_a_signature_that_does_not_verify_keeps_the_pins(self):
+        with patch.object(bv, "fetch_json", side_effect=self.fetch), \
+                patch.object(bv, "load_registry_keys", return_value={}):
+            with self.assertRaisesRegex(bv.LookupFailed, "unknown keyid"):
+                bv.r_opencode()
+
+
+class ReleaseAgeTests(unittest.TestCase):
+    """The MIN_RELEASE_AGE_HOURS rule, with the run time fixed by patching utcnow."""
+    NOW = datetime.datetime(2026, 11, 26, 12, 0, tzinfo=datetime.timezone.utc)
+
+    def setUp(self):
+        patcher = patch.object(bv, "utcnow", return_value=self.NOW)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        del bv.YOUNG_RELEASES[:]
+        del bv.AGE_FALLBACK[:]
+        self.addCleanup(bv.YOUNG_RELEASES.clear)
+        self.addCleanup(bv.AGE_FALLBACK.clear)
+
+    def ago(self, hours):
+        return (self.NOW - datetime.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def rel(self, tag, hours, **extra):
+        return dict({"tag_name": tag, "published_at": self.ago(hours), "draft": False, "prerelease": False}, **extra)
+
+    def test_the_minimum_is_72_hours(self):
+        self.assertEqual(bv.MIN_RELEASE_AGE_HOURS, 72)
+
+    def test_an_old_enough_latest_release_is_taken_without_the_list(self):
+        latest = self.rel("v2.0.0", 73)
+        with patch.object(bv, "gh_latest", return_value=latest), \
+                patch.object(bv, "fetch_json", side_effect=AssertionError("must not list")):
+            self.assertIs(bv.gh_release("o/r"), latest)
+        self.assertEqual(bv.YOUNG_RELEASES, [])
+        self.assertEqual(bv.AGE_FALLBACK, [])
+
+    def test_a_release_exactly_72_hours_old_is_taken(self):
+        latest = self.rel("v2.0.0", 72)
+        with patch.object(bv, "gh_latest", return_value=latest):
+            self.assertIs(bv.gh_release("o/r"), latest)
+
+    def test_a_too_young_latest_release_falls_back_to_the_previous_one(self):
+        releases = [self.rel("v2.1.0", 5), self.rel("v2.1.0-rc1", 100, prerelease=True),
+                    self.rel("v2.0.1", 80), self.rel("v2.0.0", 500), self.rel("v3.0.0", 1, draft=True)]
+        with patch.object(bv, "gh_latest", return_value=releases[0]), \
+                patch.object(bv, "fetch_json", return_value=releases) as listed:
+            self.assertEqual(bv.gh_release("o/r")["tag_name"], "v2.0.1")
+        listed.assert_called_once_with("https://api.github.com/repos/o/r/releases?per_page=30")
+        self.assertEqual(bv.YOUNG_RELEASES,
+                         ["newer release o/r v2.1.0 skipped, published 5 hours ago (minimum 72 hours)"])
+        self.assertEqual(bv.AGE_FALLBACK, ["o/r"])
+
+    def test_no_release_old_enough_keeps_the_pin(self):
+        releases = [self.rel("v2.1.0", 5), self.rel("v2.0.0", 30)]
+        err = io.StringIO()
+        with patch.object(bv, "gh_latest", return_value=releases[0]), \
+                patch.object(bv, "fetch_json", return_value=releases), \
+                patch.object(bv, "verify_asset", side_effect=AssertionError("must not verify")), \
+                contextlib.redirect_stderr(err):
+            self.assertIsNone(bv.gh_release("o/r"))
+            self.assertEqual(bv.r_ruff(), {})
+        self.assertIn("keeping the current pin", err.getvalue())
+
+    def test_a_missing_publish_time_fails_the_resolver(self):
+        with patch.object(bv, "gh_latest", return_value={"tag_name": "v1.0.0"}):
+            with self.assertRaisesRegex(bv.LookupFailed, "no valid publish time"):
+                bv.gh_release("o/r")
+
+    def test_forgejo_and_gitea_releases_fall_back_the_same_way(self):
+        latest = dict(self.rel("v0.8.0", 10), published_at="2026-11-26T03:00:00+01:00")
+        older = [latest, self.rel("v0.7.0", 2000)]
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            return latest if url.endswith("/latest") else older
+
+        with patch.object(bv, "fetch_json", side_effect=fetch):
+            self.assertEqual(bv.forge_release(bv.FJ_RELEASES, "forgejo-cli")["tag_name"], "v0.7.0")
+        self.assertEqual(calls, [bv.FJ_RELEASES,
+                                 "https://codeberg.org/api/v1/repos/forgejo-contrib/forgejo-cli/releases?limit=20"])
+        # 03:00 at +01:00 is 02:00 UTC, ten hours before NOW.
+        self.assertIn("forgejo-cli v0.8.0 skipped, published 10 hours ago", bv.YOUNG_RELEASES[0])
+
+    def test_node_falls_back_by_release_day(self):
+        doc = [{"version": "v26.14.0", "date": "2026-11-25"}, {"version": "v26.13.1", "date": "2026-11-22"},
+               {"version": "v26.13.0", "date": "2026-11-01"}]
+        # 2026-11-22 ends at 2026-11-23T00:00Z, 84 hours before NOW; 2026-11-25 ends 12 hours before.
+        self.assertEqual(bv.parse_node_index(doc, 26, now=self.NOW), "26.13.1")
+        self.assertIsNone(bv.parse_node_index(doc[:1], 26, now=self.NOW))
+        with self.assertRaises(bv.LookupFailed):
+            bv.parse_node_index([{"version": "v26.14.0"}], 26, now=self.NOW)
+
+    def test_node_with_no_release_old_enough_keeps_the_pin(self):
+        doc = [{"version": "v26.14.0", "date": "2026-11-25"}]
+        with patch.object(bv, "fetch_json", return_value=doc), \
+                patch.object(bv, "fetch_bytes", side_effect=AssertionError("must not download")), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(bv.r_node(), {})
+        self.assertIn("node 26.14.0 skipped, published 12 hours ago", bv.YOUNG_RELEASES[0])
+
+    def test_opencode_falls_back_to_the_newest_version_old_enough(self):
+        packument = {"dist-tags": {"latest": "2.5.0"}, "versions": {"2.5.0": {}, "2.4.9": {}, "2.4.8": {}},
+                     "time": {"2.5.0": self.ago(20), "2.4.9": self.ago(100), "2.4.8": self.ago(900)}}
+
+        def fetch(url):
+            if url == "https://registry.npmjs.org/@opencode/cli":
+                return packument
+            return {"dist": {"integrity": "sha512-" + "A" * 86 + "==", "signatures": []}}
+
+        with patch.object(bv, "fetch_json", side_effect=fetch), \
+                patch.object(bv, "load_registry_keys", return_value={}), \
+                patch.object(bv, "verify_registry_signature"):
+            self.assertEqual(bv.r_opencode()["OPENCODE_VERSION"], "2.4.9")
+        self.assertEqual(bv.YOUNG_RELEASES,
+                         ["newer release @opencode/cli 2.5.0 skipped, published 20 hours ago (minimum 72 hours)"])
+
+    def test_a_too_young_rust_release_keeps_the_rust_pins(self):
+        texts = {"https://static.rust-lang.org/rustup/release-stable.toml": "version = '1.29.3'\n",
+                 "https://static.rust-lang.org/dist/channel-rust-stable.toml":
+                     'manifest-version = "2"\ndate = "2026-11-25"\n[pkg.rustc]\nversion = "1.99.0 (abc 2026-11-24)"\n'}
+
+        def fetch(url):
+            if url in texts:
+                return texts[url]
+            if url.endswith("rustup-init.sha256"):
+                return "a" * 64 + "  rustup-init\n"
+            raise AssertionError(url)
+
+        with patch.object(bv, "fetch", side_effect=fetch):
+            out = bv.r_rust()
+        self.assertEqual(sorted(out), ["RUSTUP_SHA256_AMD64", "RUSTUP_SHA256_ARM64", "RUSTUP_VERSION"])
+        self.assertIn("rust 1.99.0 skipped", bv.YOUNG_RELEASES[0])
+
+    def test_a_skipped_release_is_printed_and_does_not_fail_the_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "versions.env")
+            failures = os.path.join(directory, "failures.txt")
+            with open(path, "w") as f:
+                f.write("GH_VERSION=2.104.0\n")
+
+            def resolver():
+                bv.too_young("cli/cli", "v2.106.0", self.NOW - datetime.timedelta(hours=27), self.NOW)
+                bv.AGE_FALLBACK.append("cli/cli")
+                return {"GH_VERSION": "2.105.0"}
+
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                rc = bv.main(["--file", path, "--failures", failures], resolvers=[resolver])
+            self.assertEqual(rc, 0)
+            self.assertIn("release age: newer release cli/cli v2.106.0 skipped, published 27 hours ago",
+                          out.getvalue())
+            with open(failures) as f:
+                self.assertEqual(f.read(), "")
+            with open(path) as f:
+                self.assertEqual(f.read(), "GH_VERSION=2.105.0\n")
+
+    def test_a_fallback_older_than_the_pin_keeps_the_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "versions.env")
+            with open(path, "w") as f:
+                f.write("GH_VERSION=2.106.0\n")
+
+            def resolver():
+                bv.AGE_FALLBACK.append("cli/cli")
+                return {"GH_VERSION": "2.105.0"}
+
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                self.assertEqual(bv.main(["--file", path], resolvers=[resolver]), 0)
+            self.assertIn("keeping it", err.getvalue())
+            with open(path) as f:
+                self.assertEqual(f.read(), "GH_VERSION=2.106.0\n")
+
+    def test_without_a_fallback_an_older_result_is_still_a_downgrade(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "versions.env")
+            with open(path, "w") as f:
+                f.write("GH_VERSION=2.106.0\n")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(bv.main(["--file", path], resolvers=[lambda: {"GH_VERSION": "2.105.0"}]), 1)
+
+    def test_containerssh_agent_and_buildkit_skip_young_releases(self):
+        names = ["agent_0.11.%d_linux_amd64.tar.gz", "agent_0.11.%d_linux_arm64.tar.gz"]
+        releases = []
+        for patch_level, hours in ((3, 2), (2, 200)):
+            assets = [{"name": n % patch_level, "digest": "sha256:" + l * 64} for n, l in zip(names, "ab")]
+            assets.append({"name": "agent_0.11.%d_checksums.txt" % patch_level,
+                           "browser_download_url": "https://example.com/%d" % patch_level})
+            releases.append(self.rel("v0.11.%d" % patch_level, hours, assets=assets))
+        text = "".join("%s  %s\n" % (l * 64, n % 2) for n, l in zip(names, "ab"))
+        with patch.object(bv, "fetch_json", return_value=releases), \
+                patch.object(bv, "fetch", return_value=text), \
+                patch.object(bv, "verify_asset", return_value=False), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(bv.r_containerssh_agent()["CONTAINERSSH_AGENT_VERSION"], "0.11.2")
+        self.assertIn("containerssh/agent v0.11.3 skipped", bv.YOUNG_RELEASES[0])
+        del bv.YOUNG_RELEASES[:]
+        buildkit = [self.rel("v0.30.0", 3), self.rel("v0.29.1", 300)]
+        with patch.object(bv, "fetch_json", side_effect=[buildkit, {"digest": "sha256:" + "c" * 64}]):
+            self.assertEqual(bv.r_buildkit(), {"BUILDKIT_IMAGE": "docker.io/moby/buildkit:v0.29.1@sha256:" + "c" * 64})
+        self.assertIn("moby/buildkit v0.30.0 skipped", bv.YOUNG_RELEASES[0])
+
+
+
+KELOS_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+FORK_COMMIT = "c" * 40
+TAG_OBJECT = "d" * 40
+GOLANG_DIGEST = "sha256:" + "e" * 64
+INDEX_DIGEST = "sha256:" + "f" * 64
+KELOS_CONTAINERFILE_TEXT = (
+    "# pins\n"
+    "ARG AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261024.1@sha256:" + "1" * 64 + "\n"
+    "ARG GOLANG_IMAGE=docker.io/library/golang:1.25.14@sha256:" + "2" * 64 + "\n"
+    "ARG KELOS_FORK_COMMIT=" + "3" * 40 + "\n"
+    "ARG KELOS_CAPTURE_VERSION=v0.62.0-proxy.3\n"
+    "FROM --platform=$BUILDPLATFORM ${GOLANG_IMAGE} AS kelos-capture\n"
+    "ARG KELOS_FORK_COMMIT\n")
+
+
+def ref(tag, sha, kind="commit"):
+    return {"ref": "refs/tags/" + tag, "object": {"sha": sha, "type": kind}}
+
+
+class KelosParserTests(unittest.TestCase):
+    def test_highest_rest_tag_by_version_then_n(self):
+        refs = [ref("v0.65.0", "a" * 40), ref("v0.64.0-rest.9", "b" * 40), ref("v0.65.0-rest.1", "c" * 40),
+                ref("v0.65.0-rest.2", "d" * 40, "tag"), ref("v0.65.0-rest.10", "e" * 40),
+                ref("v0.65.0-rest.01", "f" * 40), ref("v0.65.0-proxy.3", "0" * 40), ref("v0.9.0-rest.1", "1" * 40)]
+        self.assertEqual(bv.kelos_rest_tags(refs), [
+            ("v0.65.0-rest.10", "e" * 40, "commit"), ("v0.65.0-rest.2", "d" * 40, "tag"),
+            ("v0.65.0-rest.1", "c" * 40, "commit"), ("v0.64.0-rest.9", "b" * 40, "commit"),
+            ("v0.9.0-rest.1", "1" * 40, "commit")])
+
+    def test_version_beats_a_higher_n(self):
+        refs = [ref("v0.65.0-rest.7", "a" * 40), ref("v0.66.0-rest.1", "b" * 40, "tag")]
+        self.assertEqual(bv.kelos_rest_tags(refs)[0], ("v0.66.0-rest.1", "b" * 40, "tag"))
+
+    def test_no_rest_tag_is_a_failure(self):
+        with self.assertRaises(bv.LookupFailed):
+            bv.kelos_rest_tags([ref("v0.65.0", "a" * 40), {"ref": "refs/heads/v0.65.0-rest.1"}])
+
+    def test_annotated_tags_are_peeled_to_the_commit(self):
+        responses = {"https://api.github.com/repos/o/r/git/tags/" + "1" * 40: {"object": {"sha": "2" * 40, "type": "tag"}},
+                     "https://api.github.com/repos/o/r/git/tags/" + "2" * 40: {"object": {"sha": FORK_COMMIT, "type": "commit"}}}
+        with patch.object(bv, "fetch_json", side_effect=lambda url: responses[url]):
+            self.assertEqual(bv.peel_tag("o/r", "1" * 40, "tag"), FORK_COMMIT)
+
+    def test_lightweight_tag_needs_no_request(self):
+        with patch.object(bv, "fetch_json", side_effect=AssertionError("must not fetch")):
+            self.assertEqual(bv.peel_tag("o/r", FORK_COMMIT, "commit"), FORK_COMMIT)
+
+    def test_tag_of_a_tree_or_bad_sha_is_refused(self):
+        with patch.object(bv, "fetch_json", return_value={"object": {"sha": "9" * 40, "type": "tree"}}):
+            with self.assertRaises(bv.LookupFailed):
+                bv.peel_tag("o/r", "1" * 40, "tag")
+        with self.assertRaises(bv.LookupFailed):
+            bv.peel_tag("o/r", "not-a-sha", "commit")
+
+    def test_endless_tag_chain_is_refused(self):
+        with patch.object(bv, "fetch_json", return_value={"object": {"sha": "1" * 40, "type": "tag"}}):
+            with self.assertRaises(bv.LookupFailed):
+                bv.peel_tag("o/r", "1" * 40, "tag")
+
+    def test_go_mod_requirement(self):
+        self.assertEqual(bv.parse_go_mod_go("module x\n\ngo 1.27.4\n"), (1, 27, 4))
+        self.assertEqual(bv.parse_go_mod_go("module x\ngo 1.25\n"), (1, 25))
+        self.assertEqual(bv.parse_go_mod_go("module x\ngo 1.25.0\ntoolchain go1.26.2\n"), (1, 26, 2))
+        with self.assertRaises(bv.LookupFailed):
+            bv.parse_go_mod_go("module x\n")
+
+    def test_git_blob_sha_matches_git(self):
+        # git hash-object of the bytes "hello\n".
+        self.assertEqual(bv.git_blob_sha(b"hello\n"), "ce013625030ba8dba906f756967f9e9ca394464a")
+
+    def test_containerfile_args_are_read_and_rewritten_in_place(self):
+        args = bv.read_containerfile_args(KELOS_CONTAINERFILE_TEXT, bv.KELOS_ARGS)
+        self.assertEqual(args["KELOS_CAPTURE_VERSION"], "v0.62.0-proxy.3")
+        out = bv.rewrite_containerfile_args(KELOS_CONTAINERFILE_TEXT, {"KELOS_CAPTURE_VERSION": "v0.65.0-rest.1"})
+        self.assertEqual(out, KELOS_CONTAINERFILE_TEXT.replace("v0.62.0-proxy.3", "v0.65.0-rest.1"))
+        # The ARG line without a value inside the stage stays as it is.
+        out = bv.rewrite_containerfile_args(KELOS_CONTAINERFILE_TEXT, {"KELOS_FORK_COMMIT": FORK_COMMIT})
+        self.assertIn("ARG KELOS_FORK_COMMIT=" + FORK_COMMIT + "\n", out)
+        self.assertTrue(out.endswith("ARG KELOS_FORK_COMMIT\n"))
+
+    def test_missing_or_repeated_arg_is_refused(self):
+        with self.assertRaises(bv.LookupFailed):
+            bv.read_containerfile_args("ARG X=1\n", ["KELOS_FORK_COMMIT"])
+        with self.assertRaises(bv.LookupFailed):
+            bv.rewrite_containerfile_args("ARG A=1\nARG A=2\n", {"A": "3"})
+
+    def test_image_downgrades_are_refused(self):
+        old = bv.read_containerfile_args(KELOS_CONTAINERFILE_TEXT, bv.KELOS_ARGS)
+        bv.kelos_images_not_older(old, dict(old))
+        for key, value in (("AGENTAINER_IMAGE", "ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261019.1@" + INDEX_DIGEST),
+                           ("GOLANG_IMAGE", "docker.io/library/golang:1.25.9@" + GOLANG_DIGEST)):
+            with self.subTest(key=key), self.assertRaises(bv.LookupFailed):
+                bv.kelos_images_not_older(old, dict(old, **{key: value}))
+
+    def test_capture_tag_order(self):
+        self.assertFalse(bv.kelos_capture_older("v0.62.0-proxy.3", "v0.62.0-rest.1"))
+        self.assertTrue(bv.kelos_capture_older("v0.62.0-proxy.3", "v0.61.0-rest.4"))
+        self.assertTrue(bv.kelos_capture_older("v0.65.0-rest.2", "v0.65.0-rest.1"))
+        self.assertFalse(bv.kelos_capture_older("v0.65.0-rest.2", "v0.65.0-rest.3"))
+
+    def test_the_kelos_pins_in_the_repo_pass_validation(self):
+        with open(os.path.join(KELOS_ROOT, "Containerfile.kelos")) as f:
+            args = bv.read_containerfile_args(f.read(), bv.KELOS_ARGS)
+        for key, value in args.items():
+            with self.subTest(key=key):
+                self.assertIsNone(bv.invalid(key, value))
+        self.assertIsNotNone(bv.kelos_rest_key(args["KELOS_CAPTURE_VERSION"]))
+
+    def test_source_md_names_the_release_the_copies_come_from(self):
+        with open(os.path.join(KELOS_ROOT, "rootfs-kelos", "SOURCE.md")) as f:
+            self.assertIn("tag %s," % bv.KELOS_COPIED_FROM, f.read())
+
+
+class FakeResponse(io.BytesIO):
+    def __init__(self, body, headers):
+        super().__init__(body)
+        self.headers = headers
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class GhcrDigestTests(unittest.TestCase):
+    def digest(self, body, headers):
+        requests = []
+
+        def opener(req):
+            requests.append(req)
+            return FakeResponse(body, headers)
+        with patch.object(bv, "fetch_json", return_value={"token": "anon"}) as fj, \
+                patch.object(bv, "open_https", side_effect=opener):
+            result = bv.ghcr_index_digest("chadmayfield/agentainer", "0.1.0-dev.20261104.1")
+        fj.assert_called_once_with("https://ghcr.io/token?scope=repository:chadmayfield/agentainer:pull")
+        self.assertEqual(requests[0].full_url,
+                         "https://ghcr.io/v2/chadmayfield/agentainer/manifests/0.1.0-dev.20261104.1")
+        self.assertEqual(requests[0].get_header("Authorization"), "Bearer anon")
+        return result
+
+    def test_digest_is_the_sha256_of_the_index(self):
+        body = b'{"schemaVersion":2}'
+        want = "sha256:" + hashlib.sha256(body).hexdigest()
+        self.assertEqual(self.digest(body, {"Content-Type": "application/vnd.oci.image.index.v1+json",
+                                            "Docker-Content-Digest": want}), want)
+
+    def test_header_that_disagrees_is_refused(self):
+        with self.assertRaises(bv.LookupFailed):
+            self.digest(b"{}", {"Content-Type": "application/vnd.oci.image.index.v1+json",
+                                "Docker-Content-Digest": INDEX_DIGEST})
+
+    def test_single_platform_manifest_is_refused(self):
+        with self.assertRaises(bv.LookupFailed):
+            self.digest(b"{}", {"Content-Type": "application/vnd.oci.image.manifest.v1+json"})
+
+
+class KelosResolverTests(unittest.TestCase):
+    """r_kelos against a scratch tree and mocked GitHub, Go, Docker Hub and ghcr.io responses."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="cx-kelos-")
+        self.addCleanup(shutil.rmtree, self.dir)
+        with open(os.path.join(self.dir, "versions.env"), "w") as f:
+            f.write("GO_VERSION=1.27.4\n")
+        with open(os.path.join(self.dir, "Containerfile.kelos"), "w") as f:
+            f.write(KELOS_CONTAINERFILE_TEXT)
+        os.makedirs(os.path.join(self.dir, "rootfs-kelos"))
+        self.copies = {}
+        for local, upstream in bv.KELOS_COPIES:
+            data = ("copy of %s\n" % upstream).encode()
+            with open(os.path.join(self.dir, local), "wb") as f:
+                f.write(data)
+            self.copies[upstream] = bv.git_blob_sha(data)
+        self.go_mod = "module github.com/kelos-dev/kelos\n\ngo 1.27.4\n"
+        self.now = datetime.datetime(2026, 12, 10, tzinfo=datetime.timezone.utc)
+        # Publish times: upstream releases and fork commits, days before now.
+        self.upstream_age = {"v0.65.0": 30, "v0.64.0": 60}
+        self.commit_age = {FORK_COMMIT: 10, "2" * 40: 20}
+        self.codex_at_tag = "a" * 40
+        self.codex_upstream = "a" * 40
+        self.go = "1.27.4"
+
+    def fetch(self, url):
+        gh = "https://api.github.com/repos/"
+        if url == gh + "chadmayfield/kelos/git/matching-refs/tags/v":
+            return [ref("v0.62.0", "1" * 40), ref("v0.65.0-rest.1", TAG_OBJECT, "tag"), ref("v0.64.0-rest.3", "2" * 40)]
+        if url == gh + "chadmayfield/kelos/git/tags/" + TAG_OBJECT:
+            return {"object": {"sha": FORK_COMMIT, "type": "commit"}}
+        for version, days in self.upstream_age.items():
+            if url == gh + "kelos-dev/kelos/releases/tags/" + version:
+                return {"published_at": (self.now - datetime.timedelta(days=days)).isoformat()}
+        for commit, days in self.commit_age.items():
+            if url == gh + "chadmayfield/kelos/commits/" + commit:
+                return {"commit": {"committer": {"date": (self.now - datetime.timedelta(days=days)).isoformat()}}}
+        for commit in self.commit_age:
+            for upstream, sha in self.copies.items():
+                if url == gh + "chadmayfield/kelos/contents/%s?ref=%s" % (upstream, commit):
+                    return {"sha": sha}
+            if url == gh + "chadmayfield/kelos/contents/codex/kelos_entrypoint.sh?ref=" + commit:
+                return {"sha": self.codex_at_tag}
+        if url == gh + "kelos-dev/kelos/contents/codex/kelos_entrypoint.sh?ref=v0.62.0":
+            return {"sha": self.codex_upstream}
+        if url.startswith(gh + "chadmayfield/kelos/contents/go.mod?ref="):
+            return {"content": base64.b64encode(self.go_mod.encode()).decode()}
+        if url == "https://go.dev/dl/?mode=json":
+            return [{"version": "go" + self.go, "stable": True,
+                     "files": [{"os": "linux", "arch": a, "kind": "archive", "sha256": "0" * 64}
+                               for a in ("amd64", "arm64")]}]
+        if url == "https://hub.docker.com/v2/repositories/library/golang/tags/" + self.go:
+            return {"digest": GOLANG_DIGEST}
+        if url == gh + "chadmayfield/agentainer/releases?per_page=100":
+            return [{"tag_name": "v0.1.0-dev.20261104.1", "prerelease": True},
+                    {"tag_name": "v0.1.0-dev.20261024.1", "prerelease": True}]
+        raise AssertionError("unexpected fetch " + url)
+
+    def run_main(self):
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(bv, "fetch_json", side_effect=self.fetch), \
+                patch.object(bv, "utcnow", return_value=self.now), \
+                patch.object(bv, "ghcr_index_digest", return_value=INDEX_DIGEST) as digest, \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = bv.main(["--file", os.path.join(self.dir, "versions.env"), "--only", "r_kelos"])
+        if rc == 0:
+            digest.assert_called_once_with("chadmayfield/agentainer", "0.1.0-dev.20261104.1")
+        return rc, out.getvalue(), err.getvalue()
+
+    def read(self, rel):
+        with open(os.path.join(self.dir, rel)) as f:
+            return f.read()
+
+    def test_pins_are_written_to_the_containerfile_only(self):
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 0, err)
+        args = bv.read_containerfile_args(self.read("Containerfile.kelos"), bv.KELOS_ARGS)
+        self.assertEqual(args, {
+            "AGENTAINER_IMAGE": "ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1@" + INDEX_DIGEST,
+            "GOLANG_IMAGE": "docker.io/library/golang:1.27.4@" + GOLANG_DIGEST,
+            "KELOS_FORK_COMMIT": FORK_COMMIT,
+            "KELOS_CAPTURE_VERSION": "v0.65.0-rest.1"})
+        self.assertEqual(self.read("versions.env"), "GO_VERSION=1.27.4\n")
+        self.assertIn("Containerfile.kelos KELOS_CAPTURE_VERSION: v0.62.0-proxy.3 -> v0.65.0-rest.1", out)
+        self.assertIn("Containerfile.kelos AGENTAINER_IMAGE:", out)
+        # A second run finds nothing to change.
+        before = self.read("Containerfile.kelos")
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.read("Containerfile.kelos"), before)
+        self.assertNotIn("Containerfile.kelos", out)
+
+    def fork_args(self):
+        args = bv.read_containerfile_args(self.read("Containerfile.kelos"), bv.KELOS_ARGS)
+        return args["KELOS_FORK_COMMIT"], args["KELOS_CAPTURE_VERSION"]
+
+    def test_a_young_fork_commit_falls_back_to_the_next_tag(self):
+        self.commit_age[FORK_COMMIT] = 1
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.fork_args(), ("2" * 40, "v0.64.0-rest.3"))
+        self.assertIn("release age: newer release chadmayfield/kelos v0.65.0-rest.1 skipped, published 24 hours ago", out)
+
+    def test_a_young_upstream_release_falls_back_to_the_next_tag(self):
+        self.upstream_age["v0.65.0"] = 2
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.fork_args(), ("2" * 40, "v0.64.0-rest.3"))
+        self.assertIn("release age: newer release chadmayfield/kelos v0.65.0-rest.1 skipped", out)
+
+    def test_a_fallback_below_the_pin_keeps_the_pin(self):
+        with open(os.path.join(self.dir, "Containerfile.kelos"), "w") as f:
+            f.write(KELOS_CONTAINERFILE_TEXT.replace("v0.62.0-proxy.3", "v0.64.0-rest.5"))
+        self.commit_age[FORK_COMMIT] = 1
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.fork_args(), ("3" * 40, "v0.64.0-rest.5"))
+        self.assertIn("sorts below the v0.64.0-rest.5 pin; keeping it", err)
+        # The image pins still move.
+        self.assertIn("Containerfile.kelos AGENTAINER_IMAGE:", out)
+
+    def test_no_tag_old_enough_keeps_the_fork_pins(self):
+        self.commit_age = {FORK_COMMIT: 1, "2" * 40: 2}
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.fork_args(), ("3" * 40, "v0.62.0-proxy.3"))
+        self.assertIn("keeping the current pin", err)
+
+    def test_a_failed_r_kelos_does_not_hold_back_other_pins(self):
+        self.codex_at_tag = "b" * 40
+
+        def other():
+            return {"GO_VERSION": "1.27.5"}
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(bv, "fetch_json", side_effect=self.fetch), \
+                patch.object(bv, "utcnow", return_value=self.now), \
+                patch.object(bv, "ghcr_index_digest", return_value=INDEX_DIGEST), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = bv.main(["--file", os.path.join(self.dir, "versions.env")], resolvers=[bv.r_kelos, other])
+        self.assertEqual(rc, 1, err.getvalue())
+        self.assertIn("r_kelos:", err.getvalue())
+        self.assertEqual(self.read("versions.env"), "GO_VERSION=1.27.5\n")
+        self.assertEqual(self.read("Containerfile.kelos"), KELOS_CONTAINERFILE_TEXT)
+
+    def assert_refused(self, needle):
+        before = self.read("Containerfile.kelos")
+        rc, out, err = self.run_main()
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(needle, err)
+        self.assertEqual(self.read("Containerfile.kelos"), before)
+
+    def test_a_changed_copied_file_stops_the_update(self):
+        self.copies["claude-code/kelos_entrypoint.sh"] = "9" * 40
+        self.assert_refused("claude-code/kelos_entrypoint.sh differs from rootfs-kelos/kelos_entrypoint_claude.sh")
+
+    def test_a_changed_codex_entrypoint_stops_the_update(self):
+        self.codex_at_tag = "b" * 40
+        self.assert_refused("codex/kelos_entrypoint.sh changed since v0.62.0")
+
+    def test_go_older_than_go_mod_stops_the_update(self):
+        self.go_mod = "module x\n\ngo 1.28.0\n"
+        self.assert_refused("needs Go 1.28.0")
+
+    def test_a_downgrade_stops_the_update(self):
+        with open(os.path.join(self.dir, "Containerfile.kelos"), "w") as f:
+            f.write(KELOS_CONTAINERFILE_TEXT.replace("v0.62.0-proxy.3", "v0.65.0-rest.4"))
+        self.assert_refused("downgrade KELOS_CAPTURE_VERSION")
+
+    def test_a_malformed_digest_is_refused(self):
+        real = self.fetch
+
+        def fetch(url):
+            if "hub.docker.com" in url:
+                return {"digest": "sha256:short"}
+            return real(url)
+        self.fetch = fetch
+        self.assert_refused("malformed digest")
 
 
 if __name__ == "__main__":

@@ -26,6 +26,8 @@ Claude Code is the native binary from Anthropic's release host, the file Anthrop
 
 gosec, gitleaks and the ContainerSSH guest agent (`containerssh-agent`) are upstream release archives. The build checks each against the SHA-256 in the project's published `*_checksums.txt` (`GOSEC_`, `GITLEAKS_` and `CONTAINERSSH_AGENT_` pins). The image installs the agent at `/usr/local/bin/containerssh-agent` and links it at `/usr/bin/containerssh-agent`, ContainerSSH's default `agentPath` ([`AgentPath` default in `config/kubernetes.go` at ContainerSSH v0.6.0](https://github.com/ContainerSSH/ContainerSSH/blob/v0.6.0/config/kubernetes.go#L113)). The updater takes these three tools' hashes only from the release's `gosec_<version>_checksums.txt`, `gitleaks_<version>_checksums.txt` and `agent_<version>_checksums.txt`, and refuses a release that lacks the file.
 
+crane, kyverno, actionlint, hadolint, scc, lazygit, glow, syft and grype are upstream release archives or binaries, pinned the same way. The updater takes their hashes only from the project's published checksum list (`checksums.txt`, `checksums.sha256` or `<tool>_<version>_checksums.txt`) and refuses a release that lacks it. zizmor, ast-grep, difftastic, delta and hyperfine publish no checksum list, so the updater uses the SHA-256 digest GitHub records for each release asset. forgejo-cli (`fj`) releases on Codeberg, which publishes no checksums and whose release API returns no asset digest; the updater downloads both archives and pins the SHA-256 it computes (`r_fj`). The crane archive also holds `gcrane` and `krane`; only `crane` is installed. ast-grep installs as `ast-grep` only, because its `sg` alias is deprecated; difftastic installs as `difft`. yamllint, moreutils, pv, socat, jo, colordiff and dos2unix are Ubuntu packages from the apt snapshot.
+
 The agent version follows the ContainerSSH server image. `CONTAINERSSH_AGENT_SERIES` in `scripts/bump_versions.py` maps the server's tag series (`v0.6`) to the agent minor series tested with it (`0.11`), and the updater only proposes newer patch releases in that series. If the server tag has no entry, the updater keeps the current agent pin and prints why. The `v0.6` tag's digest can move between patch releases, so a mapping change needs a review of the verified pair of server digest and agent version. The verified pair is the server `docker.io/containerssh/containerssh:v0.6@sha256:f6b195c221739b0f1a43c567bc9df0a0f3b3bd92ccc25ef451e6d4122820c13b` (`CONTAINERSSH_IMAGE`) with `containerssh-agent` 0.11.0 (`CONTAINERSSH_AGENT_VERSION`). On 2026-11-04 SFTP, `ssh -L` and `ssh -D` worked with this pair in a cluster, in persistent mode with `disableAgent: true`. `VERIFIED_CONTAINERSSH_PAIR` in `scripts/bump_versions.py` records this pair, and `test_pinned_containerssh_pair_is_the_cluster_verified_pair` fails when `versions.env` pins a different server image reference (name, tag or digest) or agent version. A pull request from the scheduled update that changes either pin therefore fails CI until someone re-runs the SFTP, `ssh -L` and `ssh -D` check from [docs/kubernetes.md](kubernetes.md#sftp-and-port-forwarding) against the new pair and updates the constant and this paragraph. Do not merge a guest agent or server update before that check. The test runs in the `build` workflow on the pull request, not in the bump job, so the pull request still opens and shows the failure. That day Docker Hub's `v0.6` tag resolved to this digest, `v0.6.1` resolved to a different digest, and no `v0.6.0` tag existed.
 
 Each tool is built in its own stage, so an update downloads only the layers that changed:
@@ -77,7 +79,35 @@ On the 1st and 15th of each month at 06:00 UTC, [`.github/workflows/bump.yml`](.
 
 An update PR lists increases to the leading number of a three-part tool version under "Major-version upgrades" and asks the maintainer to acknowledge the compatibility review in its description. CI does not enforce that checkbox. Minor updates to tools below 1.0 can also break compatibility, so review their upstream notes as well ([Semantic Versioning](https://semver.org/)).
 
-The resolver follows current upstream release pointers with no minimum release age, except for the optional extras ([Optional extras](#optional-extras)). Proposed binaries run in build and test jobs before anyone reviews the pull request. Checksums and publisher signatures establish byte identity and the signing identity, not that the code is safe, so review upstream changes before merging.
+The resolver does not pin a release published less than 72 hours before the run ([Minimum release age](#minimum-release-age)). Proposed binaries run in build and test jobs before anyone reviews the pull request. Checksums and publisher signatures establish byte identity and the signing identity, not that the code is safe, so review upstream changes before merging.
+
+### Minimum release age
+
+`MIN_RELEASE_AGE_HOURS` in [`scripts/bump_versions.py`](../scripts/bump_versions.py) is 72. When a tool's newest release was published less than 72 hours before the run, the resolver pins the newest release that is at least 72 hours old instead. When no release qualifies, the pin stays. When the release old enough to pin sorts below the current pin, which an earlier run took before this rule, the pin also stays. Each skipped release prints a line such as `release age: newer release cli/cli v2.106.0 skipped, published 27 hours ago (minimum 72 hours)`. The scheduled workflow puts the resolver's output in the pull request text, so the pull request lists every skipped release. A skipped release does not fail the run.
+
+Each resolver uses the publish time its source gives:
+
+| Source | Publish time used |
+|---|---|
+| GitHub releases (every GitHub-hosted tool, Helm, the ContainerSSH guest agent, BuildKit) | `published_at` of each release. When the latest release is too young, the newest stable, non-draft release from the 30 most recent releases. The Trivy scanner image follows the Trivy version. |
+| tea (Gitea) and forgejo-cli (Codeberg) | `published_at` of each release, from the 20 most recent releases. |
+| OpenCode | The registry's `time` entry for each version of `@opencode/cli`. |
+| Node.js | The release day in `index.json`, counted from the end of that day. |
+| Rust | The `date` line of the stable channel manifest, counted from the end of that day. No list of earlier releases is read, so a Rust release that is too young keeps the current Rust pins. |
+| unslop | The committer date of the newest commit under `pstack`, which the committer sets. When it is too young, the newest commit from before the cutoff (the commits API's `until` parameter). |
+| The Kelos fork's `v<version>-rest.<n>` tags ([Kelos variant](kelos.md#pins)) | The later of the upstream kelos-dev/kelos release's `published_at` and the fork commit's committer date. When the highest tag is too young, the next highest tag that is old enough. |
+| Optional extras | Their own rule: 7 days ([Optional extras](#optional-extras)). |
+
+These resolvers are not held back, because their source gives no publish time:
+
+- Go: `go.dev/dl/?mode=json` has no dates.
+- rustup: `release-stable.toml` has only the version.
+- kubectl: `stable.txt` on `dl.k8s.io` has only the version.
+- AWS CLI: the changelog headings have no dates.
+- Antigravity: its manifest has only `version`, `url` and `sha512`.
+- Claude Code: the release host gives no time a version reached the stable channel. `manifest.json` has a `buildDate`, but a release is published after it is built, so that time cannot show a release is old enough.
+- The Kelos variant's `GOLANG_IMAGE`, for the same reason as Go; its Docker Hub tag also moves with every rebuild. Its `AGENTAINER_IMAGE` uses the release `r_agentainer_release` picks for `AGENTAINER_RELEASE_VERSION`, and that resolver applies no age rule.
+- The Ubuntu base image, the apt snapshot (always the previous day) and the Kubernetes example images (`CONTAINERSSH_IMAGE`, `WEBHOOK_PYTHON_IMAGE`, `FILEBROWSER_IMAGE`). Each follows a tag that moves with every rebuild, and Docker Hub keeps no earlier digest to fall back to.
 
 Run the same workflow manually through its `workflow_dispatch` trigger for an urgent security fix or an upstream change that breaks an agent. GitHub documents [scheduled](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule) and [manual](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch) triggers.
 
@@ -105,8 +135,8 @@ A release requires a maintainer-signed tag on a release merge in `main`; a branc
 Pull an explicit version tag. Prereleases never move `latest`, so before the first stable release there is no `latest` tag:
 
 ```sh
-podman pull ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261024.1
-AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261024.1 bin/agentainer up
+podman pull ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1
+AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1 bin/agentainer up
 ```
 
 A version exists only after its release workflow completes. A merge to `develop` runs CI and does not publish an image. To use features merged after the newest release tag, build the image locally with `scripts/build.sh`.
@@ -127,7 +157,7 @@ Use a trusted checkout of this repository and independently installed Docker Bui
 
 ```sh
 set -eu
-version=0.1.0-dev.20261024.1
+version=0.1.0-dev.20261104.1
 git verify-tag "v$version"
 commit=$(git rev-parse "v$version^{commit}")
 # Replace this placeholder with the release's full index digest.
@@ -149,7 +179,7 @@ It pulls and starts the verified digest, so run it only where you intend to run 
 
 ## Upstream publisher verification
 
-The updater requires `gh`, `cosign` and GnuPG in addition to Python. The scheduled workflow installs cosign through its pinned installer action. [`scripts/verify_upstream.py`](../scripts/verify_upstream.py) checks supported publishers before the resolver writes any pins. A missing verification tool, missing signing asset, changed checksum or failed signature stops the update. Build downloads still check their pinned hashes. The optional extras are the exception: a failed check keeps only that extra's pin ([Optional extras](#optional-extras)).
+The updater requires `gh`, `cosign` and GnuPG in addition to Python. The scheduled workflow installs cosign through its pinned installer action. [`scripts/verify_upstream.py`](../scripts/verify_upstream.py) checks supported publishers before the resolver writes any pins. A missing verification tool, missing signing asset, changed checksum or failed signature fails that tool's resolver, and the tool keeps all its pins. The other resolvers still run and their pins still update. Build downloads still check their pinned hashes. The optional extras work the same way for each extra ([Optional extras](#optional-extras)). `bump_versions.py --failures FILE` lists each failed resolver and extra in FILE, one per line, and exits 0. Without `--failures`, a failed resolver makes the exit status 1 after the other pins are written. A refused value or a version downgrade still stops the run and writes no pins.
 
 | Download | Required publisher check |
 |---|---|
@@ -164,19 +194,23 @@ The updater requires `gh`, `cosign` and GnuPG in addition to Python. The schedul
 | Node.js | GPG-signed `SHASUMS256.txt` by one of the release keys in `scripts/keys/nodejs-release-keys.asc`. |
 | AWS CLI | GPG signature (`<zip>.sig`) on each installer zip, by the AWS CLI Team key in `scripts/keys/aws-cli-public-key.asc` with the fingerprint pinned in the updater. AWS publishes no checksums, so the updater computes the SHA-256 pins from the verified zips. |
 | Optional extras (npm) | npm registry signature on every lockfile entry, by a key in `scripts/keys/npm-registry-keys.json` ([Optional extras](#optional-extras)). |
+| OpenCode | npm registry signature over the `dist.integrity` of `@opencode/cli-linux-x64-baseline` and `@opencode/cli-linux-arm64`, by a key in `scripts/keys/npm-registry-keys.json`. This is the registry's signature, not OpenCode's. The 72-hour [minimum release age](#minimum-release-age) applies, not the extras' 7 days. |
 | gosec | Checksum verified; publisher signature not verified. The SHA-256 comes from `gosec_<version>_checksums.txt`. |
 | gitleaks | Checksum verified; publisher signature not verified. The SHA-256 comes from `gitleaks_<version>_checksums.txt`. |
 | ContainerSSH guest agent | Checksum verified; publisher signature not verified. The SHA-256 comes from `agent_<version>_checksums.txt`. |
+| crane, kyverno, actionlint, hadolint, scc, lazygit, glow, syft, grype | Checksum verified; publisher signature not verified. The SHA-256 comes from the project's published checksum list. |
+| zizmor, ast-grep, difftastic, delta, hyperfine | GitHub asset digest only; the projects publish no checksum list. Publisher signature not verified. |
+| forgejo-cli (`fj`) | Neither. Codeberg publishes no checksum or digest, so the updater computes the SHA-256 from the download. |
 
 GitHub provenance checks require the exact workflow certificate identity, repository, source ref and GitHub OIDC issuer ([GitHub CLI verification](https://cli.github.com/manual/gh_attestation_verify), [CLI release workflow](https://github.com/cli/cli/blob/trunk/.github/workflows/deployment.yml), [uv release workflow](https://github.com/astral-sh/uv/blob/main/.github/workflows/release.yml), [Ruff release workflow](https://github.com/astral-sh/ruff/blob/main/.github/workflows/release.yml), [golangci-lint release workflow](https://github.com/golangci/golangci-lint/blob/main/.github/workflows/release.yml)). Sigstore bundle checks require the exact workflow certificate identity and GitHub OIDC issuer ([cosign blob verification](https://docs.sigstore.dev/cosign/verifying/verify_blob/), [yq signing workflow](https://github.com/mikefarah/yq/blob/master/.github/workflows/release.yml), [Trivy signing workflow](https://github.com/aquasecurity/trivy/blob/main/.github/workflows/reusable-release.yaml), [Codex signing action](https://github.com/openai/codex/blob/main/.github/actions/linux-code-sign/action.yml)).
 
-The updater does not check publisher signatures for Go, Rust, abtop, gosec, gitleaks, the ContainerSSH guest agent, tea, kubectl, Helm, Antigravity, OpenCode or the pinned container images. Their checksum, package-manager and digest checks remain. Some of these projects publish signing material; their trust policies need separate review before the updater enforces them. No unsigned-update fallback exists for the publishers in the table.
+The updater does not check publisher signatures for Go, Rust, abtop, gosec, gitleaks, the ContainerSSH guest agent, tea, forgejo-cli, crane, kyverno, actionlint, zizmor, hadolint, ast-grep, difftastic, delta, scc, hyperfine, lazygit, glow, syft, grype, kubectl, Helm, Antigravity or the pinned container images. OpenCode has only the npm registry signature above. Their checksum, package-manager and digest checks remain. Some of these projects publish signing material; their trust policies need separate review before the updater enforces them. No unsigned-update fallback exists for the publishers in the table.
 
 ### Node.js release keyring
 
 The updater takes the newest stable `v26.x.y` from `https://nodejs.org/dist/index.json`. It checks that version's `SHASUMS256.txt.sig` with `gpg` against the keyring in [`scripts/keys/nodejs-release-keys.asc`](../scripts/keys/nodejs-release-keys.asc). A signature from any one of the eight active releasers' keys passes. The updater then reads the two Linux checksums from the verified file.
 
-A failed Node.js check stops the whole scheduled update. `main()` in [`scripts/bump_versions.py`](../scripts/bump_versions.py) returns 1 on any `LookupFailed` and writes no pins, for every tool. This happens when the key that signed the release has expired or been revoked (`EXPKEYSIG` or `REVKEYSIG` in GnuPG's status output, with the message "the pinned signing key needs a hand update") and when a release is signed by a key that is not in the keyring. Updates for all tools resume only after a maintainer refreshes the keyring by hand.
+A failed Node.js check keeps the Node.js pins and fails the scheduled run, while the other tools still get their pull request ([`scripts/bump_versions.py`](../scripts/bump_versions.py), `bump()`). This happens when the key that signed the release has expired or been revoked (`EXPKEYSIG` or `REVKEYSIG` in GnuPG's status output, with the message "the pinned signing key needs a hand update") and when a release is signed by a key that is not in the keyring. Node.js updates resume only after a maintainer refreshes the keyring by hand.
 
 The keyring comes from [`nodejs/release-keys`](https://github.com/nodejs/release-keys/tree/481637f813e912c4aa3622d7964ab426c97b8e8d), at commit `481637f813e912c4aa3622d7964ab426c97b8e8d`. Node.js lists the active releasers in its [release keys section](https://github.com/nodejs/node#release-keys). The scheduled update never changes these files. Refresh the keyring in its own pull request:
 
@@ -207,11 +241,11 @@ Refresh the keyring before the earliest date.
 
 The updater takes the first version heading of the AWS CLI v2 changelog, `https://raw.githubusercontent.com/aws/aws-cli/v2/CHANGELOG.rst`, which AWS links as the list of versions ([installing past releases](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-version.html)). For each architecture it downloads `awscli-exe-linux-<x86_64|aarch64>-<version>.zip` and its `.sig` from `https://awscli.amazonaws.com` and checks the signature with `gpg` against [`scripts/keys/aws-cli-public-key.asc`](../scripts/keys/aws-cli-public-key.asc). AWS publishes no checksum for the zips, so the updater computes the SHA-256 pins only after both signatures pass. When the newest version equals `AWSCLI_VERSION`, the updater downloads nothing and keeps the pins.
 
-A failed AWS CLI check stops the whole scheduled update. `main()` returns 1 and writes no pins, for every tool, as for Node.js.
+A failed AWS CLI check keeps the AWS CLI pins and fails the scheduled run, as for Node.js. The other tools still update.
 
 AWS publishes the key as text in the [AWS CLI install guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), not as a file to download. The file is a copy of that block. The guide lists the key as `AWS CLI Team <aws-cli@amazon.com>`, fingerprint `FB5D B77F D5C1 18B8 0511 ADA8 A631 0ACC 4672 475C`, expiring 2027-07-01. `test_aws_cli_key_holds_exactly_the_pinned_fingerprint` checks the file against `AWSCLI_KEY_FINGERPRINT` in `scripts/bump_versions.py`.
 
-After 2027-07-01, GnuPG reports `EXPKEYSIG` for a release signed with this key, with the message "the pinned signing key needs a hand update". The signature check fails and the scheduled update stops for all tools until a maintainer refreshes `scripts/keys/aws-cli-public-key.asc` from the install guide. To refresh it, copy the key block from the guide into the file, set `AWSCLI_KEY_FINGERPRINT` if the fingerprint changed, update the expiry date here, and run the unit tests.
+After 2027-07-01, GnuPG reports `EXPKEYSIG` for a release signed with this key, with the message "the pinned signing key needs a hand update". The signature check fails, and every scheduled run keeps the AWS CLI pins and fails until a maintainer refreshes `scripts/keys/aws-cli-public-key.asc` from the install guide. To refresh it, copy the key block from the guide into the file, set `AWSCLI_KEY_FINGERPRINT` if the fingerprint changed, update the expiry date here, and run the unit tests.
 
 Refresh the key before 2027-07-01.
 
@@ -225,7 +259,7 @@ Refresh the key before 2027-07-01.
 | `OPENCHAMBER_VERSION` | [`@openchamber/web`](https://registry.npmjs.org/@openchamber/web) | `openchamber` |
 | `REA_VERSION` | [`rea-agents`](https://registry.npmjs.org/rea-agents) | `rea` |
 
-Each catalog directory, under `rootfs/usr/local/share/agentainer/extras/`, holds a `package.json` that depends on exactly the pinned version and a `package-lock.json` with an `integrity` hash for every package in the tree. The version in `package.json` must equal the `versions.env` pin, and `tests/host/test-extras-catalog.sh` checks this in CI.
+Each catalog directory, under `rootfs/usr/local/share/agentainer/extras/`, holds a `package.json` that depends on exactly the pinned version and a `package-lock.json` with an `integrity` hash for every package in the tree. The version in `package.json` must equal the `versions.env` pin, and `tests/host/test-extras-catalog.sh` checks this in CI. It also checks that every version [`extras.md`](extras.md) names after a package name is the pin, except in its Known findings table, which records one dated check.
 
 For each extra, [`scripts/bump_versions.py`](../scripts/bump_versions.py):
 
@@ -234,9 +268,11 @@ For each extra, [`scripts/bump_versions.py`](../scripts/bump_versions.py):
 3. Fails the extra when the new lockfile has a package with an install script (`hasInstallScript`, [package-lock.json](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json)) that the committed lockfile did not have, unless the package is `node-pty` or `frida`. `agentainer-extras` installs with `--ignore-scripts`, so no install script runs; this check reports a change in the tree for review.
 4. Checks every lockfile entry against the registry. The entry must resolve from `https://registry.npmjs.org/`, its `integrity` must equal the registry's `dist.integrity` for that version, and one of the version's `dist.signatures` must verify with `openssl` over `<name>@<version>:<integrity>` with an ECDSA P-256 key in `scripts/keys/npm-registry-keys.json` ([npm registry signatures](https://docs.npmjs.com/about-registry-signatures)). A key with an `expires` time counts only for a version published before that time. A signature by an unknown key does not count. Bundled entries are covered by their parent's integrity; a `link` entry fails.
 
-A failed check for one extra, including a missing `npm` or `openssl`, keeps that extra's pin and catalog files and does not stop the run. The other pins still update. `bump_versions.py --failures FILE` writes one line per failed extra to FILE. In the scheduled workflow, the `extras-failures` job prints those lines in the run summary and fails the run after the pull request for the other pins is open.
+When an extra's pin moves, the updater also rewrites each mention of the old version after that package's name in [`extras.md`](extras.md), in prose and in npm and unpkg links, and leaves the Known findings table alone. The pull request's checklist asks the reviewer to check that table against the new lockfile.
 
-The pull request job applies the resolver's patch only when it modifies `versions.env`, `deploy/kubernetes/*/deployment.yaml`, `deploy/kubernetes/agentainer/statefulset.yaml` (the `FILEBROWSER_IMAGE` pin) or an extras `package.json` or `package-lock.json`, and creates, deletes or renames no file ([`.github/actions/bump-pr/action.yml`](../.github/actions/bump-pr/action.yml)).
+A failed check for one extra, including a missing `npm` or `openssl`, keeps that extra's pin and catalog files and does not stop the run. The other pins still update. `bump_versions.py --failures FILE` writes one line per failed extra, and per failed resolver, to FILE. In the scheduled workflow, the `extras-failures` job prints those lines in the run summary and fails the run after the pull request for the other pins is open.
+
+The pull request job applies the resolver's patch only when it modifies `versions.env`, `deploy/kubernetes/*/deployment.yaml`, `deploy/kubernetes/agentainer/statefulset.yaml` (the `FILEBROWSER_IMAGE` and `AGENTAINER_RELEASE_VERSION` pins), the other files that name the `AGENTAINER_RELEASE_VERSION` tag (`bin/agentainer`, `deploy/kubernetes/agentainer/kustomization.yaml`, `README.md`, `docs/running.md` and `docs/versions.md`), `docs/extras.md`, or an extras `package.json` or `package-lock.json`, and creates, deletes or renames no file ([`.github/actions/bump-pr/action.yml`](../.github/actions/bump-pr/action.yml)). In the Kubernetes manifests, the files that name the release tag and `docs/extras.md`, every changed line may differ only in its release references, extras version references and digest-pinned image references, and each changed reference must hold the new pin from `versions.env` ([`scripts/check_bump_refs.py`](../scripts/check_bump_refs.py)). If a step after the push fails, the job deletes the pushed branch.
 
 CI's `lint-unit` job runs `tests/host/test-extras-catalog.sh` and scans the extras lockfiles with Trivy, using the `TRIVY_SCANNER_IMAGE` pin. The scan is report only: findings go to the job's step summary and never fail the job.
 

@@ -54,6 +54,39 @@ class VisualCaptureTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 capture.validate(changed)
 
+    def test_only_local_and_ghcr_references_are_recorded_in_full(self):
+        digest = 'sha256:' + 'a' * 64
+        cases = {
+            'localhost/agentainer:dev': 'localhost/agentainer:dev',
+            'ghcr.io/owner/agentainer:1.2.3': 'ghcr.io/owner/agentainer:1.2.3',
+            'registry.example.com:5000/team/agentainer:dev': ':dev',
+            'registry.example.com/team/agentainer@' + digest: '@' + digest,
+            'registry.example.com/team/agentainer:dev@' + digest: '@' + digest,
+            'registry.example.com:5000/team/agentainer': capture.NO_TAG,
+            'agentainer:dev': ':dev',
+            'docker.io/library/ubuntu': capture.NO_TAG,
+            'x@not-a-digest.example.com': capture.NO_TAG,
+            'x:bad/tag': capture.NO_TAG,
+        }
+        for reference, recorded in cases.items():
+            with self.subTest(reference=reference):
+                self.assertEqual(capture.recorded_image(reference), recorded)
+
+    def test_capture_records_only_the_tag_of_another_registry(self):
+        with tempfile.TemporaryDirectory(prefix='cx-visual-test-') as directory:
+            root = Path(directory)
+            with patch.object(capture, 'ROOT', root), patch.object(capture.subprocess, 'run') as run:
+                run.side_effect = [subprocess.CompletedProcess([], 0, json.dumps(valid_document()), ''),
+                                   subprocess.CompletedProcess([], 0, '', '')]
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(capture.main(['--runtime', 'fake-engine', '--image',
+                                                   'registry.example.com/team/agentainer:rc1']), 0)
+                text = (root / 'artifacts/visual/captures.json').read_text()
+                self.assertEqual(json.loads(text)['image'], ':rc1')
+                self.assertNotIn('registry.example.com', text)
+                # The engine still gets the full reference.
+                self.assertIn('registry.example.com/team/agentainer:rc1', run.call_args_list[0].args[0])
+
     def test_complete_capture_is_published_with_overlay_label(self):
         with tempfile.TemporaryDirectory(prefix='cx-visual-test-') as directory:
             root = Path(directory)
@@ -109,6 +142,29 @@ class VisualCaptureTests(unittest.TestCase):
                 command = run.call_args_list[0].args[0]
                 name = command[command.index('--name') + 1]
                 self.assertEqual(run.call_args_list[-1].args[0], ['fake-engine', 'rm', '-f', name])
+
+    def test_timeout_reports_a_container_it_could_not_remove(self):
+        for removal in (subprocess.CompletedProcess([], 1, '', 'engine hung'),
+                        subprocess.TimeoutExpired('fake-engine', 20)):
+            with self.subTest(removal=type(removal).__name__), tempfile.TemporaryDirectory() as directory:
+                with patch.object(capture, 'ROOT', Path(directory)), patch.object(capture.subprocess, 'run') as run:
+                    run.side_effect = [subprocess.TimeoutExpired('fake-engine', 180), removal]
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err):
+                        self.assertEqual(capture.main(['--runtime', 'fake-engine']), 1)
+                    command = run.call_args_list[0].args[0]
+                    name = command[command.index('--name') + 1]
+                    self.assertIn('could not remove container ' + name, err.getvalue())
+
+    def test_failed_removal_after_the_engine_returned_is_not_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(capture, 'ROOT', Path(directory)), patch.object(capture.subprocess, 'run') as run:
+                run.side_effect = [subprocess.CompletedProcess([], 125, '', 'no such image'),
+                                   subprocess.CompletedProcess([], 1, '', 'no such container')]
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(capture.main(['--runtime', 'fake-engine']), 1)
+                self.assertNotIn('could not remove', err.getvalue())
 
 
 class VisualScenarioSourceTests(unittest.TestCase):

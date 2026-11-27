@@ -32,7 +32,7 @@ N defaults to `agentainer`. These variables override the launcher's defaults:
 
 | Variable | Default |
 |---|---|
-| `AGENTAINER_IMAGE` | `ghcr.io/chadmayfield/agentainer:latest` |
+| `AGENTAINER_IMAGE` | `ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1`, a published release that the scheduled pin update moves |
 | `AGENTAINER_ENV_FILE` | `~/.config/agentainer/env` |
 | `AGENTAINER_HOME_VOLUME` | `agentainer-home` |
 | `AGENTAINER_RUNTIME` | `podman` if installed, else `docker` |
@@ -53,12 +53,12 @@ Limits:
 
 - `LANG` and `LC_ALL`.
 - The locale categories glibc defines: `LC_CTYPE`, `LC_NUMERIC`, `LC_TIME`, `LC_COLLATE`, `LC_MONETARY`, `LC_MESSAGES`, `LC_PAPER`, `LC_NAME`, `LC_ADDRESS`, `LC_TELEPHONE`, `LC_MEASUREMENT` and `LC_IDENTIFICATION`. Other `LC_` names, such as iTerm2's `LC_TERMINAL`, stay on the host.
-- `TZ`. When `TZ` is unset, the launcher reads the zone name from the `/etc/localtime` link, the part after `zoneinfo/`. On macOS that link is `/var/db/timezone/zoneinfo/America/Denver`, for example.
+- `TZ`. When `TZ` is unset, the launcher reads the zone name from the `/etc/localtime` link, the part after `zoneinfo/`. On macOS that link is `/var/db/timezone/zoneinfo/Europe/Berlin`, for example.
 
 The launcher skips a value it cannot use:
 
 - A locale must be `C.UTF-8`, `C.utf8`, or `language_TERRITORY.UTF-8` (or `.utf8`) with an optional `@modifier`, such as `en_US.UTF-8` or `sr_RS.UTF-8@latin`. Other codesets, and macOS's bare `LC_CTYPE=UTF-8`, are skipped, because tmux needs a UTF-8 locale.
-- `TZ` must be a zone name such as `America/Denver` or `UTC`. A value that starts with `:` names a file and is skipped.
+- `TZ` must be a zone name such as `Europe/Berlin` or `UTC`. A value that starts with `:` names a file and is skipped.
 
 Variables your env file sets win. Both runtimes let `-e` override `--env-file` ([docker/cli `opts/parse.go`](https://github.com/docker/cli/blob/master/opts/parse.go), [Podman environment precedence](https://docs.podman.io/en/latest/markdown/podman-run.1.html)), so the launcher reads the variable names in the env file and does not pass those variables. It reads names only and never prints the file's values.
 
@@ -92,10 +92,20 @@ bin/agentainer up --publish 38429:38429 "$HOME/code"
 kandev --port 38429 --headless                       # inside the container
 # OpenChamber
 bin/agentainer up --publish 3000:3000 "$HOME/code"
-openchamber --lan --port 3000 --ui-password '<password>'   # inside the container
+read -rs OPENCHAMBER_UI_PASSWORD && export OPENCHAMBER_UI_PASSWORD   # inside the container
+openchamber --lan --port 3000                         # inside the container
 ```
 
-Kandev's local mode is not an authenticated multi-user boundary, and OpenChamber needs `--ui-password` to protect browser access, so keep the default `127.0.0.1` host binding ([Kandev](extras.md#kandev), [OpenChamber](extras.md#openchamber)).
+Kandev's local mode is not an authenticated multi-user boundary, and OpenChamber needs a UI password (`OPENCHAMBER_UI_PASSWORD`, [OpenChamber](extras.md#openchamber)) to protect browser access, so keep the default `127.0.0.1` host binding ([Kandev](extras.md#kandev), [OpenChamber](extras.md#openchamber)).
+
+The host binding limits only who reaches the published port on the host. Kandev listens on `0.0.0.0` inside the container, so another container on the same engine network reaches it at the container's address without a password. With Docker, every container started without `--network` joins the default `bridge` network, whose containers "can communicate, but only by IP address" ([Docker bridge networks](https://docs.docker.com/engine/network/drivers/bridge/)). The launcher has no network option. To keep other containers away from Kandev, start the container with a direct runtime command ([Without the launcher](#without-the-launcher)) on a user-defined network that holds only this container. Docker "blocks access from containers in other networks":
+
+```sh
+docker network create agentainer-kandev
+docker run -d --name agentainer --network agentainer-kandev -p 127.0.0.1:38429:38429 ...  # the other options as in Without the launcher
+```
+
+Rootful Podman uses the `bridge` network by default, and rootless Podman uses `pasta` ([podman run](https://docs.podman.io/en/latest/markdown/podman-run.1.html), `--network`). `podman network create` and `podman run --network` work the same way. Not verified: whether other rootless containers can reach Kandev under `pasta`.
 
 Ports must be 1 through 65535. For a remote engine, the bind address belongs to the engine host. With a local VM, reachability also depends on the runtime's port forwarding.
 
@@ -112,7 +122,7 @@ docker run -d --name agentainer --hostname agentainer \
   -v agentainer-home:/home/agent \
   -v "$HOME/code:/workspace" -w /workspace \
   --env-file "$HOME/.config/agentainer/env" \
-  ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261024.1
+  ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1
 docker exec -it agentainer tmux new-session -A -s main
 ```
 
@@ -155,7 +165,7 @@ The launcher does not add these options ([Podman options](https://docs.podman.io
 
 ## sudo
 
-The image has passwordless sudo, and `--security-opt no-new-privileges=true` turns it off ([Docker reference](https://docs.docker.com/reference/cli/docker/container/run/)). `agentainer up --sudo` leaves that option out.
+The image has passwordless sudo, and `--security-opt no-new-privileges=true` turns it off ([Docker reference](https://docs.docker.com/reference/cli/docker/container/run/)). `agentainer up --sudo` leaves that option out. When sudo works, startup prints `agentainer: warning: sudo works in this container, so agents can become root` on stderr. The warning prints for one-shot commands too, and `AGENTAINER_QUIET=1` does not hide it ([Startup messages](configuration.md#startup-messages)).
 
 With sudo on, an agent can change anything in the container, including the agent binaries and the settings that stop them from updating themselves. Packages installed with `sudo apt install` are gone when the container is recreated. Under rootful Docker, container root is UID 0 on the host, limited by the container's namespaces.
 
@@ -170,7 +180,7 @@ With sudo on, an agent can change anything in the container, including the agent
 RUNTIME=docker sh scripts/build.sh --uid "$(id -u)" --gid "$(id -g)"
 ```
 
-With a GID other than 1000, also set `--sysctl "net.ipv4.ping_group_range=<gid> <gid>"` in your `run` command, or `ping` fails. The launcher always passes `1000 1000`.
+The image records the IDs in its `io.github.chadmayfield.agentainer.uid` and `io.github.chadmayfield.agentainer.gid` labels. When the image is local, the launcher reads them and passes them to `--userns=keep-id` under Podman and to `net.ipv4.ping_group_range` under both runtimes. When the image is not local yet, or has no such labels, the launcher uses 1000 for both, the IDs of the published images. Without the launcher and with a GID other than 1000, set `--sysctl "net.ipv4.ping_group_range=<gid> <gid>"` in your `run` command, or `ping` fails.
 
 `sh tests/host/test-build-uid.sh` builds an image with `--uid 1001 --gid 20` and checks the agent user. When the build fails, it prints the last 80 lines of the build output.
 

@@ -354,6 +354,27 @@ class FeatureSwitchTests(unittest.TestCase):
         self.assertEqual(pod["subsystems"], {"sftp": "/usr/lib/openssh/sftp-server"})
 
 
+class CountingSlots:
+    """Stands in for the server's BoundedSemaphore and reports how many slots are free."""
+
+    def __init__(self, limit):
+        self.lock = threading.Lock()
+        self.limit = self.free = limit
+
+    def acquire(self, blocking=True):
+        with self.lock:
+            if not self.free:
+                return False
+            self.free -= 1
+            return True
+
+    def release(self):
+        with self.lock:
+            if self.free == self.limit:
+                raise ValueError("slot released too many times")
+            self.free += 1
+
+
 class ConcurrencyLimitTests(unittest.TestCase):
     """The server handles at most max_workers connections at once and answers 503
     beyond that, so many idle connections cannot exhaust the pod's memory."""
@@ -364,6 +385,8 @@ class ConcurrencyLimitTests(unittest.TestCase):
         self.keys.close()
         settings = webhook.Settings(user="dev", keys_path=self.keys.name, pod="agentainer-0", namespace="agentainer")
         self.server = webhook.make_server(("127.0.0.1", 0), settings, max_workers=2)
+        # Only process_request acquires slots, and it does so without blocking.
+        self.server._slots = CountingSlots(2)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.idle = []
@@ -416,10 +439,8 @@ class ConcurrencyLimitTests(unittest.TestCase):
         def wait_slots(expected):
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
-                # Observe readiness under the semaphore's own condition lock.
-                with self.server._slots._cond:
-                    if self.server._slots._value == expected:
-                        return
+                if self.server._slots.free == expected:
+                    return
                 time.sleep(0.01)
             self.fail("server did not reach %d free worker slots" % expected)
 

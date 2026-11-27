@@ -120,6 +120,111 @@ ARG TEA_SHA256_AMD64
 ARG TEA_SHA256_ARM64
 RUN bash /usr/local/lib/agentainer-build/install-tool.sh tea
 
+FROM fetch AS fj
+ARG TARGETARCH
+ARG FJ_VERSION
+ARG FJ_SHA256_AMD64
+ARG FJ_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh fj
+
+FROM fetch AS crane
+ARG TARGETARCH
+ARG CRANE_VERSION
+ARG CRANE_SHA256_AMD64
+ARG CRANE_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh crane
+
+FROM fetch AS kyverno
+ARG TARGETARCH
+ARG KYVERNO_VERSION
+ARG KYVERNO_SHA256_AMD64
+ARG KYVERNO_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh kyverno
+
+FROM fetch AS actionlint
+ARG TARGETARCH
+ARG ACTIONLINT_VERSION
+ARG ACTIONLINT_SHA256_AMD64
+ARG ACTIONLINT_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh actionlint
+
+FROM fetch AS zizmor
+ARG TARGETARCH
+ARG ZIZMOR_VERSION
+ARG ZIZMOR_SHA256_AMD64
+ARG ZIZMOR_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh zizmor
+
+FROM fetch AS hadolint
+ARG TARGETARCH
+ARG HADOLINT_VERSION
+ARG HADOLINT_SHA256_AMD64
+ARG HADOLINT_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh hadolint
+
+FROM fetch AS ast-grep
+ARG TARGETARCH
+ARG AST_GREP_VERSION
+ARG AST_GREP_SHA256_AMD64
+ARG AST_GREP_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh ast-grep
+
+FROM fetch AS difftastic
+ARG TARGETARCH
+ARG DIFFTASTIC_VERSION
+ARG DIFFTASTIC_SHA256_AMD64
+ARG DIFFTASTIC_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh difftastic
+
+FROM fetch AS delta
+ARG TARGETARCH
+ARG DELTA_VERSION
+ARG DELTA_SHA256_AMD64
+ARG DELTA_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh delta
+
+FROM fetch AS scc
+ARG TARGETARCH
+ARG SCC_VERSION
+ARG SCC_SHA256_AMD64
+ARG SCC_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh scc
+
+FROM fetch AS hyperfine
+ARG TARGETARCH
+ARG HYPERFINE_VERSION
+ARG HYPERFINE_SHA256_AMD64
+ARG HYPERFINE_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh hyperfine
+
+FROM fetch AS lazygit
+ARG TARGETARCH
+ARG LAZYGIT_VERSION
+ARG LAZYGIT_SHA256_AMD64
+ARG LAZYGIT_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh lazygit
+
+FROM fetch AS glow
+ARG TARGETARCH
+ARG GLOW_VERSION
+ARG GLOW_SHA256_AMD64
+ARG GLOW_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh glow
+
+FROM fetch AS syft
+ARG TARGETARCH
+ARG SYFT_VERSION
+ARG SYFT_SHA256_AMD64
+ARG SYFT_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh syft
+
+FROM fetch AS grype
+ARG TARGETARCH
+ARG GRYPE_VERSION
+ARG GRYPE_SHA256_AMD64
+ARG GRYPE_SHA256_ARM64
+RUN bash /usr/local/lib/agentainer-build/install-tool.sh grype
+
 FROM fetch AS kubectl
 ARG TARGETARCH
 ARG KUBECTL_VERSION
@@ -215,7 +320,7 @@ COPY build/apt-packages.txt build/check-apt-snapshot.py build/apt-install.sh /tm
 #   Always-Include-Phased-Updates makes upgrades take the same (newest) versions
 #   that fresh installs already get, instead of deferring phased ones
 #   (apt_preferences(5), "Phased Updates").
-# - The Chromium libraries and fonts come from Playwright v1.64.1,
+# - The Chromium libraries and fonts come from Playwright v1.65.0,
 #   packages/playwright-core/src/server/registry/nativeDeps.ts, entry 'ubuntu26.04-x64'
 #   (its "chromium" and "tools" lists; xvfb is left out). The 'ubuntu26.04-arm64'
 #   entry copies the same lists. The browsers themselves are
@@ -283,6 +388,21 @@ COPY --from=containerssh-agent /usr/local/bin/containerssh-agent /usr/local/bin/
 COPY --from=abtop /usr/local/bin/abtop /usr/local/bin/abtop
 COPY --from=golangci-lint /usr/local/bin/golangci-lint /usr/local/bin/golangci-lint
 COPY --from=tea /usr/local/bin/tea /usr/local/bin/tea
+COPY --from=fj /usr/local/bin/fj /usr/local/bin/fj
+COPY --from=crane /usr/local/bin/crane /usr/local/bin/crane
+COPY --from=kyverno /usr/local/bin/kyverno /usr/local/bin/kyverno
+COPY --from=actionlint /usr/local/bin/actionlint /usr/local/bin/actionlint
+COPY --from=zizmor /usr/local/bin/zizmor /usr/local/bin/zizmor
+COPY --from=hadolint /usr/local/bin/hadolint /usr/local/bin/hadolint
+COPY --from=ast-grep /usr/local/bin/ast-grep /usr/local/bin/ast-grep
+COPY --from=difftastic /usr/local/bin/difft /usr/local/bin/difft
+COPY --from=delta /usr/local/bin/delta /usr/local/bin/delta
+COPY --from=scc /usr/local/bin/scc /usr/local/bin/scc
+COPY --from=hyperfine /usr/local/bin/hyperfine /usr/local/bin/hyperfine
+COPY --from=lazygit /usr/local/bin/lazygit /usr/local/bin/lazygit
+COPY --from=glow /usr/local/bin/glow /usr/local/bin/glow
+COPY --from=syft /usr/local/bin/syft /usr/local/bin/syft
+COPY --from=grype /usr/local/bin/grype /usr/local/bin/grype
 COPY --from=kubectl /usr/local/bin/kubectl /usr/local/bin/kubectl
 COPY --from=helm /usr/local/bin/helm /usr/local/bin/helm
 COPY --from=awscli /usr/local/aws-cli /usr/local/aws-cli
@@ -330,14 +450,19 @@ ARG IMAGE_VERSION=dev
 ENV AGENTAINER_IMAGE_VERSION="${IMAGE_VERSION}"
 ARG VCS_REF=unknown
 ARG BUILD_DATE
+# The release workflow passes the repository it runs in, so a fork's image names its own source.
+ARG IMAGE_SOURCE=https://github.com/chadmayfield/agentainer
+# bin/agentainer reads the uid and gid labels to map the host user to the agent user.
 LABEL org.opencontainers.image.version="${IMAGE_VERSION}" \
 	org.opencontainers.image.revision="${VCS_REF}" \
 	org.opencontainers.image.created="${BUILD_DATE}" \
 	org.opencontainers.image.title="Agentainer" \
 	org.opencontainers.image.description="Claude Code, Codex, Antigravity CLI and OpenCode in one container" \
-	org.opencontainers.image.source="https://github.com/chadmayfield/agentainer" \
+	org.opencontainers.image.source="${IMAGE_SOURCE}" \
 	org.opencontainers.image.base.name="${BASE_IMAGE}" \
-	io.github.chadmayfield.agentainer.versions="/etc/agentainer/versions.json"
+	io.github.chadmayfield.agentainer.versions="/etc/agentainer/versions.json" \
+	io.github.chadmayfield.agentainer.uid="${AGENT_UID}" \
+	io.github.chadmayfield.agentainer.gid="${AGENT_GID}"
 
 # The Claude Playwright plugin runs `npx @playwright/mcp@latest` with no arguments (its
 # .mcp.json), which defaults to the chrome channel. @playwright/mcp reads

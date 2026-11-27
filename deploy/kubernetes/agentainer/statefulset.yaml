@@ -28,13 +28,30 @@ spec:
         # work without NET_RAW, which the image removed from ping.
         sysctls:
           - {name: net.ipv4.ping_group_range, value: "1000 1000"}  # the agent group; a wider range breaks under keep-id user namespaces
+      # FileBrowser writes an upload through a symbolic link that the agent planted in the
+      # transfer folder (docs/kubernetes.md, FileBrowser security). Before either container
+      # starts, this removes every link under it and logs each path. find does not follow
+      # links, so a link's target is never touched. A link planted while the pod runs
+      # stays until the next start. A failed removal stops the pod from starting.
+      initContainers:
+        - name: transfer-links
+          image: ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1
+          command: [sh, -ec, 'echo "removing symbolic links under /srv/transfer:"; find /srv/transfer -mindepth 1 -type l -print -delete']
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:  # example values
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 500m, memory: 128Mi}
+          volumeMounts:
+            - {name: transfer, mountPath: /srv/transfer, subPath: files}
       containers:
         - name: agentainer
-          image: ghcr.io/chadmayfield/agentainer:latest
+          image: ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1
           envFrom:
             - secretRef: {name: agentainer-credentials, optional: true}
           # Time zone and locale for tmux and the agents. These values repeat the image
-          # defaults. To change them, for example to America/Denver and en_US.UTF-8, edit
+          # defaults. To change them, for example to Europe/Berlin and en_US.UTF-8, edit
           # the values below. An explicit env entry overrides the same name in the
           # agentainer-credentials Secret (envFrom). To set TZ or LANG in the Secret
           # instead, delete the matching entry here.
