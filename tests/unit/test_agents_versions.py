@@ -2,6 +2,7 @@
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -9,6 +10,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 HELPER = ROOT / "rootfs/usr/local/lib/agentainer/release_version.py"
+# The entrypoint's home_path helper, which the step calls.
+HOME_PATH = re.search(r"^home_path\(\) \{\n.*?^\}\n",
+                      (ROOT / "rootfs/usr/local/bin/agentainer-entrypoint").read_text(), re.S | re.M).group(0)
 
 
 @unittest.skipUnless(shutil.which("flock"), "entrypoint requires Linux flock")
@@ -31,7 +35,7 @@ class AgentsVersionTests(unittest.TestCase):
             step = base / "step.sh"
             step.write_text(source.replace("/etc/agentainer", str(image))
                                   .replace("/usr/local/lib/agentainer/release_version.py", str(HELPER)))
-            shell = '''seed_file() { [ -e "$2" ] || [ -L "$2" ] || { mkdir -p "$(dirname "$2")" && cp "$1" "$2"; }; }
+            shell = HOME_PATH + '''seed_file() { [ -e "$2" ] || [ -L "$2" ] || { mkdir -p "$(dirname "$2")" && cp "$1" "$2"; }; }
 log() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*"; }
 . "$1"

@@ -6,17 +6,20 @@ if ! (: >>"$HOME/.agentainer/.seed.lock") 2>/dev/null; then
 	return 0
 fi
 exec 9>>"$HOME/.agentainer/.seed.lock"
-flock -w 30 9
+if ! flock -w 30 9; then
+	warn "another container held the seed lock for 30 seconds; skipping seeding"
+	return 0
+fi
 try_seed() {
 	seed_file "$1" "$2" 2>/dev/null || warn "could not seed $2 (something else is in the way); skipping"
 }
 src=/etc/agentainer/home
 find "$src" -type f | while IFS= read -r f; do
-	try_seed "$f" "$HOME/${f#"$src"/}"
+	try_seed "$f" "$(home_path "${f#"$src"/}")"
 done
 # A fresh volume or PVC hides the image's dotfiles, so seed the shell defaults too.
-# .profile comes from /etc/agentainer/home, which puts personal bin directories last in
-# PATH; the rest comes from /etc/skel.
+# .profile and .bashrc come from /etc/agentainer/home above (.profile puts personal bin
+# directories last in PATH). /etc/skel supplies only what is still missing, .bash_logout.
 for f in .bashrc .bash_logout; do
 	if [ -f "/etc/skel/$f" ]; then try_seed "/etc/skel/$f" "$HOME/$f"; fi
 done

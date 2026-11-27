@@ -8,9 +8,11 @@ reference and is never replaced with the variable's value.
 How each agent is updated (checked against agent versions pinned in versions.env):
   claude    mcpServers in ~/.claude.json (or $CLAUDE_CONFIG_DIR/.claude.json)
   agy       mcpServers in ~/.gemini/config/mcp_config.json
-  codex     its [mcp_servers.<name>] tables in ~/.codex/config.toml, rewritten as
-            one marked block at the end; every other line is kept
+  codex     its [mcp_servers.<name>] tables in ~/.codex/config.toml (or
+            $CODEX_HOME/config.toml), rewritten as one marked block at the end;
+            every other line is kept
   opencode  agentainer-owned mcp.servers.<name> entries in ~/.config/opencode/opencode.json
+            (or $XDG_CONFIG_HOME/opencode/opencode.json)
             (OpenCode v2 has no "mcp remove" command)
 --if-changed skips a successful sync whose input has not changed. Both modes lock the
 whole read, update and write operation on a shared home.
@@ -164,13 +166,25 @@ def agy_entry(name, s, warn):
     return {"serverUrl": s["url"], "headers": headers, "disabled": False}
 
 
+def codex_home(env):
+    """Codex reads $CODEX_HOME, or ~/.codex when it is unset or empty."""
+    return env.get("CODEX_HOME") or os.path.join(env["HOME"], ".codex")
+
+
+def opencode_dir(env):
+    """OpenCode reads $XDG_CONFIG_HOME/opencode, or ~/.config/opencode."""
+    return os.path.join(env.get("XDG_CONFIG_HOME") or os.path.join(env["HOME"], ".config"), "opencode")
+
+
 def agent_config_path(agent, env):
     home = env["HOME"]
     if agent == "claude":
         return os.path.join(env.get("CLAUDE_CONFIG_DIR") or home, ".claude.json")
-    return os.path.join(home, {"agy": ".gemini/config/mcp_config.json",
-                               "codex": ".codex/config.toml",
-                               "opencode": ".config/opencode/opencode.json"}[agent])
+    if agent == "codex":
+        return os.path.join(codex_home(env), "config.toml")
+    if agent == "opencode":
+        return os.path.join(opencode_dir(env), "opencode.json")
+    return os.path.join(home, ".gemini", "config", "mcp_config.json")
 
 
 def sync_json_agent(agent, env, desired, managed, warn):
@@ -446,8 +460,8 @@ def codex_user_servers(text):
     return names
 
 
-def sync_codex(home, desired, managed, warn):
-    path = os.path.join(home, ".codex", "config.toml")
+def sync_codex(env, desired, managed, warn):
+    path = agent_config_path("codex", env)
     try:
         with open(path) as f:
             text = f.read()
@@ -528,9 +542,9 @@ def opencode_entry(name, s, warn):
     return e
 
 
-def sync_opencode(home, desired, managed, warn):
-    base = os.path.join(home, ".config", "opencode")
-    path = os.path.join(base, "opencode.json")
+def sync_opencode(env, desired, managed, warn):
+    base = opencode_dir(env)
+    path = agent_config_path("opencode", env)
     if os.path.exists(os.path.join(base, "opencode.jsonc")):
         raise RuntimeError("opencode.jsonc is in use; agentainer does not edit it")
     try:
@@ -651,7 +665,9 @@ def sync(env, if_changed, warn):
             with open(stamp) as f:
                 previous = f.read().strip()
         except FileNotFoundError:
-            if current is None:
+            # No stamp and no input is a settled state only when no managed server is
+            # left. Otherwise an earlier removal failed for some agent, so retry it.
+            if current is None and not any(manifest.values()):
                 return 0
         else:
             if current is not None and previous == current:
@@ -674,8 +690,8 @@ def sync(env, if_changed, warn):
                   for field in ("env", "headers") for value in server.get(field, {}).values())
     steps = [("claude", lambda m: sync_json_agent("claude", env, desired, m, warn)),
              ("agy", lambda m: sync_json_agent("agy", env, desired, m, warn)),
-             ("codex", lambda m: sync_codex(home, desired, m, warn)),
-             ("opencode", lambda m: sync_opencode(home, desired, m, warn))]
+             ("codex", lambda m: sync_codex(env, desired, m, warn)),
+             ("opencode", lambda m: sync_opencode(env, desired, m, warn))]
     for agent, step in steps:
         if shutil.which(agent, path=env.get("PATH")) is None:
             continue
