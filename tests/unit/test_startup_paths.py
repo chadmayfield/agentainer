@@ -9,6 +9,9 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+# The steps read these path overrides; a runner that sets one (GitHub's Ubuntu images set
+# XDG_CONFIG_HOME) would send them outside the temporary home. Tests that need one set it.
+ENV = {k: v for k, v in os.environ.items() if k not in ("CODEX_HOME", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR")}
 STEPS = ROOT / "rootfs/usr/local/lib/agentainer/entrypoint.d"
 # The entrypoint's home_path helper, which the steps call.
 HOME_PATH = re.search(r"^home_path\(\) \{\n.*?^\}\n",
@@ -29,7 +32,7 @@ class StartupPathsTests(unittest.TestCase):
             step.write_text(source.replace("/etc/agentainer", str(image)))
             shell = HOME_PATH + 'warn() { echo "$*"; }; log() { echo "$*"; }; seed_file() { :; }; . "$1"'
             result = subprocess.run(["sh", "-ec", shell, "sh", str(step)],
-                                    env=dict(os.environ, HOME=str(home)), capture_output=True, text=True)
+                                    env=dict(ENV, HOME=str(home)), capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("cannot record", result.stdout)
 
@@ -47,7 +50,7 @@ class StartupPathsTests(unittest.TestCase):
             command.chmod(0o755)
             result = subprocess.run(["sh", "-ec", HOME_PATH + 'warn() { echo "$*"; }; . "$1"', "sh",
                                      str(STEPS / "70-opencode.sh")],
-                                    env=dict(os.environ, HOME=str(home), PATH=str(bindir) + ":" + os.environ["PATH"]),
+                                    env=dict(ENV, HOME=str(home), PATH=str(bindir) + ":" + os.environ["PATH"]),
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(config.is_symlink())
@@ -58,7 +61,7 @@ class StartupPathsTests(unittest.TestCase):
             (home / ".agentainer/.seed.lock").mkdir(parents=True)
             result = subprocess.run(["sh", "-ec", HOME_PATH + 'warn() { echo "$*"; }; . "$1"', "sh",
                                      str(STEPS / "20-seed.sh")],
-                                    env=dict(os.environ, HOME=str(home)), capture_output=True, text=True)
+                                    env=dict(ENV, HOME=str(home)), capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("seed lock", result.stdout)
 
@@ -72,7 +75,7 @@ class StartupPathsTests(unittest.TestCase):
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 result = subprocess.run(["sh", "-ec", HOME_PATH + 'warn() { echo "$*"; }; . "$1"; echo STEP-RETURNED',
                                          "sh", str(step)],
-                                        env=dict(os.environ, HOME=str(home)), capture_output=True, text=True)
+                                        env=dict(ENV, HOME=str(home)), capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("held the seed lock", result.stdout)
             self.assertIn("STEP-RETURNED", result.stdout)
@@ -90,7 +93,7 @@ class StartupPathsTests(unittest.TestCase):
             step.write_text((STEPS / "20-seed.sh").read_text().replace("src=/etc/agentainer/home", "src=" + str(source)))
             shell = HOME_PATH + 'warn() { echo "$*"; }; seed_file() { mkdir -p "$(dirname "$2")" && cp "$1" "$2"; }; . "$1"'
             result = subprocess.run(["sh", "-ec", shell, "sh", str(step)],
-                                    env=dict(os.environ, HOME=str(home), CODEX_HOME=str(base / "codex"),
+                                    env=dict(ENV, HOME=str(home), CODEX_HOME=str(base / "codex"),
                                              XDG_CONFIG_HOME=str(base / "xdg")),
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -114,7 +117,7 @@ class StartupPathsTests(unittest.TestCase):
             shell = (HOME_PATH + 'seed_file() { [ -e "$2" ] || cp "$1" "$2"; }\n'
                      'warn() { echo "$*"; }; log() { echo "$*"; }; . "$1"')
             result = subprocess.run(["sh", "-ec", shell, "sh", str(step)],
-                                    env=dict(os.environ, HOME=str(home), CODEX_HOME=str(base / "codex"),
+                                    env=dict(ENV, HOME=str(home), CODEX_HOME=str(base / "codex"),
                                              XDG_CONFIG_HOME=str(base / "xdg")),
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -138,7 +141,7 @@ class StartupPathsTests(unittest.TestCase):
             command.chmod(0o755)
             result = subprocess.run(["sh", "-ec", HOME_PATH + 'warn() { echo "$*"; }; . "$1"', "sh",
                                      str(STEPS / "70-opencode.sh")],
-                                    env=dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(base / "xdg"),
+                                    env=dict(ENV, HOME=str(home), XDG_CONFIG_HOME=str(base / "xdg"),
                                              PATH=str(bindir) + ":" + os.environ["PATH"]),
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -164,7 +167,7 @@ class StartupPathsTests(unittest.TestCase):
                     ["sh", "-ec", HOME_PATH + 'warn() { echo "$*" >&2; }; . "$1"', "sh",
                      str(STEPS / "70-opencode.sh")],
                     stdin=pipes[0][0], stdout=pipes[1][1], stderr=pipes[2][1],
-                    env=dict(os.environ, HOME=str(home), PATH=str(bindir) + ":" + os.environ["PATH"]))
+                    env=dict(ENV, HOME=str(home), PATH=str(bindir) + ":" + os.environ["PATH"]))
                 self.assertEqual(process.returncode, 0)
                 self.assertTrue((home / ".agentainer/.opencode-service-disabled").exists())
                 self.assertEqual([os.get_blocking(pipes[0][0]), os.get_blocking(pipes[1][1]),
