@@ -28,7 +28,7 @@ assert_contains "pip --user is refused (PEP 668)" "externally-managed" "$(run_in
 # ansible-core only: the commands without the 450 MB of bundled collections.
 assert_eq "ansible-core without bundled collections" "none" "$(run_in -- sh -c 'ls -d /usr/lib/python3/dist-packages/ansible_collections 2>/dev/null || echo none')"
 # Builds a collection in the container and installs the tarball with no network.
-assert_eq "ansible-galaxy installs collections" "agentainer.fixture 1.0.0" "$(run_in --network none -- sh -c '
+assert_eq "ansible-galaxy installs collections" "agentainer.fixture 1.0.0" "$(run_in --network none --security-opt no-new-privileges=true -- sh -c '
 	set -e
 	ansible-galaxy collection init agentainer.fixture --init-path /tmp/c >/dev/null
 	ansible-galaxy collection build /tmp/c/agentainer/fixture --output-path /tmp/b >/dev/null
