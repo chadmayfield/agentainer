@@ -11,7 +11,7 @@ permissions: {}
 jobs:
   # Runs the resolver, which makes HTTP requests to upstream projects, with a read-only
   # GITHUB_TOKEN and no token stored in .git/config. The pin changes, the resolver's
-  # output and its extras failures go to the later jobs in the bump-patch artifact.
+  # output and its failed resolvers and extras go to the later jobs in the bump-patch artifact.
   resolve:
     runs-on: ubuntu-26.04
     # Publisher verification downloads release archives for both architectures, and the
@@ -52,12 +52,12 @@ jobs:
           echo "$RUNNER_TEMP/node/bin" >>"$GITHUB_PATH"
       - id: resolve
         name: Resolve pins
-        shell: bash  # adds -o pipefail, so a failed resolver fails the job
+        shell: bash  # adds -o pipefail, so a crash or a refused pin fails the job
         env:
           # Read-only here; the resolver uses it only to raise the GitHub API rate limit.
           GITHUB_TOKEN: ${{ github.token }}
-        # Extras whose checks fail keep their pins and go to failures.txt, and the
-        # resolver still exits 0, so the other pin changes get their pull request.
+        # Resolvers and extras whose checks fail keep their pins and go to failures.txt,
+        # and the resolver still exits 0, so the other pin changes get their pull request.
         run: |
           mkdir -p "$RUNNER_TEMP/bump"
           python3 scripts/bump_versions.py --failures "$RUNNER_TEMP/bump/failures.txt" | tee "$RUNNER_TEMP/bump/changes.txt"
@@ -156,7 +156,7 @@ jobs:
           patch-file: ${{ runner.temp }}/bump/bump.patch
           changes-file: ${{ runner.temp }}/bump/changes.txt
 
-  # An extras check that failed keeps that extra's pin while the other pins still get
+  # A resolver or extras check that failed keeps its pins while the other pins still get
   # their pull request. This job then fails the run and prints the failed checks.
   extras-failures:
     needs: [resolve, pr-app, pr-token]
@@ -172,7 +172,7 @@ jobs:
         with:
           name: bump-patch
           path: ${{ runner.temp }}/bump
-      - name: Fail on extras verification failures
+      - name: Fail on resolver and extras failures
         shell: bash
         env:
           FAILURES: ${{ runner.temp }}/bump/failures.txt
@@ -180,12 +180,12 @@ jobs:
         run: |
           set -u
           if [ -s "$FAILURES" ]; then
-            echo "::error::Extras checks failed. These extras keep their current pins:"
+            echo "::error::Checks failed. These tools and extras keep their current pins:"
             cat "$FAILURES"
             # A fence longer than any backtick run in the failure text, so no line of it ends the block.
             fence='```'
             while grep -qF -- "$fence" "$FAILURES"; do fence="${fence}\`"; done
-            { echo "### Extras checks failed"; echo; echo "$fence"; cat "$FAILURES"; echo "$fence"; } >>"$GITHUB_STEP_SUMMARY"
+            { echo "### Pin checks failed"; echo; echo "$fence"; cat "$FAILURES"; echo "$fence"; } >>"$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           if [ ! -f "$FAILURES" ]; then
@@ -197,4 +197,4 @@ jobs:
             echo "No failures file; the resolve job result is $RESOLVE."
             exit 0
           fi
-          echo "No extras check failed."
+          echo "No resolver or extras check failed."
