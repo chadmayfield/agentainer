@@ -2,7 +2,8 @@
 """Resolve the latest upstream pins and rewrite versions.env.
 
 Every value comes from the upstream source named in its resolver. Any failure
-stops the run and leaves the file unchanged. The extras resolver is the one
+stops the run and leaves the file unchanged. r_kelos keeps the Kelos variant's
+pins in Containerfile.kelos instead of versions.env. The extras resolver is the one
 exception: a failed check for one extra keeps that extra's pin and catalog files,
 the run continues, and --failures FILE lists the failed checks. Uses the Python
 standard library, the publisher verification CLIs documented in docs/versions.md,
@@ -53,7 +54,7 @@ VALUE_PATTERNS = [
     (r"(BASE_IMAGE|[A-Z0-9_]+_IMAGE)", IMAGE_REF),
     (r"APT_SNAPSHOT", r"[0-9]{8}T[0-9]{6}Z"),
     (r"SOURCE_DATE_EPOCH", r"[0-9]{1,12}"),
-    (r"UNSLOP_COMMIT", r"[0-9a-f]{40}"),
+    (r"(UNSLOP|KELOS_FORK)_COMMIT", r"[0-9a-f]{40}"),
     (r"[A-Z0-9_]+_VERSION", r"v?[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.-]+)?"),
     (r"[A-Z0-9_]+_SHA256(_[A-Z0-9]+)?", r"[0-9a-f]{64}"),
     (r"[A-Z0-9_]+_SHA512(_[A-Z0-9]+)?", r"[0-9a-f]{128}"),
@@ -894,7 +895,9 @@ class ExtraFiles:
 
     main calls reset before the resolvers run and writes files only after every
     resolver and check passed. Paths in files are relative to base. failures holds
-    one "extras <name>: <reason>" line per extra whose checks failed.
+    one "extras <name>: <reason>" line per extra whose checks failed. changes holds
+    lines for pins that live outside versions.env (r_kelos), printed with the
+    versions.env changes.
     """
 
     def __init__(self):
@@ -906,6 +909,7 @@ class ExtraFiles:
         self.files = {}
         self.regenerated = []
         self.failures = []
+        self.changes = []
 
 
 EXTRA_FILES = ExtraFiles()
@@ -1229,11 +1233,263 @@ def r_buildkit():
                                       fetch_json("https://hub.docker.com/v2/repositories/moby/buildkit/tags/%s" % tag))}
 
 
+# ---- Kelos variant (Containerfile.kelos) -------------------------------------
+#
+# The Kelos variant's four pins are ARG lines in Containerfile.kelos, because only
+# that build uses them (docs/kelos.md). r_kelos rewrites them there and returns no
+# versions.env values.
+
+KELOS_CONTAINERFILE = "Containerfile.kelos"
+KELOS_ARGS = ("AGENTAINER_IMAGE", "GOLANG_IMAGE", "KELOS_FORK_COMMIT", "KELOS_CAPTURE_VERSION")
+# The fork's kelos-capture lists pull requests over REST. Its tags are
+# v<upstream version>-rest.<n>: upstream at that release plus that one commit.
+KELOS_FORK = "chadmayfield/kelos"
+KELOS_REST_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rest\.([1-9][0-9]*)")
+KELOS_UPSTREAM = "kelos-dev/kelos"
+# Files in rootfs-kelos that are upstream files copied unchanged, and the upstream
+# file the modified Codex entrypoint starts from, at the release SOURCE.md names.
+KELOS_COPIES = (("rootfs-kelos/kelos_entrypoint_claude.sh", "claude-code/kelos_entrypoint.sh"),
+                ("rootfs-kelos/agent-gh-wrapper.sh", "hack/agent-gh-wrapper.sh"),
+                ("rootfs-kelos/LICENSE.kelos", "LICENSE"))
+KELOS_CODEX_ENTRYPOINT = "codex/kelos_entrypoint.sh"
+KELOS_COPIED_FROM = "v0.62.0"
+AGENTAINER_REPO = "chadmayfield/agentainer"
+AGENTAINER_IMAGE_NAME = "ghcr.io/chadmayfield/agentainer"
+# Media types of a multi-platform image index (OCI image-spec, image-index.md; Docker
+# manifest list v2 schema 2).
+INDEX_MEDIA_TYPES = ("application/vnd.oci.image.index.v1+json",
+                     "application/vnd.docker.distribution.manifest.list.v2+json")
+
+
+def kelos_rest_key(tag):
+    """Sort key of a v<version>-rest.<n> tag: the version, then n. None for other tags."""
+    m = KELOS_REST_TAG.fullmatch(tag)
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def pick_kelos_tag(refs):
+    """The highest v<version>-rest.<n> tag in a git matching-refs listing.
+
+    Returns (tag name, object sha, object type). The object is the commit for a
+    lightweight tag and a tag object for an annotated one.
+    """
+    best = None
+    for ref in refs:
+        name = ref.get("ref", "")
+        if not name.startswith("refs/tags/"):
+            continue
+        tag = name[len("refs/tags/"):]
+        key = kelos_rest_key(tag)
+        if key is None:
+            continue
+        obj = ref.get("object") or {}
+        if best is None or key > best[0]:
+            best = (key, tag, obj.get("sha", ""), obj.get("type", ""))
+    if best is None:
+        raise LookupFailed("%s: no v<version>-rest.<n> tag" % KELOS_FORK)
+    return best[1:]
+
+
+def peel_tag(repo, sha, kind):
+    """The commit a tag object points to, following annotated tags (at most 5 levels)."""
+    for _ in range(5):
+        if kind == "commit":
+            if not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+                raise LookupFailed("%s: malformed commit sha %r" % (repo, sha))
+            return sha
+        if kind != "tag":
+            raise LookupFailed("%s: tag points to a %s, not a commit" % (repo, kind))
+        if not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+            raise LookupFailed("%s: malformed tag object sha %r" % (repo, sha))
+        obj = fetch_json("https://api.github.com/repos/%s/git/tags/%s" % (repo, sha)).get("object") or {}
+        sha, kind = obj.get("sha", ""), obj.get("type", "")
+    raise LookupFailed("%s: tag chain longer than 5" % repo)
+
+
+def parse_go_mod_go(text):
+    """The Go version a go.mod needs: its toolchain line, else its go line, as a tuple."""
+    found = None
+    for line in text.splitlines():
+        m = re.fullmatch(r"\s*go\s+([0-9]+(?:\.[0-9]+){1,2})\s*", line)
+        if m and found is None:
+            found = m.group(1)
+        t = re.fullmatch(r"\s*toolchain\s+go([0-9]+(?:\.[0-9]+){1,2})\S*\s*", line)
+        if t:
+            return tuple(int(x) for x in t.group(1).split("."))
+    if found is None:
+        raise LookupFailed("go.mod has no go line")
+    return tuple(int(x) for x in found.split("."))
+
+
+def git_blob_sha(data):
+    """The git object name of a blob with these bytes, as the GitHub contents API reports it."""
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def pick_agentainer_release(releases):
+    """Tag of the newest published Agentainer release, prereleases included, by version."""
+    best = None
+    for rel in releases:
+        if rel.get("draft"):
+            continue
+        tag = rel.get("tag_name", "")
+        if not tag.startswith("v"):
+            continue
+        try:
+            key = version_key(tag[1:])
+        except ValueError:
+            continue
+        if best is None or key > best[0]:
+            best = (key, tag)
+    if best is None:
+        raise LookupFailed("%s: no published release" % AGENTAINER_REPO)
+    return best[1]
+
+
+def ghcr_index_digest(repo, tag):
+    """Digest of the image index that tag names in ghcr.io, read anonymously.
+
+    The token and manifest endpoints are those of the OCI distribution spec, which
+    ghcr.io serves. The digest is the SHA-256 of the manifest bytes, checked
+    against the Docker-Content-Digest header.
+    """
+    token = fetch_json("https://ghcr.io/token?scope=repository:%s:pull" % repo).get("token") or ""
+    url = "https://ghcr.io/v2/%s/manifests/%s" % (repo, tag)
+    req = urllib.request.Request(url, headers={"User-Agent": "agentainer-bump", "Authorization": "Bearer " + token,
+                                               "Accept": ", ".join(INDEX_MEDIA_TYPES)})
+    try:
+        with open_https(req) as r:
+            body = r.read()
+            media = (r.headers.get("Content-Type") or "").split(";")[0].strip()
+            header = r.headers.get("Docker-Content-Digest") or ""
+    except LookupFailed:
+        raise
+    except Exception as e:  # noqa: BLE001 - report any network error the same way
+        raise LookupFailed("%s: %s" % (url, e))
+    if media not in INDEX_MEDIA_TYPES:
+        raise LookupFailed("%s: not an image index (%s)" % (url, media or "no Content-Type"))
+    digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    if header and header != digest:
+        raise LookupFailed("%s: Docker-Content-Digest %s does not match the manifest bytes" % (url, header))
+    return digest
+
+
+def read_containerfile_args(text, names):
+    """Values of "ARG NAME=value" lines. Each name must have exactly one such line."""
+    out = {}
+    for name in names:
+        found = re.findall(r"(?m)^ARG %s=(\S+)$" % re.escape(name), text)
+        if len(found) != 1:
+            raise LookupFailed("%s: expected one ARG %s= line, found %d" % (KELOS_CONTAINERFILE, name, len(found)))
+        out[name] = found[0]
+    return out
+
+
+def rewrite_containerfile_args(text, values):
+    for name, value in values.items():
+        line = "ARG %s=%s" % (name, value)
+        text, n = re.subn(r"(?m)^ARG %s=\S+$" % re.escape(name), lambda _m, line=line: line, text)
+        if n != 1:
+            raise LookupFailed("%s: expected one ARG %s= line, found %d" % (KELOS_CONTAINERFILE, name, n))
+    return text
+
+
+def image_tag(ref):
+    return ref.split("@")[0].rsplit(":", 1)[1]
+
+
+def kelos_not_older(old, new):
+    """Raises LookupFailed when a new Kelos pin would move back from the current one."""
+    old_tag, new_tag = image_tag(old["AGENTAINER_IMAGE"]), image_tag(new["AGENTAINER_IMAGE"])
+    if version_key(new_tag) < version_key(old_tag):
+        raise LookupFailed("r_kelos would downgrade AGENTAINER_IMAGE from %s to %s" % (old_tag, new_tag))
+    old_go, new_go = image_tag(old["GOLANG_IMAGE"]), image_tag(new["GOLANG_IMAGE"])
+    if version_key(new_go) < version_key(old_go):
+        raise LookupFailed("r_kelos would downgrade GOLANG_IMAGE from %s to %s" % (old_go, new_go))
+    old_key = kelos_rest_key(old["KELOS_CAPTURE_VERSION"])
+    new_key = kelos_rest_key(new["KELOS_CAPTURE_VERSION"])
+    if old_key is None:
+        # A pin that is not a rest tag yet: compare the upstream version only.
+        m = re.match(r"v([0-9]+)\.([0-9]+)\.([0-9]+)", old["KELOS_CAPTURE_VERSION"])
+        older = m and tuple(int(x) for x in m.groups()) > new_key[:3]
+    else:
+        older = new_key < old_key
+    if older:
+        raise LookupFailed("r_kelos would downgrade KELOS_CAPTURE_VERSION from %s to %s"
+                           % (old["KELOS_CAPTURE_VERSION"], new["KELOS_CAPTURE_VERSION"]))
+
+
+def contents_sha(repo, path, ref):
+    return fetch_json("https://api.github.com/repos/%s/contents/%s?ref=%s" % (repo, path, ref)).get("sha", "")
+
+
+def r_kelos():
+    """Pins of the Kelos variant, written to Containerfile.kelos through EXTRA_FILES."""
+    base = EXTRA_FILES.base or REPO_ROOT
+    path = os.path.join(base, KELOS_CONTAINERFILE)
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError as e:
+        raise LookupFailed("%s: %s" % (KELOS_CONTAINERFILE, e))
+    old = read_containerfile_args(text, KELOS_ARGS)
+
+    tag, sha, kind = pick_kelos_tag(fetch_json("https://api.github.com/repos/%s/git/matching-refs/tags/v" % KELOS_FORK))
+    commit = peel_tag(KELOS_FORK, sha, kind)
+    # The Kelos files copied into rootfs-kelos must still match this release.
+    for local, upstream in KELOS_COPIES:
+        try:
+            with open(os.path.join(base, local), "rb") as f:
+                want = git_blob_sha(f.read())
+        except OSError as e:
+            raise LookupFailed("%s: %s" % (local, e))
+        if contents_sha(KELOS_FORK, upstream, commit) != want:
+            raise LookupFailed("%s %s: %s differs from %s; update the copy first (rootfs-kelos/SOURCE.md)"
+                               % (KELOS_FORK, tag, upstream, local))
+    codex_at_tag = contents_sha(KELOS_FORK, KELOS_CODEX_ENTRYPOINT, commit)
+    if codex_at_tag != contents_sha(KELOS_UPSTREAM, KELOS_CODEX_ENTRYPOINT, KELOS_COPIED_FROM):
+        raise LookupFailed("%s %s: %s changed since %s; update rootfs-kelos/kelos_entrypoint_codex.sh first"
+                           % (KELOS_FORK, tag, KELOS_CODEX_ENTRYPOINT, KELOS_COPIED_FROM))
+
+    # The official golang image sets GOTOOLCHAIN=local, so its Go must satisfy go.mod.
+    go = parse_go(fetch_json("https://go.dev/dl/?mode=json"))["GO_VERSION"]
+    mod = fetch_json("https://api.github.com/repos/%s/contents/go.mod?ref=%s" % (KELOS_FORK, commit))
+    try:
+        need = parse_go_mod_go(base64.b64decode(mod.get("content", "")).decode())
+    except (binascii.Error, UnicodeDecodeError) as e:
+        raise LookupFailed("%s %s: go.mod: %s" % (KELOS_FORK, tag, e))
+    have = tuple(int(x) for x in go.split("."))
+    if have < need:
+        raise LookupFailed("%s %s needs Go %s, newer than Go %s" % (KELOS_FORK, tag, ".".join(map(str, need)), go))
+    golang = hub_ref("library/golang", go,
+                     fetch_json("https://hub.docker.com/v2/repositories/library/golang/tags/%s" % go))
+
+    release = pick_agentainer_release(
+        fetch_json("https://api.github.com/repos/%s/releases?per_page=30" % AGENTAINER_REPO))
+    image_name = release[1:]
+    repo = AGENTAINER_IMAGE_NAME.split("/", 1)[1]
+    agentainer = "%s:%s@%s" % (AGENTAINER_IMAGE_NAME, image_name, ghcr_index_digest(repo, image_name))
+
+    new = {"AGENTAINER_IMAGE": agentainer, "GOLANG_IMAGE": golang,
+           "KELOS_FORK_COMMIT": commit, "KELOS_CAPTURE_VERSION": tag}
+    bad = [why for why in (invalid(k, v) for k, v in sorted(new.items())) if why]
+    if bad:
+        raise LookupFailed("r_kelos refuses to write %s" % "; ".join(bad))
+    kelos_not_older(old, new)
+    changed = {k: v for k, v in new.items() if old[k] != v}
+    if changed:
+        EXTRA_FILES.files[KELOS_CONTAINERFILE] = rewrite_containerfile_args(text, changed)
+        for k in KELOS_ARGS:
+            if k in changed:
+                EXTRA_FILES.changes.append("%s %s: %s -> %s" % (KELOS_CONTAINERFILE, k, old[k], new[k]))
+    return {}
+
+
 RESOLVERS = [r_base, r_go, r_rust, r_yq, r_gh, r_uv, r_ruff, r_trivy, r_gosec, r_gitleaks, r_containerssh_agent,
              r_abtop, r_unslop, r_golangci, r_kubectl, r_helm, r_awscli, r_tea, r_fj, r_crane, r_kyverno,
              r_actionlint, r_zizmor, r_hadolint, r_ast_grep, r_difftastic, r_delta, r_scc, r_hyperfine,
              r_lazygit, r_glow, r_syft, r_grype, r_claude, r_node, r_codex, r_agy,
-             r_opencode, r_k8s_images, r_buildkit, r_extras]
+             r_opencode, r_k8s_images, r_buildkit, r_extras, r_kelos]
 
 
 def write_atomic(path, text):
@@ -1363,6 +1619,8 @@ def bump(args, resolvers):
     for k in sorted(updates):
         if old.get(k) != updates[k]:
             print("%s: %s -> %s" % (k, old.get(k, "(new)"), updates[k]))
+    for line in EXTRA_FILES.changes:
+        print(line)
     for extra in EXTRA_FILES.regenerated:
         print("extras %s: lockfile regenerated" % extra)
     # versions.env goes last, so an interrupted run never pins a version whose catalog files are missing.

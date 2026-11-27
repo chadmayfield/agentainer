@@ -80,4 +80,21 @@ out=$(STUB_RUN_FAIL=1 build 5.6.0)
 assert_contains "an image that cannot run says the apt source was not checked" "apt source not checked: the linux/" "$(cat "$T/err")"
 out=$(STUB_RUN_FAIL=1 STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --platform linux/amd64 2>"$T/err")
 assert_contains "the note names the platform" "linux/amd64 image could not be run" "$(cat "$T/err")"
+
+# The Kelos variant gets its own labels and refuses the options it cannot honor.
+out=$(STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --variant kelos 2>"$T/err")
+has_line "kelos builds Containerfile.kelos" "Containerfile.kelos" "$out"
+has_line "kelos gets IMAGE_VERSION for its version label" "IMAGE_VERSION=dev" "$out"
+has_line "kelos gets the default tag" "localhost/agentainer-kelos:dev" "$out"
+if printf '%s\n' "$out" | grep -q '^VCS_REF=.'; then pass "kelos gets VCS_REF"; else fail "kelos gets VCS_REF" "[$out]"; fi
+assert_absent "kelos gets no main-image arguments" "$out" "Containerfile.kelos" "AGENT_UID=" "APT_FALLBACK=" "GO_VERSION="
+out=$(STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --variant kelos --from localhost/agentainer:dev 2>"$T/err")
+has_line "--from sets the Kelos base image" "AGENTAINER_IMAGE=localhost/agentainer:dev" "$out"
+for opt in "--uid 1001" "--gid 20" "--strict-apt"; do
+	# shellcheck disable=SC2086 # the option and its value split on purpose
+	STUB_SERVER=5.6.0 PATH="$T:$PATH" RUNTIME=podman "$B" --variant kelos $opt >"$T/out" 2>"$T/err"
+	rc=$?
+	assert_eq "kelos refuses $opt with exit 2" "2" "$rc"
+	assert_contains "kelos names $opt in the refusal" "${opt%% *} cannot be used with --variant kelos" "$(cat "$T/err")"
+done
 finish

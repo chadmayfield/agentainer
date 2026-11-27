@@ -7,11 +7,15 @@
 #   PUSH_URL                https://github.com/<owner>/<repo>.git, the push target (required)
 #   PUSH_BRANCH             branch to push to (required)
 #   KELOS_GITHUB_TOKEN_FILE file that holds the GitHub token (required)
+#   GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL
+#                           identity of the WIP commit (required: the sidecar
+#                           ignores the user and system git config, so git has
+#                           no other identity)
+#   GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL
+#                           optional; each falls back to the author value
 #   PUSH_REPO               repository directory (default /workspace/repo)
 #   PUSH_INTERVAL           seconds between pushes (default 900)
 #   PUSH_ALLOW_FILE_REMOTE  set to 1 to accept an absolute local path as PUSH_URL (tests)
-#   GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL
-#                           commit identity; the committer falls back to the author
 #   HTTPS_PROXY, https_proxy, GIT_SSL_CAINFO
 #                           read by git as usual
 #
@@ -19,10 +23,20 @@
 # with "push-note:". The exit status is that of the final push after SIGTERM: 0 for
 # push-ok, 1 for push-failed.
 #
-# Known limit: the sidecar pushes HEAD, so commits the agent made itself go out as
-# they are, including secrets, files over 10 MB and conflict markers. The exclude
-# list and the size cap apply only to the sidecar's own "agent WIP" commit. A rule
-# on the remote side (push protection, a size limit) is the only guard for those.
+# What the "agent WIP" commit holds: the changes to files that HEAD has, whatever
+# their name, and the new files, with three exceptions. A new file whose name, or
+# the name of a directory above it, matches a pattern in
+# /usr/local/share/push-sidecar/excludes stays out, also when the agent staged it.
+# A new or changed file over 10 MB stays out. A change of the commit a submodule
+# points to is not committed (see stage). A push-note line names the files kept out
+# by name or size.
+#
+# Known limits: the sidecar pushes HEAD, so commits the agent made itself go out as
+# they are, including secrets, files over 10 MB and conflict markers. A rule on the
+# remote side (push protection, a size limit) is the only guard for those. Only
+# https://github.com remotes are accepted. The image has no git-lfs, so a file that
+# .gitattributes sends through the LFS filter is committed as a plain blob, not as
+# an LFS pointer.
 #
 # Threat model: the repository content comes from the agent, so repo-level git
 # config must not start commands or redirect the token. The agent already holds the
@@ -32,11 +46,12 @@
 # Shutdown time: after the agent exits, the kubelet sends SIGTERM to the sidecar
 # and the pod's termination grace period (30 s unless the pod sets another value)
 # is all it has. Kelos v0.62.0 cannot set terminationGracePeriodSeconds on a Task
-# pod. The final path therefore has a total budget of 20 s from the signal, and
-# every step in it (push, status, add, commit) is killed when the budget runs out.
-# It first pushes HEAD as it is, with at most 10 s, so the agent's own commits go
-# out. It then commits the working tree changes and pushes again with whatever
-# time is left. A periodic push or commit in flight is killed when SIGTERM arrives.
+# pod. The final path therefore has a total budget of 20 s from the signal. Every
+# git step in it runs under timeout with what is left of the budget, and the loop
+# that checks file sizes stops when the budget is spent. It first pushes HEAD as it
+# is, with at most 10 s, so the agent's own commits go out. It then commits the
+# working tree changes and pushes again with whatever time is left. A periodic push
+# or commit in flight is killed when SIGTERM arrives.
 set -uo pipefail
 
 repo=${PUSH_REPO:-/workspace/repo}
@@ -47,15 +62,18 @@ token_file=${KELOS_GITHUB_TOKEN_FILE:-}
 GIT=/usr/bin/git
 excludes=/usr/local/share/push-sidecar/excludes
 max_bytes=$((10 * 1024 * 1024))
-# The excludes file also feeds pathspec excludes on git add. A negation in
-# .gitignore or .git/info/exclude (!.env) can override core.excludesFile but not a
-# pathspec, so these keep the listed names, and everything under a directory with
-# such a name, out of the commit.
+# The excludes file also feeds pathspecs. A negation in .gitignore or
+# .git/info/exclude (!.env) can override core.excludesFile but not a pathspec.
+# exclude_specs keeps new files with the listed names, and everything under a
+# directory with such a name, out of "git add -A". secret_specs matches the same
+# paths, to find such files that are already staged and to name them in a note.
 exclude_specs=()
+secret_specs=()
 if [ -r "$excludes" ]; then
   while IFS= read -r pattern; do
     case "$pattern" in '' | '#'*) continue ;; esac
     exclude_specs+=(":(exclude,glob)**/$pattern" ":(exclude,glob)**/$pattern/**")
+    secret_specs+=(":(glob)**/$pattern" ":(glob)**/$pattern/**")
   done <"$excludes"
 fi
 
@@ -90,10 +108,12 @@ esac
 
 # The identity comes from the Task's environment. Git reads the author variables
 # itself; the committer falls back to the author.
-: "${GIT_COMMITTER_NAME:=${GIT_AUTHOR_NAME:-}}"
-: "${GIT_COMMITTER_EMAIL:=${GIT_AUTHOR_EMAIL:-}}"
-[ -z "$GIT_COMMITTER_NAME" ] || export GIT_COMMITTER_NAME
-[ -z "$GIT_COMMITTER_EMAIL" ] || export GIT_COMMITTER_EMAIL
+if [ -z "${GIT_AUTHOR_NAME:-}" ] || [ -z "${GIT_AUTHOR_EMAIL:-}" ]; then
+  fail "GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL must be set"
+fi
+: "${GIT_COMMITTER_NAME:=$GIT_AUTHOR_NAME}"
+: "${GIT_COMMITTER_EMAIL:=$GIT_AUTHOR_EMAIL}"
+export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 
 # Ignore the user and system git config, and prompts.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0
@@ -108,6 +128,10 @@ helper='!f() { echo username=x-access-token; echo "password=$(cat "$KELOS_GITHUB
 # Flags that stop repository config from starting a command or changing where the
 # token goes. Keys that cannot be switched off by a flag are refused in
 # check_config. protocol.* allows https only (and a local path in tests).
+# diff.ignoreSubmodules=dirty and status --ignore-submodules=dirty keep git from
+# running "git status" inside a submodule, where the submodule's own config (a clean
+# filter, for example) would apply. A change of the commit a submodule points to is
+# still seen.
 git_flags=(
   -c core.hooksPath=/dev/null
   -c core.fsmonitor=false
@@ -118,6 +142,8 @@ git_flags=(
   -c protocol.allow=never
   -c protocol.https.allow=always
   -c http.sslVerify=true
+  -c diff.ignoreSubmodules=dirty
+  -c submodule.recurse=false
   -c "core.excludesFile=$excludes"
   -c "safe.directory=$repo"
   -c credential.helper=
@@ -131,11 +157,6 @@ if [ -n "${GIT_SSL_CAINFO:-}" ]; then
 fi
 g() {
   "$GIT" -C "$repo" "${git_flags[@]}" "$@"
-}
-# Same, with file names read literally. Used wherever a file name from the work tree
-# is passed as a pathspec, so a name like ":(glob)z.bin" is not read as pathspec magic.
-gl() {
-  "$GIT" --literal-pathspecs -C "$repo" "${git_flags[@]}" "$@"
 }
 
 # One line, at most 400 characters, with the token removed.
@@ -169,23 +190,31 @@ clean() {
 #   credential.*             all except credential.helper and credential.username,
 #                            which Kelos writes itself; the flags above clear them
 # The keys are read with git config --file, which does not follow includes and runs
-# nothing.
+# nothing. Prints "unsafe git config (<key>)", or why the config could not be read,
+# and returns 1; a repository whose config cannot be read is refused too.
 check_config() {
-  local common gitdir f key
-  common=$("$GIT" -C "$repo" rev-parse --git-common-dir 2>/dev/null) || return 0
-  gitdir=$("$GIT" -C "$repo" rev-parse --git-dir 2>/dev/null) || return 0
+  local common gitdir f key keys
+  if ! common=$(g rev-parse --git-common-dir 2>/dev/null) ||
+    ! gitdir=$(g rev-parse --git-dir 2>/dev/null); then
+    printf 'cannot read the repository at %s' "$repo"
+    return 1
+  fi
   for f in "$repo/$common/config" "$repo/$gitdir/config.worktree" "$common/config" "$gitdir/config.worktree"; do
     [ -f "$f" ] || continue
+    if ! keys=$("$GIT" config --file "$f" --list --name-only 2>/dev/null); then
+      printf 'cannot read the git config file %s' "$f"
+      return 1
+    fi
     while IFS= read -r key; do
       key=${key,,}
       case "$key" in
-      credential.helper | credential.username | remote.origin.url | remote.origin.fetch) ;;
+      '' | credential.helper | credential.username | remote.origin.url | remote.origin.fetch) ;;
       remote.* | diff.* | push.* | submodule.* | include.* | includeif.* | filter.* | core.fsmonitor | core.sshcommand | core.hookspath | core.askpass | core.gitproxy | core.worktree | gpg.* | url.* | http.* | protocol.* | credential.* | credential)
-        printf '%s' "$key"
+        printf 'unsafe git config (%s)' "$key"
         return 1
         ;;
       esac
-    done < <("$GIT" config --file "$f" --list --name-only 2>/dev/null)
+    done <<<"$keys"
   done
   return 0
 }
@@ -194,7 +223,7 @@ check_config() {
 # there is no lock.
 wait_lock() {
   local gitdir n=$(($1 * 5))
-  gitdir=$(cd "$repo" && "$GIT" rev-parse --absolute-git-dir 2>/dev/null) || return 0
+  gitdir=$(g rev-parse --absolute-git-dir 2>/dev/null) || return 0
   while [ -e "$gitdir/index.lock" ] && [ "$n" -gt 0 ]; do
     sleep 0.2
     n=$((n - 1))
@@ -205,7 +234,7 @@ wait_lock() {
 # Prints the name of a merge, rebase, cherry-pick or revert in progress, if any.
 in_progress() {
   local gitdir name
-  gitdir=$(cd "$repo" && "$GIT" rev-parse --absolute-git-dir 2>/dev/null) || return 0
+  gitdir=$(g rev-parse --absolute-git-dir 2>/dev/null) || return 0
   for name in MERGE_HEAD rebase-merge rebase-apply CHERRY_PICK_HEAD REVERT_HEAD; do
     if [ -e "$gitdir/$name" ]; then
       printf '%s' "$name"
@@ -216,11 +245,16 @@ in_progress() {
 
 # Runs a command in the background with a time limit, so that SIGTERM can stop it.
 # $1 is the limit in seconds; a limit of 0 or less means no time is left, and the
-# command does not run. Sets run_out (combined output) and run_rc. It runs in the
-# current shell, not in a command substitution, so the trap can see inflight.
+# command does not run. Sets run_out and run_rc. run_out holds stdout and stderr,
+# or only stderr when run_stdout names a file, which then gets stdout (NUL bytes
+# kept). It runs in the current shell, not in a command substitution, so the trap
+# can see inflight. A trapped signal makes wait return before the command ends, so
+# wait runs again until the command is gone. timeout -k 2 sends SIGKILL when the
+# command ignores SIGTERM.
 inflight=""
 run_out=""
 run_rc=0
+run_stdout=""
 deadline=0
 run() {
   local limit=$1 tmp
@@ -231,14 +265,24 @@ run() {
     return
   fi
   tmp=$(mktemp)
-  timeout "$limit" "$@" >"$tmp" 2>&1 &
+  if [ -n "$run_stdout" ]; then
+    timeout -k 2 "$limit" "$@" >"$run_stdout" 2>"$tmp" &
+  else
+    timeout -k 2 "$limit" "$@" >"$tmp" 2>&1 &
+  fi
   inflight=$!
   wait "$inflight"
   run_rc=$?
+  while kill -0 "$inflight" 2>/dev/null; do
+    wait "$inflight"
+    run_rc=$?
+  done
   inflight=""
   run_out=$(cat "$tmp")
   rm -f "$tmp"
-  [ "$run_rc" -ne 124 ] || run_out="timed out after ${limit}s"
+  case "$run_rc" in
+  124 | 137) run_out="timed out after ${limit}s" ;;
+  esac
 }
 
 # The limit for a step: $1 seconds, or what is left of the final budget if less.
@@ -251,28 +295,142 @@ step_limit() {
   echo "$l"
 }
 
-# Stages changes except the excluded names and files over max_bytes. Sets stage_err
-# when git add fails and stage_note to a line naming the skipped files.
+# True when the final budget is spent.
+out_of_time() {
+  [ "$deadline" -gt 0 ] && [ "$SECONDS" -ge "$deadline" ]
+}
+
+# Runs git with run_stdout set to a new temp file whose name goes to run_list.
+# The caller removes the file.
+run_listing() {
+  local limit=$1
+  shift
+  run_list=$(mktemp)
+  run_stdout=$run_list
+  run "$limit" "$@"
+  run_stdout=""
+}
+
+# Stages the changes for the WIP commit. Changes to files the index already tracks
+# are staged with add -u, whatever their name, so an edit to a tracked .env.example
+# is kept. Submodules are skipped. New files are staged with add -A minus
+# exclude_specs. Then new files (absent from HEAD) that match secret_specs, which
+# the agent may have staged itself, are removed from the index, and so are new or
+# changed files over max_bytes. The work tree is never changed. Sets stage_err when
+# a step fails or the final budget runs out, and stage_note to push-note lines
+# naming what was kept out. File names from the work tree go to git with
+# --literal-pathspecs, so a name like ":(glob)z.bin" is not read as pathspec magic.
 stage() {
-  local f size n=0 list="" skipped=0
+  local f rec secret_list="" secret_n=0
+  local -a link_specs=()
   stage_err=""
   stage_note=""
-  run "$(step_limit 60)" "$GIT" -C "$repo" "${git_flags[@]}" add -A -- . "${exclude_specs[@]}"
+  # git add checks each submodule in the index for changes by running "git status"
+  # inside it, where the submodule's own config applies (a clean filter, for
+  # example), and no flag turns that off for add. Submodule paths are therefore
+  # left out of both add steps, so a changed submodule commit is not committed.
+  run_listing "$(step_limit 30)" "$GIT" -C "$repo" "${git_flags[@]}" ls-files -s -z
+  if [ "$run_rc" -ne 0 ]; then
+    rm -f "$run_list"
+    stage_err="listing the index failed: $run_out"
+    return 1
+  fi
+  while IFS= read -r -d '' rec; do
+    case "$rec" in
+    "160000 "*) link_specs+=(":(exclude,literal)${rec#*$'\t'}") ;;
+    esac
+  done <"$run_list"
+  rm -f "$run_list"
+  run "$(step_limit 60)" "$GIT" -C "$repo" "${git_flags[@]}" add -u -- "${link_specs[@]}"
   if [ "$run_rc" -ne 0 ]; then
     stage_err=$run_out
     return 1
   fi
+  run "$(step_limit 60)" "$GIT" -C "$repo" "${git_flags[@]}" add -A -- . "${exclude_specs[@]}" "${link_specs[@]}"
+  if [ "$run_rc" -ne 0 ]; then
+    stage_err=$run_out
+    return 1
+  fi
+
+  # Without patterns there is nothing more to keep out. An empty pathspec list
+  # would match every file.
+  [ "${#secret_specs[@]}" -gt 0 ] || {
+    check_sizes
+    return
+  }
+  # New files with such a name that are not staged. Listed before the unstaging
+  # below, so that no file is named twice. The repository's own ignore rules still
+  # apply; only the image's exclude list is left out of this listing.
+  run_listing "$(step_limit 10)" "$GIT" -C "$repo" "${git_flags[@]}" -c core.excludesFile=/dev/null \
+    ls-files -z --others --exclude-standard -- "${secret_specs[@]}"
+  if [ "$run_rc" -eq 0 ]; then
+    while IFS= read -r -d '' f; do
+      secret_n=$((secret_n + 1))
+      [ "$secret_n" -gt 20 ] || secret_list="$secret_list $f"
+    done <"$run_list"
+  fi
+  rm -f "$run_list"
+  # Staged new files with such a name: removed from the index and named.
+  run_listing "$(step_limit 30)" "$GIT" -C "$repo" "${git_flags[@]}" diff --cached --name-only -z --no-renames \
+    --diff-filter=A --no-textconv --no-ext-diff -- "${secret_specs[@]}"
+  if [ "$run_rc" -ne 0 ]; then
+    rm -f "$run_list"
+    stage_err="listing staged files failed: $run_out"
+    return 1
+  fi
+  if [ -s "$run_list" ]; then
+    run "$(step_limit 30)" "$GIT" --literal-pathspecs -C "$repo" "${git_flags[@]}" rm -q --cached -f \
+      --pathspec-from-file="$run_list" --pathspec-file-nul
+    if [ "$run_rc" -ne 0 ]; then
+      rm -f "$run_list"
+      stage_err="unstaging files with secret-like names failed: $run_out"
+      return 1
+    fi
+    while IFS= read -r -d '' f; do
+      secret_n=$((secret_n + 1))
+      [ "$secret_n" -gt 20 ] || secret_list="$secret_list $f"
+    done <"$run_list"
+  fi
+  rm -f "$run_list"
+  if [ "$secret_n" -gt 0 ]; then
+    stage_note="push-note: kept $secret_n new file(s) with secret-like names out of the commit:$secret_list"
+  fi
+  check_sizes
+}
+
+# Removes new or changed files over max_bytes from the index, and adds a note that
+# names them to stage_note. Sets stage_err and returns 1 when a step fails or the
+# final budget runs out.
+check_sizes() {
+  local f size list="" skipped=0
+  run_listing "$(step_limit 30)" "$GIT" -C "$repo" "${git_flags[@]}" diff --cached --name-only -z \
+    --diff-filter=AM --no-textconv --no-ext-diff
+  if [ "$run_rc" -ne 0 ]; then
+    rm -f "$run_list"
+    stage_err="listing staged files failed: $run_out"
+    return 1
+  fi
   while IFS= read -r -d '' f; do
+    if out_of_time; then
+      stage_err="out of time while checking file sizes"
+      break
+    fi
     size=$(stat -c %s "$repo/$f" 2>/dev/null || echo 0)
     if [ "$size" -gt "$max_bytes" ]; then
-      gl reset -q -- "$f" >/dev/null 2>&1
+      run "$(step_limit 10)" "$GIT" --literal-pathspecs -C "$repo" "${git_flags[@]}" reset -q -- "$f"
+      if [ "$run_rc" -ne 0 ]; then
+        stage_err="unstaging $f failed: $run_out"
+        break
+      fi
       skipped=$((skipped + 1))
-      n=$((n + 1))
-      [ "$n" -gt 20 ] || list="$list $f"
+      [ "$skipped" -gt 20 ] || list="$list $f"
     fi
-  done < <(g diff --cached --name-only -z --diff-filter=AM --no-textconv --no-ext-diff 2>/dev/null)
+  done <"$run_list"
+  rm -f "$run_list"
+  [ -z "$stage_err" ] || return 1
   if [ "$skipped" -gt 0 ]; then
-    stage_note="push-note: skipped $skipped file(s) over 10 MB:$list"
+    stage_note="${stage_note:+$stage_note
+}push-note: skipped $skipped file(s) over 10 MB:$list"
   fi
   return 0
 }
@@ -294,9 +452,20 @@ on_term() {
 }
 trap on_term TERM INT
 
+# Sleeps $1 seconds in the background, so that SIGTERM ends the sleep at once.
+# A signal that arrives before sleeper is set finds no sleeper to kill, so stop is
+# checked again before the wait.
+pause() {
+  sleep "$1" &
+  sleeper=$!
+  [ "$stop" -eq 0 ] || kill "$sleeper" 2>/dev/null
+  wait "$sleeper" 2>/dev/null
+  sleeper=""
+}
+
 # Commits the working tree changes. $1 is the lock wait in seconds. Sets commit_note
-# (why nothing was committed, or empty) and commit_done (1 when a commit was made).
-# Returns 2 when SIGTERM stopped a step.
+# (why the changes were not committed, or empty) and commit_done (1 when a commit
+# was made). Returns 2 when SIGTERM stopped a step.
 commit_changes() {
   local op status
   commit_note=""
@@ -310,10 +479,14 @@ commit_changes() {
     commit_note="commit skipped, index.lock exists; "
     return 0
   fi
-  run "$(step_limit 60)" "$GIT" -C "$repo" "${git_flags[@]}" status --porcelain
+  run "$(step_limit 60)" "$GIT" -C "$repo" "${git_flags[@]}" status --porcelain --ignore-submodules=dirty
   [ "$killed" -eq 0 ] || return 2
+  if [ "$run_rc" -ne 0 ]; then
+    commit_note="status failed: $(clean "$run_out"); "
+    return 0
+  fi
   status=$run_out
-  [ "$run_rc" -eq 0 ] && [ -n "$status" ] || return 0
+  [ -n "$status" ] || return 0
   if ! stage; then
     [ "$killed" -eq 0 ] || return 2
     commit_note="commit failed: $(clean "$stage_err"); "
@@ -321,9 +494,16 @@ commit_changes() {
   fi
   [ "$killed" -eq 0 ] || return 2
   [ -z "$stage_note" ] || printf '%s\n' "$stage_note"
-  if g diff --cached --quiet --no-textconv --no-ext-diff 2>/dev/null; then
+  run "$(step_limit 30)" "$GIT" -C "$repo" "${git_flags[@]}" diff --cached --quiet --no-textconv --no-ext-diff
+  [ "$killed" -eq 0 ] || return 2
+  case "$run_rc" in
+  0) return 0 ;;
+  1) ;;
+  *)
+    commit_note="commit failed: $(clean "$run_out"); "
     return 0
-  fi
+    ;;
+  esac
   run "$(step_limit 60)" "$GIT" -C "$repo" "${git_flags[@]}" commit -q --no-verify -m "agent WIP"
   [ "$killed" -eq 0 ] || return 2
   if [ "$run_rc" -eq 0 ]; then
@@ -348,10 +528,8 @@ push_head() {
 # 1 on push-failed and 2 when SIGTERM stopped the attempt.
 push_now() {
   local bad
-  if bad=$(check_config); then
-    :
-  else
-    printf 'push-failed: unsafe git config (%s)\n' "$bad"
+  if ! bad=$(check_config); then
+    printf 'push-failed: %s\n' "$bad"
     return 1
   fi
   commit_changes 3 || return 2
@@ -376,10 +554,8 @@ final_push() {
   final=1
   killed=0
   deadline=$((SECONDS + 20))
-  if bad=$(check_config); then
-    :
-  else
-    printf 'push-failed: unsafe git config (%s)\n' "$bad"
+  if ! bad=$(check_config); then
+    printf 'push-failed: %s\n' "$bad"
     return 1
   fi
   push_head "$(step_limit 10)"
@@ -415,25 +591,19 @@ final_push() {
 # Wait for the repository. A stop request before it exists is a failure: nothing
 # was cloned, so nothing can be pushed.
 announced=0
-until [ "$stop" -eq 1 ] || "$GIT" -C "$repo" rev-parse --git-dir >/dev/null 2>&1; do
+until [ "$stop" -eq 1 ] || g rev-parse --git-dir >/dev/null 2>&1; do
   if [ "$announced" -eq 0 ]; then
     echo "waiting for a git repository at $repo"
     announced=1
   fi
-  sleep 2 &
-  sleeper=$!
-  wait "$sleeper" 2>/dev/null
-  sleeper=""
+  pause 2
 done
-if [ "$stop" -eq 1 ] && ! "$GIT" -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+if [ "$stop" -eq 1 ] && ! g rev-parse --git-dir >/dev/null 2>&1; then
   fail "no git repository at $repo"
 fi
 
 while [ "$stop" -eq 0 ]; do
-  sleep "$interval" &
-  sleeper=$!
-  wait "$sleeper" 2>/dev/null
-  sleeper=""
+  pause "$interval"
   [ "$stop" -eq 0 ] || break
   push_now
   rc=$?

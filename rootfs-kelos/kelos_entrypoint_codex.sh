@@ -11,27 +11,37 @@
 
 set -uo pipefail
 
-# AGENTAINER CHANGE 4: start every run with a clean Codex home. The home is a
+# AGENTAINER CHANGE 3: start every run with a clean Codex home. The home is a
 # persistent volume, so anything a run leaves there (a changed config.toml, extra
 # instruction files, hooks, MCP settings, session history) would apply to the next
-# run. Every entry except auth.json is removed, dotfiles and subdirectories
-# included, before the steps below write config.toml and AGENTS.md. auth.json stays
-# because Codex refreshes its login token in that file. Before removing a
-# directory, find -P gives the owner rwx on every directory inside it that lacks
-# it, so a directory left at mode 500 or 000 does not stop the removal. find -P
-# does not follow symlinks and -type d matches only real directories, so no link
-# target changes mode, and files keep their mode (a hard link to auth.json keeps
-# 0600). GNU rm -rf removes a symlink as a link and does not follow links inside a
-# directory it removes. On an ext4 volume this also removes lost+found; the
-# filesystem works without it. A lost+found owned by root that holds files cannot
-# be removed, and the start then exits 78. The dispatcher exports CODEX_HOME after
-# its guard has checked the value. Exit code 78 matches the dispatcher's refusals.
+# run. Every entry except auth.json and the lock file is removed, dotfiles and
+# subdirectories included, before the steps below write config.toml and AGENTS.md.
+# auth.json stays because Codex refreshes its login token in that file.
+#
+# Two pods can mount the same home volume (a ReadWriteMany claim, or a
+# ReadWriteOnce claim used by pods on one node). A run therefore takes an exclusive
+# flock on .agentainer-codex.lock in the home before it changes anything there,
+# and holds it until this script and codex exit. A second start waits for the
+# first run to end, so it never removes files that a running codex uses.
+#
+# A run may leave the home itself without owner write or search permission; the
+# owner gets them back first. Before removing a directory, find -P gives the owner
+# rwx on every directory inside it that lacks it, so a directory left at mode 500
+# or 000 does not stop the removal. find -P does not follow symlinks and -type d
+# matches only real directories, so no link target changes mode, and files keep
+# their mode (a hard link to auth.json keeps 0600). GNU rm -rf removes a symlink as
+# a link and does not follow links inside a directory it removes. On an ext4
+# volume this also removes lost+found; the filesystem works without it. A
+# lost+found owned by root that holds files cannot be removed, and the start then
+# exits 78. The dispatcher exports CODEX_HOME after its guard has checked the
+# value. Exit code 78 matches the dispatcher's refusals.
 codex_refuse() {
   printf 'kelos_entrypoint_codex: refusing to start: %s\n' "$1" >&2
   exit 78
 }
+codex_lock_fd=""
 codex_home_reset() {
-  local home=/home/kelos/.codex entry
+  local home=/home/kelos/.codex entry lock
   [ -n "${CODEX_HOME:-}" ] || codex_refuse "CODEX_HOME is not set"
   [ "$CODEX_HOME" = "$home" ] || codex_refuse "CODEX_HOME is $CODEX_HOME, not $home"
   [ ! -L "$home" ] || codex_refuse "$home is a symlink"
@@ -39,9 +49,23 @@ codex_home_reset() {
     codex_refuse "$home is not a directory"
   fi
   mkdir -p "$home" || codex_refuse "cannot create $home"
+  if [ ! -w "$home" ] || [ ! -x "$home" ]; then
+    chmod u+rwx -- "$home" 2>/dev/null || codex_refuse "cannot give the owner rwx on $home"
+  fi
   [ ! -L "$home/auth.json" ] || codex_refuse "$home/auth.json is a symlink"
   if [ -e "$home/auth.json" ] && [ ! -f "$home/auth.json" ]; then
     codex_refuse "$home/auth.json is not a regular file"
+  fi
+  lock=$home/.agentainer-codex.lock
+  # Only a link or a non-file is removed here. A regular lock file is never
+  # removed, because another start may hold a lock on it.
+  if [ -L "$lock" ] || { [ -e "$lock" ] && [ ! -f "$lock" ]; }; then
+    rm -rf -- "$lock" || codex_refuse "cannot remove $lock"
+  fi
+  exec {codex_lock_fd}>>"$lock" || codex_refuse "cannot open $lock"
+  if ! flock -n "$codex_lock_fd"; then
+    printf 'kelos_entrypoint_codex: another Codex run holds %s; waiting for it to end\n' "$lock" >&2
+    flock "$codex_lock_fd" || codex_refuse "cannot lock $lock"
   fi
   # A run may have changed the mode of the login file; it is kept at 0600.
   if [ -f "$home/auth.json" ]; then
@@ -49,7 +73,7 @@ codex_home_reset() {
   fi
   shopt -s dotglob nullglob
   for entry in "$home"/*; do
-    [ "$entry" != "$home/auth.json" ] || continue
+    [ "$entry" != "$home/auth.json" ] && [ "$entry" != "$lock" ] || continue
     if [ -d "$entry" ] && [ ! -L "$entry" ]; then
       find -P "$entry" -type d ! -perm -u=rwx -exec chmod u+rwx -- {} \; 2>/dev/null
     fi
@@ -59,7 +83,7 @@ codex_home_reset() {
 }
 codex_home_reset
 
-# AGENTAINER CHANGE 5: check an existing auth.json against CODEX_AUTH_JSON. A run
+# AGENTAINER CHANGE 4: check an existing auth.json against CODEX_AUTH_JSON. A run
 # can leave auth.json invalid or holding another login, and the upstream steps only
 # seed a missing file, so every later run would use it. Codex rotates the refresh
 # token and writes it back to auth.json, so a file that still holds the same login
@@ -69,9 +93,21 @@ codex_home_reset
 # codex-rs/login/src/token_data.rs). A refresh changes only tokens.id_token,
 # tokens.access_token, tokens.refresh_token and last_refresh. Codex may also store
 # its own agent_identity record for the same account. Every other credential field
-# must equal the one in CODEX_AUTH_JSON. A file that passes these checks must also
-# load in Codex itself: serde rejects files that jq accepts, such as an id_token
-# that is not a JWT or a duplicate key. Only field names are printed, never values.
+# must equal the one in CODEX_AUTH_JSON.
+#
+# The account of a login is tokens.account_id and the chatgpt_account_id claim in
+# the "https://api.openai.com/auth" object of the id_token payload (IdClaims and
+# AuthClaims in token_data.rs). The payload is decoded without checking the JWT
+# signature: the check compares the file with CODEX_AUTH_JSON and does not
+# authenticate either. The file is replaced when the two places in one login
+# disagree, when either login names no account at all, when the accounts differ,
+# or when both id_tokens name a user (chatgpt_user_id, or user_id) and the users
+# differ. A CODEX_AUTH_JSON with no account in either place makes every start
+# replace the file, and the log says so.
+#
+# A file that passes these checks must also load in Codex itself: serde rejects
+# files that jq accepts, such as an id_token that is not a JWT or a duplicate key.
+# Only field names are printed, never values.
 codex_auth_mismatch() {
   local file=$1 secret reason
   secret=$(printf '%s' "$CODEX_AUTH_JSON" | tr -d '\n\r')
@@ -86,12 +122,41 @@ codex_auth_mismatch() {
   # shellcheck disable=SC2016 # $s and $f are jq variables
   reason=$({ printf '%s\n' "$secret" && cat -- "$file"; } | jq -r -n '
     def nonempty: type == "string" and length > 0;
-    input as $s | input as $f |
+    # The decoded payload of a JWT, or null when the value is not one.
+    def jwt_claims:
+      try (split(".")[1] | gsub("-"; "+") | gsub("_"; "/")
+        | . + ("=" * ((4 - length % 4) % 4)) | @base64d | fromjson)
+      catch null;
+    # The account and user names a login carries.
+    def ids:
+      ((.tokens? // null | if type == "object" then .id_token else null end) | jwt_claims) as $c
+      | (if ($c | type) == "object" then $c["https://api.openai.com/auth"] else null end) as $a
+      | (if ($a | type) == "object" then $a else {} end) as $a
+      | {token: (.tokens.account_id? // null), claim: ($a.chatgpt_account_id // null),
+         user: ($a.chatgpt_user_id // $a.user_id // null)};
+    # "conflict" when tokens.account_id and the claim disagree, null when neither is set.
+    def account:
+      if .token != null and .claim != null and .token != .claim then "conflict"
+      else .token // .claim end;
+    input as $s | input as $f | ($s | ids) as $si | ($f | ids) as $fi |
+    ($si | account) as $sacct | ($fi | account) as $facct |
     if ($f.tokens | type) != "object"
       or ([$f.tokens.id_token, $f.tokens.access_token, $f.tokens.refresh_token] | all(nonempty) | not)
     then "it lacks tokens.id_token, tokens.access_token or tokens.refresh_token"
-    elif ($f.tokens.account_id // null) != ($s.tokens.account_id? // null)
+    elif $sacct == "conflict"
+    then "the tokens.account_id and the id_token of CODEX_AUTH_JSON name different accounts"
+    elif $facct == "conflict"
+    then "its tokens.account_id and its id_token name different accounts"
+    elif $sacct == null
+    then "CODEX_AUTH_JSON names no account, so the file cannot be compared with it"
+    elif $facct == null
+    then "it names no account, so it cannot be compared with CODEX_AUTH_JSON"
+    elif $fi.token != null and $si.token != null and $fi.token != $si.token
     then "its tokens.account_id differs from CODEX_AUTH_JSON"
+    elif $facct != $sacct
+    then "its account differs from CODEX_AUTH_JSON"
+    elif $fi.user != null and $si.user != null and $fi.user != $si.user
+    then "its id_token names another user than CODEX_AUTH_JSON"
     else
       (["auth_mode", "OPENAI_API_KEY", "personal_access_token", "bedrock_api_key", "bedrock_access_keys"]
         | map(select(($f[.] // null) != ($s[.] // null)))) as $diff
@@ -99,7 +164,7 @@ codex_auth_mismatch() {
         elif ($f.agent_identity // null) != null
           and $f.agent_identity != ($s.agent_identity // null)
           and (($f.agent_identity | type) != "object"
-            or ($f.agent_identity.account_id // null) != ($s.tokens.account_id? // null))
+            or ($f.agent_identity.account_id // null) != $sacct)
         then "its agent_identity is not for the CODEX_AUTH_JSON account"
         else empty end
     end' 2>/dev/null) || reason="it could not be checked"
@@ -175,7 +240,7 @@ if [ -n "${CODEX_AUTH_JSON:-}" ]; then
       umask 077
       printf '%s' "$CODEX_AUTH_JSON" | tr -d '\n\r' >"$codex_home/auth.json"
     )
-  # AGENTAINER CHANGE 5: replace an existing auth.json that is invalid or holds
+  # AGENTAINER CHANGE 4: replace an existing auth.json that is invalid or holds
   # another login. The new file is written beside it with mode 0600 and renamed
   # over it.
   elif reason=$(codex_auth_mismatch "$codex_home/auth.json") && [ -n "$reason" ]; then
@@ -187,12 +252,7 @@ if [ -n "${CODEX_AUTH_JSON:-}" ]; then
         mv -f -- "$tmp" "$codex_home/auth.json"
     ) || codex_refuse "cannot replace $codex_home/auth.json"
   fi
-  # AGENTAINER CHANGE 3: add the setting only when it is absent. Upstream appends
-  # it on every start, and a second start on a persistent home leaves a duplicate
-  # key that Codex rejects.
-  if ! grep -qxF 'cli_auth_credentials_store = "file"' "$codex_home/config.toml" 2>/dev/null; then
-    printf 'cli_auth_credentials_store = "file"\n' >>"$codex_home/config.toml"
-  fi
+  printf 'cli_auth_credentials_store = "file"\n' >>"$codex_home/config.toml"
 fi
 
 # Write user-level instructions (global scope read by Codex CLI)
@@ -288,7 +348,7 @@ process.exit(r.status ?? 1);
   printf '\n---KELOS_SETUP_COMMAND_DONE---\n' >&2
 fi
 
-# AGENTAINER CHANGE 6: the MCP gateway. The dispatcher's guard has checked the
+# AGENTAINER CHANGE 5: the MCP gateway. The dispatcher's guard has checked the
 # files in /etc/agentainer/mcp; mcp_check runs again here so that the URL written
 # below is the one just checked. The two tables are appended after every other
 # write to config.toml, so no later line can land inside them, and the
@@ -326,15 +386,24 @@ if [ -n "${KELOS_EFFORT:-}" ]; then
   ARGS+=("--config" "model_reasoning_effort=\"$SAFE_EFFORT\"")
 fi
 
-# The token is set with an assignment prefix, so it is in the environment of
-# this codex process only: not exported, not in argv, and not seen by
-# kelos-capture.
+# AGENTAINER CHANGE 5 (continued): the token is set with an assignment prefix, so
+# it is in the environment of this codex process only: not exported, not in argv,
+# and not seen by kelos-capture.
 # shellcheck disable=SC2154 # mcp_dir is set in guard.sh
 if [ -n "$mcp_url" ]; then
   AGENTAINER_MCP_TOKEN="$(<"$mcp_dir/token")" codex "${ARGS[@]}" | /kelos/kelos-capture
 else
   codex "${ARGS[@]}" | /kelos/kelos-capture
 fi
-AGENT_EXIT_CODE=${PIPESTATUS[0]}
+# AGENTAINER CHANGE 6: exit with codex's status, or with kelos-capture's status
+# when codex succeeded, as the Claude entrypoint does. Upstream exits with codex's
+# status only, so a failed capture went unreported.
+PIPE_EXIT_CODES=("${PIPESTATUS[@]}")
+AGENT_EXIT_CODE=${PIPE_EXIT_CODES[0]}
+CAPTURE_EXIT_CODE=${PIPE_EXIT_CODES[1]}
 
-exit $AGENT_EXIT_CODE
+if [ "$AGENT_EXIT_CODE" -ne 0 ]; then
+  exit "$AGENT_EXIT_CODE"
+fi
+
+exit "$CAPTURE_EXIT_CODE"

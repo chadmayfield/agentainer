@@ -7,20 +7,40 @@
 # Agentainer already has what Kelos's claude-code and codex Dockerfiles install
 # (git, make, curl, ca-certificates, tini, Node.js, gh, Go, bubblewrap), so this
 # file adds no packages.
-# Index digest of 0.1.0-dev.20261024.1 (amd64 manifest sha256:63f87ab8de87acea39b9e2dae78522efd9a1002764ae2cda8c9ab902cb816b25).
-# scripts/build.sh --from overrides it.
-ARG AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261024.1@sha256:075e0c2cc259c7c1803950f7a204d80bf4bc53f0bbc3823ea0e29c3f203dd534
+#
+# The four ARG lines below are the variant's pins. scripts/bump_versions.py (r_kelos)
+# rewrites them in the scheduled update, so keep each on one line in this form:
+#   AGENTAINER_IMAGE       the newest published Agentainer release, by tag and index
+#                          digest (scripts/build.sh --from overrides it)
+#   GOLANG_IMAGE           the official golang image for the newest stable Go, by tag
+#                          and index digest
+#   KELOS_FORK_COMMIT      the commit of the newest v<version>-rest.<n> tag of the
+#                          kelos-capture fork
+#   KELOS_CAPTURE_VERSION  that tag's name, which the binary reports as its version
+ARG AGENTAINER_IMAGE=ghcr.io/chadmayfield/agentainer:0.1.0-dev.20261104.1@sha256:9cf7377a12d0ebf5b82ddd742b05c412f4400979e1a687b632f31bcba6fb3f7c
+ARG GOLANG_IMAGE=docker.io/library/golang:1.27.4@sha256:5f1b98fa02fe396ebce2a0227a0e08309e11792915b9dd2e1f71053d7e7e6666
+ARG KELOS_FORK_COMMIT=958eadc39f5b0fe248059b719f584fcf006d02e2
+ARG KELOS_CAPTURE_VERSION=v0.65.0-rest.1
 
-# Builds kelos-capture from source. The stage runs on the build host's architecture
-# and cross-compiles (CGO off), so it does not need emulation. golang 1.25.14 (index
-# digest below) satisfies the fork's go.mod, which says "go 1.25.0" and has no
-# toolchain line. The build needs network access to github.com and the Go module
-# proxy. The flags match Kelos's Makefile (CGO_ENABLED=0, version ldflags), plus
-# -trimpath so the binary does not record the build directory.
-FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.25.14@sha256:699337d620559a59b4a2bb298ad59611e535d2ee755a34cf2d2a98f37578dc80 AS kelos-capture
+# Builds kelos-capture from source, from the fork at github.com/chadmayfield/kelos.
+# Each v<version>-rest.<n> tag there is upstream kelos-dev/kelos at release
+# v<version> plus one commit that makes kelos-capture list pull requests over the
+# GitHub REST API (gh api repos/<owner>/<repo>/pulls) instead of gh pr list, which
+# uses GraphQL. Some HTTP egress proxies allow the REST API and block GraphQL. To
+# use the upstream code instead, point the remote below at
+# https://github.com/kelos-dev/kelos.git and set KELOS_FORK_COMMIT and
+# KELOS_CAPTURE_VERSION to an upstream release tag's commit and name.
+#
+# The stage runs on the build host's architecture and cross-compiles (CGO off), so
+# it does not need emulation. The official golang image sets GOTOOLCHAIN=local, so
+# the Go in GOLANG_IMAGE must satisfy the go line of the fork's go.mod; r_kelos
+# checks that before it writes a pin. The build needs network access to github.com
+# and the Go module proxy. The flags match Kelos's Makefile (CGO_ENABLED=0, version
+# ldflags), plus -trimpath so the binary does not record the build directory.
+FROM --platform=$BUILDPLATFORM ${GOLANG_IMAGE} AS kelos-capture
 ARG TARGETARCH
-ARG KELOS_FORK_COMMIT=ca909c7f6b80e9ac8ab7b8db11399e4363aa841d
-ARG KELOS_CAPTURE_VERSION=v0.62.0-proxy.3
+ARG KELOS_FORK_COMMIT
+ARG KELOS_CAPTURE_VERSION
 RUN git init -q /src \
 	&& cd /src \
 	&& git remote add origin https://github.com/chadmayfield/kelos.git \
@@ -57,11 +77,8 @@ COPY --chmod=0755 rootfs-kelos/claude-wrapper.sh /usr/local/lib/kelos/bin/claude
 # Claude's headersHelper for the MCP gateway: prints the bearer header from the
 # token file mounted at /etc/agentainer/mcp/token.
 COPY --chmod=0755 rootfs-kelos/mcp-headers.sh /usr/local/lib/kelos/mcp-headers
-# kelos-capture is not the upstream v0.62.0 binary. The builder stage above builds
-# it from the chadmayfield/kelos fork (github.com/chadmayfield/kelos), branch
-# proxy-env-for-git-init, commit ca909c7f6b80e9ac8ab7b8db11399e4363aa841d, on top of
-# the v0.62.0 base commit 8b0805c. It reads pull requests over REST instead of
-# GitHub GraphQL, which the egress proxy blocks. Provenance: rootfs-kelos/SOURCE.md.
+# kelos-capture comes from the builder stage above, not from a Kelos release binary.
+# Provenance: rootfs-kelos/SOURCE.md.
 COPY --from=kelos-capture --chmod=0755 /out/kelos-capture /kelos/kelos-capture
 COPY --chmod=0644 rootfs-kelos/LICENSE.kelos rootfs-kelos/SOURCE.md /usr/share/doc/kelos/
 
@@ -81,6 +98,19 @@ ENV GOPATH=/home/kelos/go \
 	PIPX_BIN_DIR=/home/kelos/.local/bin \
 	PYTHONUSERBASE=/home/kelos/.local \
 	PATH=/home/kelos/.local/bin:/usr/local/go/bin:/opt/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# The labels describe this image, not the Agentainer image it is built on, whose
+# labels it would otherwise inherit. scripts/build.sh passes the values.
+ARG IMAGE_VERSION=dev
+ARG VCS_REF=unknown
+ARG BUILD_DATE
+ARG AGENTAINER_IMAGE
+LABEL org.opencontainers.image.version="${IMAGE_VERSION}" \
+	org.opencontainers.image.revision="${VCS_REF}" \
+	org.opencontainers.image.created="${BUILD_DATE}" \
+	org.opencontainers.image.title="Agentainer Kelos variant" \
+	org.opencontainers.image.description="Agentainer with the Kelos agent entrypoints, kelos-capture and the push sidecar" \
+	org.opencontainers.image.base.name="${AGENTAINER_IMAGE}"
 
 USER 61100
 WORKDIR /workspace

@@ -401,6 +401,32 @@ class BumpPrActionTests(unittest.TestCase):
         self.assertRegex(body, r"(?m)^- \[ \] .*`IMAGE=localhost/agentainer:dev sh tests/host/test-extras-live\.sh`"
                                r".*amd64 and on arm64")
 
+    def test_kelos_containerfile_repin_is_applied_with_its_checklist(self):
+        kelos = "Containerfile.kelos"
+
+        def mutate(seed):
+            (seed / kelos).write_text("ARG KELOS_CAPTURE_VERSION=v0.65.0-rest.1\n")
+        result, branches, d = self.run_action(mutate, changes="Containerfile.kelos KELOS_CAPTURE_VERSION: a -> b\n",
+                                              extra={kelos: "ARG KELOS_CAPTURE_VERSION=v0.62.0-proxy.3\n"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(branches), 1)
+        self.assertEqual(self.show(d, branches[0], kelos), "ARG KELOS_CAPTURE_VERSION=v0.65.0-rest.1\n")
+        body = (d / "body.md").read_text()
+        self.assertRegex(body, r"(?m)^- \[ \] .*`scripts/build.sh --variant kelos`.*"
+                               r"`IMAGE=localhost/agentainer-kelos:dev sh tests/kelos/test_image.sh`")
+        self.assertNotIn("test-extras-live", body)
+        self.assertEqual(body.count("Before merging:"), 1)
+
+    def test_kelos_containerfile_elsewhere_is_refused(self):
+        other = "rootfs-kelos/Containerfile.kelos"
+
+        def mutate(seed):
+            (seed / other).write_text("b\n")
+        result, branches, d = self.run_action(mutate, extra={other: "a\n"})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(other, result.stdout + result.stderr)
+        self.assertEqual(branches, [])
+
     def test_versions_env_only_change_has_no_checklist(self):
         def mutate(seed):
             (seed / "versions.env").write_text("X_VERSION=1.1.0\n")
