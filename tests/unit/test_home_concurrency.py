@@ -10,6 +10,9 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+# seed_file uses GNU chmod --reference and ln -T, and the lock wrapper reads /proc.
+LINUX_ENTRYPOINT = unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("flock"),
+                                       "entrypoint requires Linux flock and GNU coreutils")
 
 
 class HomeConcurrencyTests(unittest.TestCase):
@@ -19,6 +22,9 @@ class HomeConcurrencyTests(unittest.TestCase):
         self.base = Path(self.tmp.name)
         self.home = self.base / "home"
         (self.home / ".agentainer").mkdir(parents=True)
+        self.state = self.base / "state"
+        self.state.mkdir()
+        self.lock_log = self.base / "lock.log"
         self.processes = []
         self.addCleanup(self.stop_processes)
 
@@ -42,17 +48,54 @@ class HomeConcurrencyTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail("process did not reach %s" % name)
 
+    def entrypoint(self, steps):
+        """The entrypoint with its steps and its state directory moved under the test directory."""
+        text = (ROOT / "rootfs/usr/local/bin/agentainer-entrypoint").read_text()
+        return (text.replace("STEPS=/usr/local/lib/agentainer/entrypoint.d", 'STEPS="%s"' % steps)
+                    .replace("/var/lib/agentainer", str(self.state)))
+
+    def wrap_flock(self, bindir):
+        """Log when each worker reaches and acquires a lock, by the lock file's name."""
+        wrapper = bindir / "flock"
+        wrapper.write_text("""#!/bin/sh
+for fd; do :; done
+lock=$(basename "$(readlink /proc/self/fd/$fd)")
+echo "reached $CX_WORKER $lock" >>"$CX_TMP/lock.log"
+%s "$@" || exit
+echo "acquired $CX_WORKER $lock" >>"$CX_TMP/lock.log"
+""" % shutil.which("flock"))
+        wrapper.chmod(0o755)
+
+    def wait_log(self, line):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if self.lock_log.exists() and line in self.lock_log.read_text().splitlines():
+                return
+            time.sleep(0.01)
+        self.fail("no %r in the lock log" % line)
+
+    def release_after_lock_reached(self, worker, lock, release):
+        """Release the paused copy once the second worker waits on the lock, and log the order."""
+        self.wait_log("reached %s %s" % (worker, lock))
+        with self.lock_log.open("a") as f:
+            f.write("released\n")
+        (self.base / release).touch()
+
+    def acquired_after_release(self, worker, lock):
+        lines = self.lock_log.read_text().splitlines()
+        return lines.index("acquired %s %s" % (worker, lock)) > lines.index("released")
+
     def complete(self, p):
         out, err = p.communicate(timeout=10)
         self.assertEqual(p.returncode, 0, out + err)
         return out, err
 
-    @unittest.skipUnless(shutil.which("flock"), "entrypoint requires Linux flock")
+    @LINUX_ENTRYPOINT
     def test_concurrent_seed_and_release_tracking_keep_newest_default(self):
         steps = ROOT / "rootfs/usr/local/lib/agentainer/entrypoint.d"
-        entrypoint = (ROOT / "rootfs/usr/local/bin/agentainer-entrypoint").read_text()
         bindir = self.base / "bin"
         bindir.mkdir()
+        self.wrap_flock(bindir)
         cp = bindir / "cp"
         cp.write_text("""#!/bin/sh
 case "$1" in
@@ -79,25 +122,22 @@ exec /bin/cp "$@"
                                     str(ROOT / "rootfs/usr/local/lib/agentainer/release_version.py"))
                 (staged / name).write_text(text)
             target = root / "entrypoint"
-            target.write_text(entrypoint.replace("STEPS=/usr/local/lib/agentainer/entrypoint.d",
-                                                 'STEPS="%s"' % staged))
+            target.write_text(self.entrypoint(staged))
             entries[image] = target
         env = {"PATH": str(bindir) + ":" + os.environ["PATH"]}
         older = self.start(["sh", str(entries["older"]), "echo", "STARTED"],
-                           AGENTAINER_IMAGE_VERSION="0.1.0", **env)
+                           AGENTAINER_IMAGE_VERSION="0.1.0", CX_WORKER="older", **env)
         self.wait_file("copy-paused")
         newer = self.start(["sh", str(entries["newer"]), "echo", "STARTED"],
-                           AGENTAINER_IMAGE_VERSION="0.2.0", **env)
+                           AGENTAINER_IMAGE_VERSION="0.2.0", CX_WORKER="newer", **env)
         try:
-            newer.communicate(timeout=0.5)
-            blocked = False
-        except subprocess.TimeoutExpired:
-            blocked = True
+            self.release_after_lock_reached("newer", ".agents-md.lock", "release-copy")
         finally:
             (self.base / "release-copy").touch()
         self.complete(older)
         self.complete(newer)
-        self.assertTrue(blocked, "newer startup passed a seed copy still in progress")
+        self.assertTrue(self.acquired_after_release("newer", ".agents-md.lock"),
+                        "newer startup passed a seed copy still in progress")
         self.assertEqual((self.home / ".agentainer/AGENTS.md").read_text(), "newer default\n")
         ledger = (self.home / ".agentainer/agents-default.sha256").read_text()
         self.assertIn("0.1.0", ledger)
@@ -133,6 +173,11 @@ if os.environ['CX_WORKER'] == 'A':
     m.write_atomic = paused
 if os.environ['CX_WORKER'] == 'B':
     args += ['--if-changed']
+    lock = m.sync_lock
+    def announced(*args):
+        (pathlib.Path(os.environ['CX_TMP']) / 'Bwaiting').touch()
+        return lock(*args)
+    m.sync_lock = announced
     original = m.sync_codex
     def gated(*args):
         t = pathlib.Path(os.environ['CX_TMP'])
@@ -147,18 +192,19 @@ raise SystemExit(m.main(args))
         a = self.start([sys.executable, "-B", str(worker)], CX_WORKER="A", **env)
         self.wait_file("added")
         b = self.start([sys.executable, "-B", str(worker)], CX_WORKER="B", **env)
-        deadline = time.monotonic() + 0.5
-        while time.monotonic() < deadline and not (self.base / "Bpaused").exists():
-            time.sleep(0.01)
+        self.wait_file("Bwaiting")
+        time.sleep(0.3)
+        paused_early = (self.base / "Bpaused").exists()
         (self.base / "releaseA").touch()
         self.complete(a)
         (self.base / "releaseB").touch()
         self.complete(b)
+        self.assertFalse(paused_early, "the second sync ran while the first held the MCP lock")
         manifest = json.loads((self.home / ".agentainer/mcp-managed.json").read_text())
         self.assertEqual(manifest["claude"], ["shared"])
         self.assertIn("shared", json.loads((self.home / ".claude.json").read_text())["mcpServers"])
 
-    @unittest.skipUnless(shutil.which("flock"), "entrypoint requires Linux flock")
+    @LINUX_ENTRYPOINT
     def test_concurrent_config_seeding_waits_for_the_first_copy(self):
         root = self.base / "image"
         (root / "home").mkdir(parents=True)
@@ -170,11 +216,10 @@ raise SystemExit(m.main(args))
             (steps / name).write_text(text.replace("/etc/agentainer", str(root))
                                           .replace("/etc/skel", str(root / "skel")))
         entrypoint = root / "entrypoint"
-        text = (ROOT / "rootfs/usr/local/bin/agentainer-entrypoint").read_text()
-        entrypoint.write_text(text.replace("STEPS=/usr/local/lib/agentainer/entrypoint.d",
-                                          'STEPS="%s"' % steps))
+        entrypoint.write_text(self.entrypoint(steps))
         bindir = self.base / "bin"
         bindir.mkdir()
+        self.wrap_flock(bindir)
         cp = bindir / "cp"
         cp.write_text('''#!/bin/sh
 if [ "$CX_WORKER" = A ]; then
@@ -190,12 +235,14 @@ exec /bin/cp "$@"
         a = self.start(["sh", str(entrypoint), "echo", "STARTED"], CX_WORKER="A", **env)
         self.wait_file("copy-paused")
         b = self.start(["sh", str(entrypoint), "echo", "STARTED"], CX_WORKER="B", **env)
-        time.sleep(0.3)
-        waited = b.poll() is None and not (self.base / "B-copied").exists()
-        (self.base / "release-copy").touch()
+        try:
+            self.release_after_lock_reached("B", ".seed.lock", "release-copy")
+        finally:
+            (self.base / "release-copy").touch()
         self.complete(a)
         self.complete(b)
-        self.assertTrue(waited, "the second seed copied a destination still being created")
+        self.assertTrue(self.acquired_after_release("B", ".seed.lock"),
+                        "the second seed copied a destination still being created")
         self.assertEqual((self.home / ".profile").read_text(), "image profile\n")
 
     def test_killed_sync_recovers_ownership_on_restart(self):

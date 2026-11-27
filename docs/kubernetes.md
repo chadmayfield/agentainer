@@ -38,7 +38,7 @@ openssl genrsa -out "$keydir/host.key" 4096
 kubectl -n containerssh create secret generic containerssh-hostkey --from-file="$keydir/host.key"
 rm -r "$keydir"
 kubectl -n containerssh create secret generic agentainer-authorized-keys \
-  --from-file=authorized_keys="$HOME/.ssh/id_ed25519.pub"
+  --from-file=authorized_keys="$HOME/.ssh/id_ed25519.pub"   # or your own public key file, such as id_rsa.pub
 kubectl apply -k deploy/kubernetes
 ssh dev@<containerssh service address>
 ```

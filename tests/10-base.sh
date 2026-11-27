@@ -3,6 +3,7 @@
 . "$(dirname "$0")/lib.sh"
 # shellcheck source=versions.env
 . "$(dirname "$0")/../versions.env"
+require_pins APT_SNAPSHOT
 
 assert_eq "user is agent" "agent" "$(run_in -- id -un)"
 assert_eq "uid is 1000" "1000" "$(run_in -- id -u)"

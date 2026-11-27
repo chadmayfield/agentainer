@@ -57,8 +57,11 @@ def main(argv=None):
                     '--volume', str(ROOT / 'rootfs/etc/agentainer/AGENTS.md') + ':/etc/agentainer/AGENTS.md:ro']
     command += ['--entrypoint', 'python3', args.image, '/fixtures/scenarios.py']
     temporary = None
+    exited = False
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        # The engine returned, so --rm has removed the container.
+        exited = True
         if result.returncode:
             raise RuntimeError(result.stderr or result.stdout or 'container capture failed')
         document = validate(json.loads(result.stdout))
@@ -82,9 +85,13 @@ def main(argv=None):
             temporary.unlink()
         # Also removes the container created by this run if the client timed out or was interrupted.
         try:
-            subprocess.run([args.runtime, 'rm', '-f', name], capture_output=True, timeout=20)
+            removed = subprocess.run([args.runtime, 'rm', '-f', name], capture_output=True,
+                                     timeout=20).returncode == 0
         except (OSError, subprocess.TimeoutExpired):
-            pass
+            removed = False
+        if not exited and not removed:
+            print('visual capture: could not remove container %s; run: %s rm -f %s'
+                  % (name, args.runtime, name), file=sys.stderr)
 
 
 if __name__ == '__main__':

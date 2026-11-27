@@ -17,6 +17,10 @@ MCP_VERSION = "0.0.84"
 # tools, opens a page served on 127.0.0.1 and takes a screenshot.
 MCP_CHECK = r"""
 import base64, json, subprocess, sys
+def require(condition, message="MCP check failed"):
+    # A bare assert disappears under python -O or PYTHONOPTIMIZE.
+    if not condition:
+        raise SystemExit(str(message)[:2000])
 site = subprocess.Popen(["python3", "-m", "http.server", "8765", "--bind", "127.0.0.1",
                          "--directory", "/tmp/mcp-site"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 import socket, time
@@ -49,15 +53,15 @@ try:
                            "clientInfo": {"name": "agentainer-test", "version": "0"}})
     send({"method": "notifications/initialized"})
     names = {tool["name"] for tool in call(2, "tools/list", {})["tools"]}
-    assert {"browser_navigate", "browser_take_screenshot"} <= names, sorted(names)
+    require({"browser_navigate", "browser_take_screenshot"} <= names, sorted(names))
     page = call(3, "tools/call", {"name": "browser_navigate", "arguments": {"url": "http://127.0.0.1:8765/"}})
-    assert "http://127.0.0.1:8765/" in json.dumps(page), page
+    require("http://127.0.0.1:8765/" in json.dumps(page), page)
     snapshot = call(5, "tools/call", {"name": "browser_snapshot", "arguments": {}})
-    assert "agentainer-mcp-heading" in json.dumps(snapshot), snapshot
+    require("agentainer-mcp-heading" in json.dumps(snapshot), snapshot)
     shot = call(4, "tools/call", {"name": "browser_take_screenshot", "arguments": {}})
     images = [part for part in shot["content"] if part["type"] == "image"]
-    assert len(images) == 1, shot
-    assert base64.b64decode(images[0]["data"]).startswith(bytes.fromhex("89504e470d0a1a0a"))
+    require(len(images) == 1, shot)
+    require(base64.b64decode(images[0]["data"]).startswith(bytes.fromhex("89504e470d0a1a0a")))
     print("mcp-ok tools=%d" % len(names))
 finally:
     for process in (server, site):
@@ -102,9 +106,12 @@ def main():
                 "-e", "PLAYWRIGHT_BROWSERS_PATH=/home/agent/.cache/ms-playwright",
                 "-e", "PYTHONDONTWRITEBYTECODE=1", "--security-opt", "no-new-privileges", args.image, "sleep", "infinity")
         command("exec", "--user", "root", name, "chown", "agent:agent", "/workspace")
-        # The entrypoint and exec can run concurrently after a detached start.
+        # The entrypoint and exec can run concurrently after a detached start. The ready marker
+        # comes after every entrypoint step, including the MCP config sync; images without
+        # startup-readiness-v1 have no marker, so they fall back to the tools link.
         command("exec", "--user", "agent", name, "sh", "-ec",
-                "i=0; until [ -L /var/lib/agentainer/active ] && [ -f /home/agent/.agentainer/image-version ]; do "
+                "i=0; until [ -L /var/lib/agentainer/active ] && [ -f /home/agent/.agentainer/image-version ] && "
+                "{ [ ! -f /usr/local/share/agentainer/startup-readiness-v1 ] || [ -f /var/lib/agentainer/ready ]; }; do "
                 'i=$((i+1)); [ "$i" -lt 60 ]; sleep 1; done')
         return name
 

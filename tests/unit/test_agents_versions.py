@@ -45,7 +45,10 @@ warn() { printf '%s\n' "$*"; }
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(canon.stat().st_mode & 0o777, 0o600)
-            self.assertIn(candidate, ledger.read_text())
+            lines = ledger.read_text().splitlines()
+            self.assertIn(hashlib.sha256(b"new default\n").hexdigest() + " " + candidate, lines)
+            user = hashlib.sha256((old + "user edit\n").encode()).hexdigest()
+            self.assertFalse([line for line in lines if line.split()[0] == user], lines)
             return canon.read_text()
 
     def test_newer_prerelease_updates_older_prerelease_default(self):

@@ -64,15 +64,19 @@ class NameArgumentsTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(str((base / value).resolve()) + ":/home/agent", result.stdout.splitlines())
 
-    def test_writable_env_files_warn(self):
+    def test_readable_or_writable_env_files_warn(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             file = base / "env"
             file.write_text("FAKE=value\n")
-            for mode in (0o620, 0o602):
-                file.chmod(mode)
-                result = self.launch(base, directory, AGENTAINER_ENV_FILE=str(file))
-                self.assertIn("chmod 600", result.stderr)
+            for mode in (0o620, 0o602, 0o640, 0o604, 0o644):
+                with self.subTest(mode=oct(mode)):
+                    file.chmod(mode)
+                    result = self.launch(base, directory, AGENTAINER_ENV_FILE=str(file))
+                    self.assertIn("chmod 600", result.stderr)
+            file.chmod(0o600)
+            result = self.launch(base, directory, AGENTAINER_ENV_FILE=str(file))
+            self.assertNotIn("chmod 600", result.stderr)
 
     def test_mounting_host_home_warns(self):
         with tempfile.TemporaryDirectory() as directory:

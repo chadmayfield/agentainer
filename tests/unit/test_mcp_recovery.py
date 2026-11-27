@@ -17,19 +17,21 @@ class RecoveryTests(base.SyncBase):
         self.write_mcp({})
         original = mcp.write_atomic
 
-        def fail_config(path, text):
+        def fail_config(path, text, **kwargs):
             if path == os.path.join(self.home, ".claude.json"):
                 raise OSError("injected config write failure")
-            return original(path, text)
+            return original(path, text, **kwargs)
 
-        # A CLI failure covers the old implementation; a file failure covers direct writes.
+        # The claude CLI stub fails too, so neither a CLI call nor a file write can remove it.
         cli = os.path.join(self.bin, "claude")
         with open(cli, "w") as f:
             f.write("#!/bin/sh\nexit 1\n")
+        err = io.StringIO()
         with mock.patch.object(mcp, "write_atomic", side_effect=fail_config):
-            with contextlib.redirect_stderr(io.StringIO()):
+            with contextlib.redirect_stderr(err):
                 rc = mcp.main(["sync", "--if-changed"], env=self.env)
         self.assertNotEqual(rc, 0, "a failed removal was stamped as successful")
+        self.assertIn("claude: not updated (OSError)", err.getvalue())
         self.assertIn("revoked", json.loads(self.read(".claude.json"))["mcpServers"])
         self.assertEqual(mcp.main(["sync", "--if-changed"], env=self.env), 0)
         self.assertNotIn("revoked", json.loads(self.read(".claude.json"))["mcpServers"])
@@ -60,8 +62,8 @@ class RecoveryTests(base.SyncBase):
                 original = mcp.write_atomic
                 target = os.path.join(self.home, *parts)
 
-                def interrupted(path, text):
-                    original(path, text)
+                def interrupted(path, text, **kwargs):
+                    original(path, text, **kwargs)
                     if path == target:
                         raise KeyboardInterrupt("injected termination after config rename")
 
@@ -81,10 +83,10 @@ class RecoveryTests(base.SyncBase):
         self.write_mcp({"same": {"command": "ours"}})
         original = mcp.write_atomic
 
-        def before_write(path, text):
+        def before_write(path, text, **kwargs):
             if path == os.path.join(self.home, ".claude.json"):
                 raise KeyboardInterrupt("before config write")
-            original(path, text)
+            original(path, text, **kwargs)
 
         with mock.patch.object(mcp, "write_atomic", side_effect=before_write):
             with self.assertRaises(KeyboardInterrupt):
@@ -102,10 +104,10 @@ class RecoveryTests(base.SyncBase):
         self.write_mcp({"retry": {"command": "example"}})
         original = mcp.write_atomic
 
-        def before_write(path, text):
+        def before_write(path, text, **kwargs):
             if path == os.path.join(self.home, ".claude.json"):
                 raise KeyboardInterrupt("before config write")
-            original(path, text)
+            original(path, text, **kwargs)
 
         with mock.patch.object(mcp, "write_atomic", side_effect=before_write):
             with self.assertRaises(KeyboardInterrupt):
@@ -145,8 +147,8 @@ class RecoveryTests(base.SyncBase):
                     manifest = os.path.join(self.home, ".agentainer", "mcp-managed.json")
                     target = {"journal": pending, "config": config, "manifest": manifest}[boundary]
 
-                    def interrupted(path, text):
-                        original(path, text)
+                    def interrupted(path, text, **kwargs):
+                        original(path, text, **kwargs)
                         if path == target and os.path.exists(pending):
                             raise KeyboardInterrupt("injected termination at " + boundary)
 

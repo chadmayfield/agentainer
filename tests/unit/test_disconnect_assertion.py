@@ -15,7 +15,8 @@ class DisconnectAssertionTests(unittest.TestCase):
         end = text.index('\nsame_panes "reattaching keeps every agent process"', start)
         assertion = text[start:end]
         # The stub receives the real tmux arguments; output and status come from these variables.
-        shell = '. ./tests/lib.sh\nsid=$1\nafter=$2\nstatus=$3\nx() { printf "%s" "$after"; return "$status"; }\n'
+        # Its newline keeps TAP lines at the start of a line; $(...) strips it from captures.
+        shell = '. ./tests/lib.sh\nsid=$1\nafter=$2\nstatus=$3\nx() { printf "%s\\n" "$after"; return "$status"; }\n'
         return subprocess.run(["sh", "-c", shell + assertion + "\nfinish\n", "sh", before, after, str(status)],
                               cwd=ROOT, capture_output=True, text=True)
 
@@ -27,6 +28,9 @@ class DisconnectAssertionTests(unittest.TestCase):
     def test_a_real_unchanged_session_passes(self):
         r = self.check_session("$0", "$0")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        lines = r.stdout.splitlines()
+        self.assertTrue(any(line.startswith("ok ") for line in lines), r.stdout)
+        self.assertNotIn("1..0", lines, r.stdout)
 
     def test_changed_session_fails(self):
         r = self.check_session("$0", "$1")

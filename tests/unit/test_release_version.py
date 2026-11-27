@@ -65,4 +65,6 @@ class VersionTests(unittest.TestCase):
     def test_local_dev_and_unknown_user_content_never_upgrade(self):
         self.assertFalse(self.decision("dev", ["0.1.0"]))
         self.assertFalse(self.decision("0.1.0", []))
+
+    def test_hash_only_record_counts_as_older_than_any_release(self):
         self.assertTrue(self.decision("0.1.0", [""]))
