@@ -2,7 +2,14 @@
 # Publish the checked, signed index. Run only under the workflow's release lock.
 set -euo pipefail
 script_dir=$(cd "$(dirname "$0")" && pwd)
-img=ghcr.io/chadmayfield/agentainer
+# The image path follows the repository the workflow runs in, so a fork publishes to its
+# own package. Registry repository names are lowercase (distribution reference grammar).
+repository=${REPOSITORY:?REPOSITORY must name the GitHub repository, as owner/name}
+[[ $repository =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || {
+	echo "::error::REPOSITORY is not owner/name: $repository" >&2
+	exit 1
+}
+img=ghcr.io/$(printf '%s' "$repository" | tr '[:upper:]' '[:lower:]')
 phase=${1:-all}
 case "$phase" in
 prepare | all)
@@ -31,7 +38,7 @@ prepare | all)
 	desc="Claude Code, Codex, Antigravity CLI and OpenCode in one container"
 	docker buildx imagetools create -t "$img:sha-${SHA::7}" \
 		--annotation "index:org.opencontainers.image.description=$desc" \
-		--annotation "index:org.opencontainers.image.source=https://github.com/chadmayfield/agentainer" \
+		--annotation "index:org.opencontainers.image.source=https://github.com/$repository" \
 		"${refs[@]}"
 	digest=$(docker buildx imagetools inspect "$img:sha-${SHA::7}" --format '{{json .Manifest}}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["digest"])')
 	[[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || {

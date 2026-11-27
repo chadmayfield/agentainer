@@ -10,7 +10,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-IMAGE = "ghcr.io/chadmayfield/agentainer"
+# The image path follows REPOSITORY, which run_release sets to example/agentainer.
+IMAGE = "ghcr.io/example/agentainer"
 
 
 class ReleaseTests(unittest.TestCase):
@@ -21,6 +22,7 @@ class ReleaseTests(unittest.TestCase):
             for arch in ("amd64", "arm64"):
                 (t / "digests" / arch).write_text("sha256:" + "a" * 64 + "\n")
             phase = extra.pop("CX_PHASE", "all")
+            repository = extra.pop("REPOSITORY", "example/agentainer")
             artifact_case = extra.pop("CX_ARTIFACT_CASE", "")
             if artifact_case == "missing":
                 (t / "digests/arm64").unlink()
@@ -71,11 +73,13 @@ elif '--dry-run' in a:
                 path.write_text(stub)
                 path.chmod(0o755)
             script = ROOT / "scripts/release-image.sh"
-            env = dict(os.environ, V=candidate, SHA="b" * 40, OWNER="example", REPOSITORY="example/agentainer", REF="refs/tags/v" + candidate, CX_LOG=str(t / "log"),
+            env = dict(os.environ, V=candidate, SHA="b" * 40, OWNER="example", REPOSITORY=repository, REF="refs/tags/v" + candidate, CX_LOG=str(t / "log"),
                        GITHUB_OUTPUT=str(t / "output"), CX_REAL_PYTHON=sys.executable, PATH=str(bindir) + ":" + os.environ["PATH"], CX_MANIFEST=manifest, CX_DIGEST=digest,
                        CX_HISTORY="\n".join("Merge pull request #1 from example/release/" + v for v in versions),
                        **extra)
             env.setdefault("SIGNED_DIGEST", digest)
+            if repository is None:
+                del env["REPOSITORY"]
             result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script), phase],
                                     cwd=t, env=env, capture_output=True, text=True)
             calls = [json.loads(s) for s in (t / "log").read_text().splitlines()] if (t / "log").exists() else []
@@ -249,3 +253,20 @@ elif '--dry-run' in a:
                 r, tags = self.run_release("0.1.0", ["0.1.0"], CX_PHASE="promote", **extra)
                 self.assertNotEqual(r.returncode, 0)
                 self.assertEqual(tags, [])
+
+    def test_image_path_follows_the_repository_in_lowercase(self):
+        r, tags = self.run_release("0.1.0", ["0.1.0"], REPOSITORY="Example-Fork/Agentainer")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("ghcr.io/example-fork/agentainer:0.1.0", tags)
+        self.assertIn("ghcr.io/example-fork/agentainer:latest", tags)
+        self.assertFalse(any("ghcr.io/example/agentainer" in arg for c in self.last_calls for arg in c))
+        create = next(c for c in self.last_calls if "--annotation" in c)
+        self.assertIn("index:org.opencontainers.image.source=https://github.com/Example-Fork/Agentainer", create)
+
+    def test_missing_or_malformed_repository_stops_before_registry_calls(self):
+        for repository in (None, "", "no-slash", "a/b/c", "a/b c"):
+            with self.subTest(repository=repository):
+                r, tags = self.run_release("0.1.0", ["0.1.0"], REPOSITORY=repository)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertEqual(tags, [])
+                self.assertEqual(self.last_calls, [])

@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -603,6 +604,95 @@ class HelperTests(unittest.TestCase):
                 self.assertEqual(f.read(), manifest.replace(old, new))
             with open(env) as f:
                 self.assertEqual(bv.values(bv.parse_env(f.read()))["FILEBROWSER_IMAGE"], new)
+
+    def test_agentainer_release_is_the_highest_published_version(self):
+        releases = [{"tag_name": "v0.1.0-dev.20261104.2", "draft": True},
+                    {"tag_name": "v0.1.0-dev.20261104.1", "prerelease": True},
+                    {"tag_name": "v0.1.0-dev.20261024.10", "prerelease": True},
+                    {"tag_name": "v0.1.0-dev.20261024.2", "prerelease": True},
+                    {"tag_name": "kelos-1.0.0"}, {"tag_name": "v0.01.0"}, {"tag_name": "v0.1.0-dev.20260230.1"},
+                    {"tag_name": "0.9.0"}, {}]
+        self.assertEqual(bv.agentainer_release(releases), "0.1.0-dev.20261104.1")
+        self.assertEqual(bv.agentainer_release(releases[2:4]), "0.1.0-dev.20261024.10")
+        stable = [{"tag_name": "v0.1.0"}, {"tag_name": "v0.1.0-dev.20261104.1", "prerelease": True}]
+        self.assertEqual(bv.agentainer_release(stable), "0.1.0")
+
+    def test_agentainer_release_without_a_release_fails(self):
+        for releases in ([], [{"tag_name": "v1.0.0", "draft": True}], [{"tag_name": "nightly"}]):
+            with self.subTest(releases=releases):
+                with self.assertRaises(bv.LookupFailed):
+                    bv.agentainer_release(releases)
+
+    def test_agentainer_release_resolver_lists_releases_with_prereleases(self):
+        with patch.object(bv, "fetch_json", return_value=[{"tag_name": "v0.1.0-dev.20261104.1", "prerelease": True}]) as fj:
+            self.assertEqual(bv.r_agentainer_release(), {"AGENTAINER_RELEASE_VERSION": "0.1.0-dev.20261104.1"})
+        fj.assert_called_once_with("https://api.github.com/repos/chadmayfield/agentainer/releases?per_page=100")
+        self.assertIn(bv.r_agentainer_release, bv.RESOLVERS)
+        self.assertIsNone(bv.invalid("AGENTAINER_RELEASE_VERSION", "0.1.0-dev.20261104.1"))
+
+    def test_release_ref_rewrite_keeps_longer_versions(self):
+        old, new = "0.1.0-dev.20261104.1", "0.1.0-dev.20261201.1"
+        image = bv.AGENTAINER_IMAGE + ":"
+        text = "%s%s\n%s%s0\n%s%s-x\nrun %s%s.\n" % (image, old, image, old, image, old, image, old)
+        self.assertEqual(bv.rewrite_release_ref(text, image, old, new),
+                         "%s%s\n%s%s0\n%s%s-x\nrun %s%s.\n" % (image, new, image, old, image, old, image, new))
+
+    def test_release_refs_hold_the_current_pin(self):
+        # The resolver rewrites only text that holds the current pin, so every entry must.
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+        with open(os.path.join(root, "versions.env")) as f:
+            pin = bv.values(bv.parse_env(f.read()))["AGENTAINER_RELEASE_VERSION"]
+        for rel, prefix in bv.RELEASE_REFS:
+            with self.subTest(rel=rel, prefix=prefix):
+                with open(os.path.join(root, rel)) as f:
+                    text = f.read()
+                self.assertIn(prefix + pin, text)
+                if prefix.startswith(bv.AGENTAINER_IMAGE):
+                    tags = re.findall(re.escape(prefix) + r"([0-9A-Za-z._-]+)", text)
+                    self.assertEqual(sorted(set(tags)), [pin], "every %s tag in %s must be the pin" % (prefix, rel))
+
+    def test_release_pin_bump_rewrites_every_release_ref(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+        with open(os.path.join(root, "versions.env")) as f:
+            env_text = f.read()
+        old = bv.values(bv.parse_env(env_text))["AGENTAINER_RELEASE_VERSION"]
+        new = "0.1.0-dev.20991231.1"
+        with tempfile.TemporaryDirectory() as d:
+            env = os.path.join(d, "versions.env")
+            with open(env, "w") as f:
+                f.write(env_text)
+            originals = {}
+            for rel in {rel for rel, _ in bv.RELEASE_REFS}:
+                os.makedirs(os.path.join(d, os.path.dirname(rel)), exist_ok=True)
+                shutil.copy2(os.path.join(root, rel), os.path.join(d, rel))
+                with open(os.path.join(root, rel)) as f:
+                    originals[rel] = f.read()
+            with patch.object(bv, "fetch_json", return_value=[{"tag_name": "v" + new, "prerelease": True}]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(bv.main(["--file", env, "--only", "r_agentainer_release"]), 0)
+            for rel, prefix in bv.RELEASE_REFS:
+                with self.subTest(rel=rel, prefix=prefix):
+                    with open(os.path.join(d, rel)) as f:
+                        text = f.read()
+                    self.assertNotIn(prefix + old, text)
+                    self.assertIn(prefix + new, text)
+            for rel, original in originals.items():
+                with open(os.path.join(d, rel)) as f:
+                    self.assertEqual(f.read(), original.replace(old, new), rel)
+            self.assertTrue(os.access(os.path.join(d, "bin", "agentainer"), os.X_OK))
+            with open(env) as f:
+                self.assertEqual(bv.values(bv.parse_env(f.read()))["AGENTAINER_RELEASE_VERSION"], new)
+
+    def test_release_pin_is_never_downgraded(self):
+        with tempfile.TemporaryDirectory() as d:
+            env = os.path.join(d, "versions.env")
+            with open(env, "w") as f:
+                f.write("AGENTAINER_RELEASE_VERSION=0.1.0-dev.20261104.1\n")
+            with patch.object(bv, "fetch_json", return_value=[{"tag_name": "v0.1.0-dev.20261024.1"}]), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertNotEqual(bv.main(["--file", env, "--only", "r_agentainer_release"]), 0)
+            with open(env) as f:
+                self.assertEqual(f.read(), "AGENTAINER_RELEASE_VERSION=0.1.0-dev.20261104.1\n")
 
     def test_strip_v(self):
         self.assertEqual(bv.strip_v("v2.102.0"), "2.102.0")

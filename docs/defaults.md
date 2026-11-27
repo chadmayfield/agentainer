@@ -150,7 +150,7 @@ These come with the image, not with a seeded file. `/etc/agentainer/versions.jso
 | `PLAYWRIGHT_MCP_BROWSER=chromium` | Makes the Playwright MCP plugin use Playwright's Chromium instead of the `chrome` channel |
 | `/usr/lib/openssh/sftp-server`, `containerssh-agent` | SFTP and port forwarding through ContainerSSH, closed until the operator turns them on ([Kubernetes](kubernetes.md#sftp-and-port-forwarding)) |
 
-The shared `AGENTS.md` gains a section on `~/transfer`, these tools and the browser setup. A home whose copy was never edited gets the new default on the next start of a release image; an edited copy stays and startup prints how to see the difference ([AGENTS.md](configuration.md#agentsmd)).
+The shared `AGENTS.md` has a section on `~/transfer`, these tools and the browser setup. A home whose copy was never edited gets the new default on the next start of a release image; an edited copy stays and startup prints how to see the difference ([AGENTS.md](configuration.md#agentsmd)).
 
 ## Existing homes
 

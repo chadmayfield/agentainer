@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import textwrap
@@ -379,6 +380,32 @@ class BumpPrActionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(len(branches), 1)
         self.assertEqual(self.show(d, branches[0], sts), "image: b\n")
+
+    def test_release_pin_files_are_applied(self):
+        files = {"bin/agentainer": "IMAGE=x:1\n", "README.md": "x:1\n", "docs/running.md": "x:1\n",
+                 "docs/versions.md": "x:1\n", "deploy/kubernetes/agentainer/kustomization.yaml": "newTag: 1\n"}
+
+        def mutate(seed):
+            (seed / "versions.env").write_text("X_VERSION=1.1.0\n")
+            for rel, text in files.items():
+                (seed / rel).write_text(text.replace("1", "2"))
+        result, branches, d = self.run_action(mutate, extra=files)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(branches), 1)
+        for rel, text in files.items():
+            with self.subTest(rel=rel):
+                self.assertEqual(self.show(d, branches[0], rel), text.replace("1", "2"))
+
+    def test_allowlist_covers_every_file_the_resolver_writes(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import bump_versions as bv
+        script = step(ACTION.read_text(), "shell: bash")
+        name = "[A-Za-z0-9_][A-Za-z0-9._-]*"
+        allowed = re.search(r'allowed="(.+)"', script).group(1).replace("$name", name).replace("\\$", "$")
+        written = ["versions.env"] + [rel for *_, rel in bv.K8S_IMAGES] + [rel for rel, _ in bv.RELEASE_REFS]
+        for rel in written:
+            with self.subTest(rel=rel):
+                self.assertRegex(rel, allowed)
 
     def test_other_statefulset_is_refused(self):
         other = "deploy/kubernetes/containerssh/statefulset.yaml"
