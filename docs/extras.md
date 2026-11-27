@@ -119,16 +119,16 @@ The REA Frida tools do not work in this install. The optional `frida` package in
 
 ## Known findings
 
-A Trivy 0.76.2 scan of the extras lockfiles at the pins in `versions.env` (`trivy fs --scanners vuln`, as in CI's `lint-unit` job) and the repository's Dependabot alerts list this finding. Kandev and OpenChamber have none.
+This is a dated record. On 2026-11-26, a Trivy 0.76.2 scan of the extras lockfiles at the pins of that day (`trivy fs --scanners vuln`, as in CI's `lint-unit` job) and the repository's Dependabot alerts listed this finding. Kandev and OpenChamber had none. The versions in the table are the ones checked that day; the scheduled update does not change them.
 
 | Extra | Severity | ID | Package and installed version | Fixed in |
 |---|---|---|---|---|
 | REA (`rea-agents` 6.9.0) | Medium | CVE-2026-118764 ([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)) | `minimatch` 10.2.5 | 11.0.1 |
 
-REA's optional `frida` dependency, 17.23.2 in the lockfile, declares `minimatch` `^10.0.1`, which excludes 11.x, so the fix needs a newer `frida` release that REA's lockfile picks up. The scheduled update picks up newer releases once they pass the 7-day rule ([How the pins update](#how-the-pins-update)).
+On that day REA's optional `frida` dependency, 17.23.2 in the lockfile, declared `minimatch` `^10.0.1`, which excludes 11.x, so the fix needed a newer `frida` release in REA's lockfile. The scheduled update picks up newer releases once they pass the 7-day rule ([How the pins update](#how-the-pins-update)).
 
-The list changes with each pin update. The step summary of the `lint-unit` job in CI ([`build.yml`](../.github/workflows/build.yml)) has the current list.
+The findings change with each pin update. The step summary of the `lint-unit` job in CI ([`build.yml`](../.github/workflows/build.yml)) has the current list, and a pull request that moves an extras pin asks the reviewer to check this table against the new lockfile.
 
 ## How the pins update
 
-`versions.env` pins `KANDEV_VERSION`, `OPENCHAMBER_VERSION` and `REA_VERSION`. Each extra's dependency tree, with an `integrity` hash for every package, is in `rootfs/usr/local/share/agentainer/extras/<name>/package-lock.json`. The scheduled update proposes a newer version only when it was published at least 7 days earlier, applies the same age limit to every dependency, and checks every lockfile entry against npm's registry signatures. [Versions: optional extras](versions.md#optional-extras) describes the checks.
+`versions.env` pins `KANDEV_VERSION`, `OPENCHAMBER_VERSION` and `REA_VERSION`. Each extra's dependency tree, with an `integrity` hash for every package, is in `rootfs/usr/local/share/agentainer/extras/<name>/package-lock.json`. When a pin moves, the scheduled update also rewrites the versions this page names, except in the Known findings table. The scheduled update proposes a newer version only when it was published at least 7 days earlier, applies the same age limit to every dependency, and checks every lockfile entry against npm's registry signatures. [Versions: optional extras](versions.md#optional-extras) describes the checks.

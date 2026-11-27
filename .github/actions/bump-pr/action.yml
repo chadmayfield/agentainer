@@ -41,7 +41,8 @@ runs:
         # The patch may only modify the files scripts/bump_versions.py writes: versions.env,
         # the Kubernetes manifests it repins (K8S_IMAGES: the deployment.yaml files and
         # deploy/kubernetes/agentainer/statefulset.yaml), the files that name the release
-        # pin (RELEASE_REFS), the extras package files and Containerfile.kelos (r_kelos).
+        # pin (RELEASE_REFS), the extras package files, docs/extras.md (EXTRAS_DOC) and
+        # Containerfile.kelos (r_kelos).
         # It may not create, delete, rename or copy a file or change a mode.
         summary=$(git apply --summary "$PATCH_FILE")
         if [ -n "$summary" ]; then
@@ -49,11 +50,12 @@ runs:
           refuse "it creates, deletes, renames or copies a file or changes a mode (listed above)"
         fi
         name='[A-Za-z0-9_][A-Za-z0-9._-]*'
-        allowed="^(versions\.env|Containerfile\.kelos|deploy/kubernetes/$name/deployment\.yaml|deploy/kubernetes/agentainer/(statefulset|kustomization)\.yaml|bin/agentainer|README\.md|docs/(running|versions)\.md|rootfs/usr/local/share/agentainer/extras/$name/package(-lock)?\.json)\$"
+        allowed="^(versions\.env|Containerfile\.kelos|deploy/kubernetes/$name/deployment\.yaml|deploy/kubernetes/agentainer/(statefulset|kustomization)\.yaml|bin/agentainer|README\.md|docs/(running|versions|extras)\.md|rootfs/usr/local/share/agentainer/extras/$name/package(-lock)?\.json)\$"
         lockfile="^rootfs/usr/local/share/agentainer/extras/$name/package-lock\.json\$"
-        # Files that only repeat a pin: the release references and the Kubernetes image pins.
+        # Files that only repeat a pin: the release references, the Kubernetes image pins and
+        # the extras versions in docs/extras.md.
         # scripts/check_bump_refs.py allows only version reference changes in them.
-        refs_only="^(deploy/kubernetes/$name/deployment\.yaml|deploy/kubernetes/agentainer/(statefulset|kustomization)\.yaml|bin/agentainer|README\.md|docs/(running|versions)\.md)\$"
+        refs_only="^(deploy/kubernetes/$name/deployment\.yaml|deploy/kubernetes/agentainer/(statefulset|kustomization)\.yaml|bin/agentainer|README\.md|docs/(running|versions|extras)\.md)\$"
         refs=()
         git apply --numstat -z "$PATCH_FILE" >"$RUNNER_TEMP/numstat"
         count=0
@@ -137,6 +139,8 @@ runs:
         if [ "$extras" -eq 1 ]; then
           # shellcheck disable=SC2016 # the backticks are Markdown code spans
           echo '- [ ] Build this branch with `scripts/build.sh` and run `IMAGE=localhost/agentainer:dev sh tests/host/test-extras-live.sh` on amd64 and on arm64. It installs every extra in the catalog from the npm registry with `agentainer-extras`, which runs the check of each entry, then runs each installed command.' >>"$RUNNER_TEMP/body.md"
+          # shellcheck disable=SC2016 # the backticks are Markdown code spans
+          echo '- [ ] Check the Known findings table in `docs/extras.md` against the new lockfiles, with the `lint-unit` scan summary of this pull request, and update the table and its date. The update leaves that table as it was.' >>"$RUNNER_TEMP/body.md"
         fi
         if [ "$kelos" -eq 1 ]; then
           # shellcheck disable=SC2016 # the backticks are Markdown code spans

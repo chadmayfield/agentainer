@@ -471,6 +471,35 @@ class BumpPrActionTests(unittest.TestCase):
         for key, repo, tag, _ in bv.K8S_IMAGES:
             with self.subTest(key=key):
                 self.assertRegex("docker.io/%s:%s@sha256:%s" % (repo, tag, "0" * 64), cr.IMAGE)
+        self.assertEqual(cr.EXTRA_PACKAGES, tuple((key, package) for key, package, _ in bv.EXTRAS))
+        self.assertEqual(cr.EXTRA_SEPARATORS, bv.EXTRAS_DOC_SEPARATORS)
+
+    EXTRAS_DOC = ("License ([npm metadata for kandev 1.0.0](https://registry.npmjs.org/kandev/1.0.0)).\n"
+                  "| REA (`rea-agents` 3.0.0) | none |\n")
+
+    def test_extras_doc_version_rewrite_is_applied(self):
+        doc = "docs/extras.md"
+
+        def mutate(seed):
+            (seed / "versions.env").write_text("X_VERSION=1.0.0\nKANDEV_VERSION=1.1.0\n")
+            (seed / doc).write_text(self.EXTRAS_DOC.replace("kandev 1.0.0", "kandev 1.1.0")
+                                    .replace("kandev/1.0.0", "kandev/1.1.0"))
+        result, branches, d = self.run_action(mutate, extra={doc: self.EXTRAS_DOC})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(branches), 1)
+        self.assertIn("kandev/1.1.0", self.show(d, branches[0], doc))
+
+    def test_other_extras_doc_change_is_refused(self):
+        doc = "docs/extras.md"
+
+        def mutate(seed):
+            (seed / "versions.env").write_text("X_VERSION=1.0.0\nKANDEV_VERSION=1.1.0\n")
+            (seed / doc).write_text(self.EXTRAS_DOC.replace("kandev 1.0.0", "kandev 1.1.0")
+                                    .replace("| none |", "| fixed |"))
+        result, branches, _ = self.run_action(mutate, extra={doc: self.EXTRAS_DOC})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("docs/extras.md:2: changes more than a version reference", result.stdout)
+        self.assertEqual(branches, [])
 
     def test_failure_after_the_push_deletes_the_branch(self):
         def mutate(seed):
@@ -487,7 +516,8 @@ class BumpPrActionTests(unittest.TestCase):
         script = step(ACTION.read_text(), "shell: bash")
         name = "[A-Za-z0-9_][A-Za-z0-9._-]*"
         allowed = re.search(r'allowed="(.+)"', script).group(1).replace("$name", name).replace("\\$", "$")
-        written = ["versions.env"] + [rel for *_, rel in bv.K8S_IMAGES] + [rel for rel, _ in bv.RELEASE_REFS]
+        written = (["versions.env", bv.EXTRAS_DOC] + [rel for *_, rel in bv.K8S_IMAGES]
+                   + [rel for rel, _ in bv.RELEASE_REFS])
         for rel in written:
             with self.subTest(rel=rel):
                 self.assertRegex(rel, allowed)
@@ -512,6 +542,7 @@ class BumpPrActionTests(unittest.TestCase):
         body = (d / "body.md").read_text()
         self.assertRegex(body, r"(?m)^- \[ \] .*`IMAGE=localhost/agentainer:dev sh tests/host/test-extras-live\.sh`"
                                r".*amd64 and on arm64")
+        self.assertRegex(body, r"(?m)^- \[ \] Check the Known findings table in `docs/extras\.md` against the new lockfiles")
 
     def test_kelos_containerfile_repin_is_applied_with_its_checklist(self):
         kelos = "Containerfile.kelos"
